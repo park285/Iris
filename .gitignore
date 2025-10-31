@@ -14,3 +14,16 @@
 .cxx
 local.properties
 /output
+
+# Claude Code / AI Assistant
+.claude/
+.cursor/
+.aider*
+
+# Serena MCP
+.serena/
+
+# Backup files
+*.backup
+*.bak
+*~
