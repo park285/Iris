@@ -37,7 +37,7 @@ class MqttSubscriber(
                 isCleanSession = true
                 isAutomaticReconnect = true
                 connectionTimeout = 10
-                keepAliveInterval = 65535
+                keepAliveInterval = 60
                 maxInflight = 10
             }
 
