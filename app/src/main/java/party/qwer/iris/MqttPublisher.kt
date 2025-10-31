@@ -29,11 +29,11 @@ class MqttPublisher(
             client = MqttClient(brokerUrl, clientId, persistence)
             
             val options = MqttConnectOptions().apply {
-                isCleanSession = true  
-                isAutomaticReconnect = true  
-                connectionTimeout = 10  
-                keepAliveInterval = 60  
-                maxInflight = 10  
+                isCleanSession = true
+                isAutomaticReconnect = true
+                connectionTimeout = 10
+                keepAliveInterval = 65535
+                maxInflight = 10
             }
 
             client?.setCallback(object : MqttCallback {
