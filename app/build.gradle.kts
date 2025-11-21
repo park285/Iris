@@ -68,9 +68,8 @@ dependencies {
 
     implementation(libs.ktor.server.cio)
     implementation(libs.ktor.server.status.pages)
-    implementation(libs.ktor.server.websockets)
     implementation(libs.ktor.server.content.negotiation)
     implementation(libs.ktor.serialization.kotlinx.json)
-    implementation(libs.okhttp)
-    implementation("org.eclipse.paho:org.eclipse.paho.client.mqttv3:1.2.5")
+
+    implementation("redis.clients:jedis:5.2.0")
 }

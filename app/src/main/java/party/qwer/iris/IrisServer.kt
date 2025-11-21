@@ -2,7 +2,6 @@ package party.qwer.iris
 
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
-import io.ktor.serialization.kotlinx.KotlinxWebsocketSerializationConverter
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.install
 import io.ktor.server.cio.CIO
@@ -16,14 +15,6 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
-import io.ktor.server.websocket.WebSockets
-import io.ktor.server.websocket.webSocket
-import io.ktor.server.websocket.pingPeriod
-import io.ktor.server.websocket.timeout
-import io.ktor.websocket.send
-import kotlin.time.Duration.Companion.seconds
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
@@ -46,25 +37,14 @@ class IrisServer(
     private val kakaoDB: KakaoDB,
     private val dbObserver: DBObserver,
     private val observerHelper: ObserverHelper,
-    private val notificationReferer: String,
-    private val wsBroadcastFlow: MutableSharedFlow<String>
+    private val notificationReferer: String
 ) {
-    val sharedFlow = wsBroadcastFlow.asSharedFlow()
-
     fun startServer() {
         embeddedServer(
             CIO,
             port = Configurable.botSocketPort,
             host = "0.0.0.0"
         ) {
-            install(WebSockets) {
-                contentConverter = KotlinxWebsocketSerializationConverter(Json)
-                pingPeriod = 30.seconds
-                timeout = 90.seconds
-                maxFrameSize = 2L * 1024 * 1024
-                masking = false
-            }
-
             install(ContentNegotiation) {
                 json()
             }
@@ -221,11 +201,6 @@ class IrisServer(
                     call.respond(DecryptResponse(plain_text = plaintext))
                 }
 
-                webSocket("/ws") {
-                    sharedFlow.collect { msg ->
-                        send(msg)
-                    }
-                }
             }
         }.start(wait = true)
     }

@@ -1,59 +1,38 @@
 package party.qwer.iris
 
 import android.database.Cursor
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import java.util.LinkedList
-import java.util.concurrent.Executors
+import party.qwer.iris.bridge.RedisProducer
+import party.qwer.iris.bridge.RedisReplyConsumer
 
 class ObserverHelper(
     private val db: KakaoDB,
-    private val wsBroadcastFlow: MutableSharedFlow<String>,
     private val notificationReferer: String
 ) {
     private var lastLogId: Long = 0
     private val lastDecryptedLogs = LinkedList<Map<String, String?>>()
-    private val httpRequestExecutor = Executors.newFixedThreadPool(8)
-    private var mqttPublisher: MqttPublisher? = null
-    private var mqttSubscriber: MqttSubscriber? = null
+    private var redisProducer: RedisProducer? = null
+    private var replyConsumer: RedisReplyConsumer? = null
 
     init {
-        initMqttPublisher()
-        initMqttSubscriber()
+        initBridge()
     }
 
-    private fun initMqttPublisher() {
-        val routes = Configurable.routes
-        val brokerUrl = Configurable.mqttBrokerUrl
-
-        if (routes.isNotEmpty() && brokerUrl.isNotBlank()) {
-            try {
-                mqttPublisher = MqttPublisher(brokerUrl, routes)
-                println("[ObserverHelper] MqttPublisher initialized: $brokerUrl")
-            } catch (e: Exception) {
-                System.err.println("[ObserverHelper] Failed to initialize MqttPublisher: ${e.message}")
-            }
-        } else {
-            println("[ObserverHelper] MQTT not configured, skipping initialization")
+    private fun initBridge() {
+        try {
+            val host = Configurable.mqHost
+            val port = Configurable.mqPort
+            val producer = RedisProducer(host, port)
+            redisProducer = producer
+            val consumer = RedisReplyConsumer(host, port, notificationReferer)
+            consumer.start()
+            replyConsumer = consumer
+            println("[ObserverHelper] Redis bridge initialized: $host:$port")
+        } catch (e: Exception) {
+            System.err.println("[ObserverHelper] Failed to initialize Redis bridge: ${e.message}")
         }
     }
-
-    private fun initMqttSubscriber() {
-        val brokerUrl = Configurable.mqttBrokerUrl
-
-        if (brokerUrl.isNotBlank()) {
-            try {
-                mqttSubscriber = MqttSubscriber(brokerUrl, notificationReferer)
-                println("[ObserverHelper] MqttSubscriber initialized: $brokerUrl")
-            } catch (e: Exception) {
-                System.err.println("[ObserverHelper] Failed to initialize MqttSubscriber: ${e.message}")
-            }
-        } else {
-            println("[ObserverHelper] MQTT not configured, skipping subscriber initialization")
-        }
-    }
-
 
     fun checkChange(db: KakaoDB) {
         if (lastLogId == 0L) {
@@ -80,11 +59,6 @@ class ObserverHelper(
                         val enc = v.getInt("enc")
                         val origin = v.getString("origin")
 
-                        if (origin == "SYNCMSG" || origin == "MCHATLOGS") {
-                            lastLogId = currentLogId
-                            continue
-                        }
-
                         val chatId = cursor.getLong(columnNames.indexOf("chat_id"))
                         val userId = cursor.getLong(columnNames.indexOf("user_id"))
 
@@ -92,6 +66,7 @@ class ObserverHelper(
                         var attachment = cursor.getString(columnNames.indexOf("attachment"))
                         val messageType = cursor.getString(columnNames.indexOf("type"))
 
+                        // Decrypt first so we can decide based on the actual text
                         try {
                             if (message.isNotEmpty() && message != "{}") message =
                                 KakaoDecrypt.decrypt(enc, message, userId)
@@ -110,6 +85,22 @@ class ObserverHelper(
                             println("failed to decrypt attachment: $e")
                         }
 
+                        // Determine if this looks like a command (after decrypt)
+                        val isCommand = message?.trimStart()?.let { it.startsWith("!") || it.startsWith("/") } ?: false
+                        println("[ObserverHelper] _id=$currentLogId, origin=$origin, message='${message?.take(50)}', isCommand=$isCommand")
+
+                        // Previously skipped SYNCMSG/MCHATLOGS entirely. Keep skipping for non-commands,
+                        // but allow command messages through so they can be routed.
+                        if (origin == "SYNCMSG" || origin == "MCHATLOGS") {
+                            if (!isCommand) {
+                                println("[ObserverHelper] Skipping origin=$origin (non-command). _id=$currentLogId, chat_id=$chatId, user_id=$userId")
+                                lastLogId = currentLogId
+                                continue
+                            } else {
+                                println("[ObserverHelper] Processing command from origin=$origin: '${message.take(50)}'")
+                            }
+                        }
+
                         storeDecryptedLog(cursor, message)
 
                         // update log id
@@ -126,26 +117,36 @@ class ObserverHelper(
                             }
                         }
 
-                        val chatInfo = db.getChatInfo(chatId, userId)
-                        val data = JSONObject(
-                            mapOf(
-                                "msg" to message,
-                                "room" to chatInfo[0],
-                                "sender" to chatInfo[1],
-                                "json" to raw
-                            )
-                        ).toString()
-
-                        runBlocking {
-                            wsBroadcastFlow.emit(data)
+                        val data = try {
+                            val chatInfo = db.getChatInfo(chatId, userId)
+                            JSONObject(
+                                mapOf(
+                                    "msg" to message,
+                                    "room" to chatId.toString(),
+                                    "sender" to chatInfo[1],
+                                    "json" to raw
+                                )
+                            ).toString()
+                        } catch (e: Exception) {
+                            println("[ObserverHelper] getChatInfo/data failed: ${e.message}, using fallback")
+                            JSONObject(
+                                mapOf(
+                                    "msg" to message,
+                                    "room" to chatId.toString(),
+                                    "sender" to userId.toString(),
+                                    "json" to raw
+                                )
+                            ).toString()
                         }
-                        mqttPublisher?.let { publisher ->
-                            httpRequestExecutor.execute {
-                                runBlocking {
-                                    publisher.route(message, data)
-                                }
+
+                        if (isCommand) {
+                            val producer = redisProducer
+                            if (producer != null) {
+                                producer.route(message, data)
+                            } else {
+                                println("[ObserverHelper] Redis producer not available, skipping send")
                             }
-                        } ?: println("[ObserverHelper] MQTT not configured, skipping publish")
+                        }
                     }
                 }
             }
