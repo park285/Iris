@@ -6,5 +6,5 @@ import kotlinx.serialization.json.JsonObject
 @Serializable
 data class AotResponse(
     val success: Boolean,
-    val aot: JsonObject
+    val aot: JsonObject,
 )

@@ -13,8 +13,10 @@ class ImageDeleter(private val imageDirPath: String, private val deletionInterva
 
     fun startDeletion() {
         scheduler.scheduleWithFixedDelay(
-            { this.deleteOldImages() }, 0,
-            deletionInterval, TimeUnit.MILLISECONDS
+            { this.deleteOldImages() },
+            0,
+            deletionInterval,
+            TimeUnit.MILLISECONDS,
         )
     }
 
@@ -28,20 +30,20 @@ class ImageDeleter(private val imageDirPath: String, private val deletionInterva
         } catch (e: InterruptedException) {
             scheduler.shutdownNow()
             Thread.currentThread().interrupt()
-            System.err.println("Error shutting down image deletion scheduler: $e")
+            IrisLogger.error("Error shutting down image deletion scheduler: $e")
         }
     }
 
     private fun deleteOldImages() {
         if (!running) {
-            println("Image deletion task stopped.")
+            IrisLogger.info("Image deletion task stopped.")
             scheduler.shutdown()
             return
         }
 
         val imageDir = File(imageDirPath)
         if (!imageDir.exists() || !imageDir.isDirectory) {
-            println("Image directory does not exist: $imageDirPath")
+            IrisLogger.debug("Image directory does not exist: $imageDirPath")
             return
         }
 
@@ -51,9 +53,9 @@ class ImageDeleter(private val imageDirPath: String, private val deletionInterva
             for (file in files) {
                 if (file.isFile && file.lastModified() < oneDayAgo) {
                     if (file.delete()) {
-                        println("Deleted old image file: " + file.name)
+                        IrisLogger.debug("Deleted old image file: " + file.name)
                     } else {
-                        System.err.println("Failed to delete image file: " + file.name)
+                        IrisLogger.error("Failed to delete image file: " + file.name)
                     }
                 }
             }

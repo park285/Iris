@@ -4,11 +4,14 @@
 IRIS_PROCESS_NAME="qwer"
 IRIS_PROCESS_KEYWORD="app_process"
 # IRIS_START_COMMAND no longer includes 'adb shell'. This is now handled by the ADB_CMD variable.
-IRIS_START_COMMAND="'su root sh -c \"CLASSPATH=/data/local/tmp/Iris.apk app_process / party.qwer.iris.Main > /dev/null 2>&1\"' &"
+IRIS_START_COMMAND="'su root sh -c \"IRIS_CONFIG_PATH=/data/local/tmp/config.json CLASSPATH=/data/local/tmp/Iris.apk app_process / party.qwer.iris.Main > /dev/null 2>&1\"' &"
 IRIS_APK_URL="https://github.com/dolidolih/Iris/releases/latest/download/Iris.apk"
 IRIS_APK_PATH="/data/local/tmp/Iris.apk"
 IRIS_APK_LOCAL_FILE="Iris.apk"
 IRIS_MD5_URL="${IRIS_APK_URL}.MD5"
+IRIS_CONFIG_PATH="/data/local/tmp/config.json"
+IRIS_MQ_HOST="172.17.0.1"
+IRIS_MQ_PORT="1833"
 
 # --- Global Variables ---
 # This will be set by select_adb_device() to something like "adb -s emulator-5554"
@@ -79,6 +82,43 @@ get_iris_pid() {
   echo "$pid"
 }
 
+ensure_mq_config() {
+  local tmp_config
+  tmp_config=$(mktemp)
+
+  if $ADB_CMD shell "cat $IRIS_CONFIG_PATH" > "$tmp_config" 2>/dev/null && [ -s "$tmp_config" ]; then
+    if command -v python3 >/dev/null 2>&1; then
+      python3 - "$tmp_config" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+except Exception:
+    data = {}
+
+data["mqHost"] = "172.17.0.1"
+data["mqPort"] = 1833
+
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(data, f, separators=(",", ":"))
+PY
+    else
+      sed -i -E "s/\"mqHost\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"mqHost\":\"${IRIS_MQ_HOST}\"/" "$tmp_config" || true
+      sed -i -E "s/\"mqPort\"[[:space:]]*:[[:space:]]*[0-9]+/\"mqPort\":${IRIS_MQ_PORT}/" "$tmp_config" || true
+    fi
+  else
+    cat > "$tmp_config" <<EOF
+{"mqHost":"${IRIS_MQ_HOST}","mqPort":${IRIS_MQ_PORT}}
+EOF
+  fi
+
+  $ADB_CMD push "$tmp_config" "$IRIS_CONFIG_PATH" >/dev/null 2>&1
+  rm -f "$tmp_config"
+}
+
 iris_status() {
   pid=$(get_iris_pid)
   if [ -n "$pid" ]; then
@@ -94,6 +134,7 @@ iris_start() {
     echo "Iris is already running."
   else
     echo "Starting Iris service in the background..."
+    ensure_mq_config
     # The 'adb shell' part is now constructed dynamically with the correct device
     eval "$ADB_CMD shell $IRIS_START_COMMAND"
     sleep 2
@@ -116,10 +157,11 @@ iris_start_foreground() {
   echo "Starting Iris in foreground..."
   echo "Logs will be displayed below. Press Ctrl+C to exit verbose mode.(You will need to run iris_control stop to stop the process."
 
+  ensure_mq_config
   # Execute the command without output redirection or backgrounding.
   # This will block the script and show logs in the current terminal.
   # Ctrl+C will terminate the adb process, which in turn stops the remote command.
-  $ADB_CMD shell "su root sh -c \"CLASSPATH=${IRIS_APK_PATH} app_process / party.qwer.iris.Main\""
+  $ADB_CMD shell "su root sh -c \"IRIS_CONFIG_PATH=${IRIS_CONFIG_PATH} CLASSPATH=${IRIS_APK_PATH} app_process / party.qwer.iris.Main\""
 
 }
 
@@ -266,6 +308,9 @@ EOF
       redroid/redroid:11.0.0-latest \
       ro.product.model=SM-T970 \
       ro.product.brand=Samsung
+
+  # CPU 제한 해제
+  sudo docker update --memory 8g --memory-swap 8g --cpu-quota=-1 --cpu-period=0 --cpus=0 redroid
 
   echo "Redroid installation finished."
 }

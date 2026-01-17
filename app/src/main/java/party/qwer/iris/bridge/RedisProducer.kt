@@ -1,70 +1,73 @@
 package party.qwer.iris.bridge
 
-import org.json.JSONObject
-import party.qwer.iris.util.RedisPoolConfig
+import party.qwer.iris.IrisLogger
+import party.qwer.iris.util.RedisConnectionManager
 import redis.clients.jedis.JedisPooled
 import redis.clients.jedis.StreamEntryID
 import java.io.Closeable
 
-class RedisProducer(
-    host: String,
-    port: Int,
-) : Closeable {
-    private val jedis = JedisPooled(RedisPoolConfig.createPoolConfig(), host, port)
+class RedisProducer : Closeable {
+    private val jedis: JedisPooled = RedisConnectionManager.getPool()
 
     fun route(
         text: String?,
-        dataJson: String,
+        room: String,
+        sender: String,
+        userId: String,
+        threadId: String? = null,
     ): Boolean {
-        val msg = text ?: run {
-            System.err.println("[RedisProducer] route(): text is null, ignoring")
-            return true
-        }
+        val msg =
+            text ?: run {
+                IrisLogger.error("[RedisProducer] route(): text is null, ignoring")
+                return true
+            }
         val targetStream =
             when {
                 msg.startsWith(PREFIX_COMMENT) -> return true
-                msg.startsWith(PREFIX_CHESS) -> STREAM_CHESS
+                msg.startsWith(PREFIX_TURTLE_SOUP) -> STREAM_TURTLE_SOUP
+                msg.startsWith(PREFIX_ASSISTANT) -> STREAM_ASSISTANT
                 msg.startsWith(PREFIX_GENERIC) -> STREAM_HOLOLIVE
                 msg.startsWith(PREFIX_20Q) -> STREAM_20Q
                 else -> return true
             }
 
         return try {
-            val root = JSONObject(dataJson)
             jedis.xadd(
                 targetStream,
                 StreamEntryID.NEW_ENTRY,
                 mapOf(
-                    "text" to msg,
-                    "room" to root.optString(FIELD_ROOM, ""),
-                    "sender" to root.optString(FIELD_SENDER, ""),
-                    "threadId" to "",
-                    "rawJson" to dataJson,
+                    FIELD_TEXT to msg,
+                    FIELD_ROOM to room,
+                    FIELD_SENDER to sender,
+                    FIELD_USER_ID to userId,
+                    FIELD_THREAD_ID to (threadId ?: ""),
                 ),
             )
             true
         } catch (e: Exception) {
-            System.err.println("[RedisProducer] Exception in route(): ${e.message}")
+            IrisLogger.error("[RedisProducer] Exception in route(): ${e.message}")
             false
         }
     }
 
     override fun close() {
-        try {
-            jedis.close()
-        } catch (_: Exception) {
-        }
+        // 공유 풀 사용 - RedisConnectionManager에서 lifecycle 관리
     }
 
     companion object {
+        private const val FIELD_TEXT = "text"
         private const val FIELD_ROOM = "room"
         private const val FIELD_SENDER = "sender"
-        private const val STREAM_CHESS = "kakao:chess"
+        private const val FIELD_USER_ID = "userId"
+        private const val FIELD_THREAD_ID = "threadId"
+        private const val STREAM_TURTLE_SOUP = "kakao:turtle-soup"
         private const val STREAM_HOLOLIVE = "kakao:hololive"
         private const val STREAM_20Q = "kakao:20q"
+        private const val STREAM_ASSISTANT = "kakao:assistant"
         private const val PREFIX_COMMENT = "//"
-        private const val PREFIX_CHESS = "!체스"
+        private const val PREFIX_TURTLE_SOUP = "/스프"
         private const val PREFIX_GENERIC = "!"
         private const val PREFIX_20Q = "/스자"
+        private const val PREFIX_ASSISTANT = "/어시"
     }
 }

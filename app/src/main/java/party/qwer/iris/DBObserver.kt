@@ -8,28 +8,31 @@ import java.util.concurrent.TimeUnit
 class DBObserver(private val kakaoDb: KakaoDB, private val observerHelper: ObserverHelper) {
     private var scheduler: ScheduledExecutorService? = null
     private var scheduledFuture: ScheduledFuture<*>? = null
+
     @Volatile
     private var isObserving: Boolean = false
 
     fun startPolling() {
         if (scheduler == null || scheduler!!.isShutdown) {
-            scheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
-                Thread(runnable, "DB-Polling-Thread")
-            }
+            scheduler =
+                Executors.newSingleThreadScheduledExecutor { runnable ->
+                    Thread(runnable, "DB-Polling-Thread")
+                }
         }
 
         if (scheduledFuture == null || scheduledFuture!!.isCancelled || scheduledFuture!!.isDone) {
-            scheduledFuture = scheduler?.scheduleWithFixedDelay({
-                try {
-                    observerHelper.checkChange(kakaoDb)
-                } catch (e: Exception) {
-                    System.err.println("Error during DB polling: $e")
-                }
-            }, 0, Configurable.dbPollingRate.takeIf { it > 0 } ?: 1000, TimeUnit.MILLISECONDS)
+            scheduledFuture =
+                scheduler?.scheduleWithFixedDelay({
+                    try {
+                        observerHelper.checkChange(kakaoDb)
+                    } catch (e: Exception) {
+                        IrisLogger.error("Error during DB polling: $e")
+                    }
+                }, 0, Configurable.dbPollingRate.takeIf { it > 0 } ?: 1000, TimeUnit.MILLISECONDS)
             isObserving = true
-            println("DB Polling thread started.")
+            IrisLogger.info("DB Polling thread started.")
         } else {
-            println("DB Polling thread is already running.")
+            IrisLogger.debug("DB Polling thread is already running.")
         }
     }
 
@@ -38,7 +41,7 @@ class DBObserver(private val kakaoDb: KakaoDB, private val observerHelper: Obser
             scheduledFuture?.cancel(true)
             scheduledFuture = null
             isObserving = false
-            println("DB Polling thread stopped.")
+            IrisLogger.info("DB Polling thread stopped.")
         }
         if (scheduler != null && !scheduler!!.isShutdown) {
             scheduler?.shutdown()

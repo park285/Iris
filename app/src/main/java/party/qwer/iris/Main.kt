@@ -2,7 +2,9 @@
 // Kakaodecrypt : jiru/kakaodecrypt
 package party.qwer.iris
 
+import party.qwer.iris.util.RedisConnectionManager
 import java.io.File
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 const val IMAGE_DIR_PATH: String = "/sdcard/Android/data/com.kakao.talk/files"
@@ -17,34 +19,53 @@ class Main {
                 // UDS bridge support removed: MQTT must use tcp:// broker URLs directly
 
                 Replier.startMessageSender()
-                println("Message sender thread started")
+                IrisLogger.info("Message sender thread started")
 
                 val kakaoDb = KakaoDB()
                 val observerHelper = ObserverHelper(kakaoDb, notificationReferer)
 
                 val dbObserver = DBObserver(kakaoDb, observerHelper)
                 dbObserver.startPolling()
-                println("DBObserver started")
+                IrisLogger.info("DBObserver started")
 
                 val imageDeleter = ImageDeleter(IMAGE_DIR_PATH, TimeUnit.HOURS.toMillis(1))
                 imageDeleter.startDeletion()
-                println("ImageDeleter started, and will delete images older than 1 hour.")
+                IrisLogger.info("ImageDeleter started, runs every 1 hour, deletes images older than 1 day.")
+
+                // Graceful Shutdown Hook
+                val shutdownLatch = CountDownLatch(1)
+                Runtime.getRuntime().addShutdownHook(
+                    Thread {
+                        IrisLogger.info("[Main] Shutdown signal received, cleaning up...")
+                        dbObserver.stopPolling()
+                        imageDeleter.stopDeletion()
+                        Replier.shutdown()
+                        RedisConnectionManager.close()
+                        kakaoDb.closeConnection()
+                        IrisLogger.info("[Main] Cleanup completed")
+                        shutdownLatch.countDown()
+                    },
+                )
 
                 val disableHttp = System.getenv("IRIS_DISABLE_HTTP")?.equals("1", ignoreCase = true) == true
                 if (disableHttp) {
-                    println("[Main] IRIS_DISABLE_HTTP=1; skipping Iris HTTP server startup")
-                    // Keep process alive and DB open for background workers
-                    while (true) Thread.sleep(60_000)
+                    IrisLogger.info("[Main] IRIS_DISABLE_HTTP=1; skipping Iris HTTP server startup")
+                    // Keep process alive with proper shutdown support
+                    shutdownLatch.await()
                 } else {
-                    val irisServer = IrisServer(
-                        kakaoDb, dbObserver, observerHelper, notificationReferer
-                    )
+                    val irisServer =
+                        IrisServer(
+                            kakaoDb,
+                            dbObserver,
+                            observerHelper,
+                            notificationReferer,
+                        )
                     irisServer.startServer()
-                    println("Iris Server started")
-                    kakaoDb.closeConnection()
+                    IrisLogger.info("Iris Server started")
+                    // Server runs until terminated
                 }
             } catch (e: Exception) {
-                System.err.println("Iris Error")
+                IrisLogger.error("Iris Error")
                 e.printStackTrace()
             }
         }
@@ -61,7 +82,7 @@ class Main {
                     val match = regex.find(data)
                     val refererFromPrefs = match?.groups?.get(1)?.value
                     if (!refererFromPrefs.isNullOrBlank()) {
-                        println("Found NotificationReferer in prefs")
+                        IrisLogger.info("Found NotificationReferer in prefs")
                         return refererFromPrefs
                     }
                 } catch (_: Exception) {
@@ -72,14 +93,16 @@ class Main {
             // 2) Allow override via environment variable
             val envReferer = System.getenv("IRIS_NOTIFICATION_REFERER")
             if (!envReferer.isNullOrBlank()) {
-                println("Using IRIS_NOTIFICATION_REFERER from environment")
+                IrisLogger.info("Using IRIS_NOTIFICATION_REFERER from environment")
                 return envReferer
             }
 
             // 3) Fallback to a safe default. Note: Some KakaoTalk versions accept a generic referer.
             // If sending replies fails, set IRIS_NOTIFICATION_REFERER explicitly.
             val fallback = "Iris"
-            println("NotificationReferer not found in prefs; using fallback '$fallback'. Set IRIS_NOTIFICATION_REFERER to override.")
+            IrisLogger.info(
+                "NotificationReferer not found in prefs; using fallback '$fallback'. Set IRIS_NOTIFICATION_REFERER to override.",
+            )
             return fallback
         }
     }

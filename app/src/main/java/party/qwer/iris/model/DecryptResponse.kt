@@ -4,5 +4,5 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class DecryptResponse(
-    val plain_text: String
+    val plain_text: String,
 )

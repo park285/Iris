@@ -788,12 +788,6 @@
                                   placeholder="Enter message text"></textarea>
                     </div>
 
-                    <div class="form-group">
-                        <label for="replyRawJson">Raw JSON Body (override above)</label>
-                        <textarea id="replyRawJson" name="rawJson" rows="4"
-                                  placeholder='{"room": "", "type": "text", "data": ""}'></textarea>
-                    </div>
-
                     <button type="button" class="btn btn-primary"
                             onclick="submitForm('/reply', 'replyForm', 'replyResponseArea')">
                         <i class="fas fa-paper-plane"></i> Send Reply
@@ -817,12 +811,6 @@
                     <div class="form-group">
                         <label for="queryBind">Bind Parameters (JSON Array String, optional)</label>
                         <input type="text" id="queryBind" name="bind" placeholder='["value1", "value2"]'>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="queryRawJson">Raw JSON Body (override above)</label>
-                        <textarea id="queryRawJson" name="rawJson" rows="4"
-                                  placeholder='{"query": "SELECT * FROM chat_logs LIMIT 10"}'></textarea>
                     </div>
 
                     <button type="button" class="btn btn-primary"
@@ -936,49 +924,37 @@
         let formData = {};
         if (postDataOverride) {
             formData = postDataOverride;
-        } else {
-            let rawJsonTextarea = form ? form.querySelector('[name="rawJson"]') : null;
-            let rawJson = rawJsonTextarea ? rawJsonTextarea.value.trim() : '';
-
-            if (rawJson) {
-                try {
-                    formData = JSON.parse(rawJson);
-                } catch (e) {
-                    if (responseArea) responseArea.textContent = 'Error parsing raw JSON: ' + e.message;
-                    return;
+        } else if (form) {
+            if (endpoint === '/query') {
+                const querySqlElement = document.getElementById('querySql');
+                const queryBindElement = document.getElementById('queryBind');
+                formData['query'] = querySqlElement.value;
+                if (queryBindElement.value.trim()) {
+                    try {
+                        formData['bind'] = JSON.parse(queryBindElement.value);
+                    } catch (e) {
+                        alert("JSON parsing error: " + e);
+                        return;
+                    }
                 }
-            } else if (form) {
-                if (endpoint === '/query') {
-                    const querySqlElement = document.getElementById('querySql');
-                    const queryBindElement = document.getElementById('queryBind');
-                    formData['query'] = querySqlElement.value;
-                    if (queryBindElement.value.trim()) {
-                        try {
-                            formData['bind'] = JSON.parse(queryBindElement.value);
-                        } catch (e) {
-                            alert("JSON parsing error: " + e);
-                            return;
-                        }
-                    }
+            } else {
+                const replyTypeElement = form.querySelector('[name="type"]');
+                const replyDataElement = form.querySelector('[name="data"]');
+                const messageType = replyTypeElement ? replyTypeElement.value : 'text';
+
+                if (messageType === 'image_multiple') {
+                    formData['data'] = JSON.parse(replyDataElement.value);
                 } else {
-                    const replyTypeElement = form.querySelector('[name="type"]');
-                    const replyDataElement = form.querySelector('[name="data"]');
-                    const messageType = replyTypeElement ? replyTypeElement.value : 'text';
+                    formData['data'] = replyDataElement.value;
+                }
 
-                    if (messageType === 'image_multiple') {
-                        formData['data'] = JSON.parse(replyDataElement.value);
-                    } else {
-                        formData['data'] = replyDataElement.value;
+                for (let element of form.elements) {
+                    if (element.name && element.name !== 'data' && element.name !== 'type') {
+                        formData[element.name] = element.value;
                     }
-
-                    for (let element of form.elements) {
-                        if (element.name && element.name !== 'rawJson' && element.name !== 'data' && element.name !== 'type') {
-                            formData[element.name] = element.value;
-                        }
-                    }
-                    if (replyTypeElement) {
-                        formData['type'] = replyTypeElement.value;
-                    }
+                }
+                if (replyTypeElement) {
+                    formData['type'] = replyTypeElement.value;
                 }
             }
         }

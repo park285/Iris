@@ -6,6 +6,5 @@ import kotlinx.serialization.json.JsonPrimitive
 @Serializable
 data class QueryRequest(
     val query: String,
-    val bind: List<JsonPrimitive>? = null
+    val bind: List<JsonPrimitive>? = null,
 )
-

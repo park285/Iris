@@ -7,6 +7,8 @@ IRIS_PROCESS_KEYWORD="app_process"
 IRIS_MAIN_CLASS="party.qwer.iris.Main"
 IRIS_APK_URL="https://github.com/dolidolih/Iris/releases/latest/download/Iris.apk"
 IRIS_APK_PATH="/data/local/tmp/Iris.apk"
+# Optional: config.json location (used by IRIS via System.getenv)
+IRIS_CONFIG_PATH="/data/local/tmp/config.json"
 # Local file names used during installation
 IRIS_APK_LOCAL_FILE="Iris.apk"
 IRIS_MD5_URL="${IRIS_APK_URL}.MD5"
@@ -57,13 +59,13 @@ iris_start() {
     # The 'tee -a' command duplicates the output stream.
     # It shows output on the screen AND appends it to the log file.
     # 2>&1 ensures both stdout and stderr are piped to tee.
-    su root sh -c "CLASSPATH=${IRIS_APK_PATH} app_process / ${IRIS_MAIN_CLASS}" 2>&1 | tee -a "${IRIS_LOG_FILE}" &
+    su root sh -c "IRIS_CONFIG_PATH=${IRIS_CONFIG_PATH} CLASSPATH=${IRIS_APK_PATH} app_process / ${IRIS_MAIN_CLASS}" 2>&1 | tee -a "${IRIS_LOG_FILE}" &
   else
     echo "Starting Iris service..."
     echo "All logs will be saved to '${IRIS_LOG_FILE}'. Press Ctrl+C to stop."
     # The main command to start Iris, running as root.
     # Using '>>' to append to the log file instead of overwriting it.
-    su root sh -c "CLASSPATH=${IRIS_APK_PATH} app_process / ${IRIS_MAIN_CLASS}" >> "${IRIS_LOG_FILE}" 2>&1 &
+    su root sh -c "IRIS_CONFIG_PATH=${IRIS_CONFIG_PATH} CLASSPATH=${IRIS_APK_PATH} app_process / ${IRIS_MAIN_CLASS}" >> "${IRIS_LOG_FILE}" 2>&1 &
   fi
 
   # Get the Process ID of the background command we just launched

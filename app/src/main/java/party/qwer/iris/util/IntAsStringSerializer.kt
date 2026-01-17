@@ -15,7 +15,10 @@ object IntAsStringSerializer : KSerializer<Int?> {
         return stringValue.toIntOrNull()
     }
 
-    override fun serialize(encoder: Encoder, value: Int? ) {
+    override fun serialize(
+        encoder: Encoder,
+        value: Int?,
+    ) {
         encoder.encodeString(value?.toString() ?: "")
     }
 }

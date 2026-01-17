@@ -13,15 +13,16 @@ class KakaoDB {
 
     init {
         try {
-            connection = SQLiteDatabase.openDatabase(
-                "$DB_PATH/KakaoTalk.db", null, SQLiteDatabase.OPEN_READWRITE
-            )
+            connection =
+                SQLiteDatabase.openDatabase(
+                    "$DB_PATH/KakaoTalk.db", null, SQLiteDatabase.OPEN_READWRITE,
+                )
             connection.execSQL("ATTACH DATABASE '$DB_PATH/KakaoTalk2.db' AS db2")
             connection.execSQL("ATTACH DATABASE '$DB_PATH/multi_profile_database.db' AS db3")
             Configurable.botId = botUserId
         } catch (e: SQLiteException) {
-            System.err.println("SQLiteException: " + e.message)
-            System.err.println("You don't have a permission to access KakaoTalk Database.")
+            IrisLogger.error("SQLiteException: " + e.message)
+            IrisLogger.error("You don't have a permission to access KakaoTalk Database.")
             System.exit(1)
         }
     }
@@ -30,57 +31,67 @@ class KakaoDB {
         get() {
             return connection.rawQuery(
                 "SELECT user_id FROM chat_logs WHERE v LIKE '%\"isMine\":true%' ORDER BY _id DESC LIMIT 1;",
-                null
+                null,
             ).use { cursor ->
                 if (cursor.moveToFirst()) {
                     val botUserId = cursor.getLong(0)
-                    println("Bot user_id is detected: $botUserId")
+                    IrisLogger.info("Bot user_id is detected: $botUserId")
 
                     botUserId
                 } else {
-                    System.err.println("Warning: Bot user_id not found in chat_logs with isMine:true. Decryption might not work correctly.")
+                    IrisLogger.error("Warning: Bot user_id not found in chat_logs with isMine:true. Decryption might not work correctly.")
 
                     0
                 }
             }
         }
 
-
     fun getNameOfUserId(userId: Long): String? {
         val stringUserId = arrayOf(userId.toString())
-        val sql = if (checkNewDb()) {
-            "WITH info AS (SELECT ? AS user_id) " + "SELECT COALESCE(open_chat_member.nickname, friends.name) AS name, " + "COALESCE(open_chat_member.enc, friends.enc) AS enc " + "FROM info " + "LEFT JOIN db2.open_chat_member ON open_chat_member.user_id = info.user_id " + "LEFT JOIN db2.friends ON friends.id = info.user_id;"
-        } else {
-            "SELECT name, enc FROM db2.friends WHERE id = ?"
-        }
+        val sql =
+            if (hasOpenChatMember) {
+                "WITH info AS (SELECT ? AS user_id) " + "SELECT COALESCE(open_chat_member.nickname, friends.name) AS name, " + "COALESCE(open_chat_member.enc, friends.enc) AS enc " + "FROM info " + "LEFT JOIN db2.open_chat_member ON open_chat_member.user_id = info.user_id " + "LEFT JOIN db2.friends ON friends.id = info.user_id;"
+            } else {
+                "SELECT name, enc FROM db2.friends WHERE id = ?"
+            }
 
         return connection.rawQuery(sql, stringUserId).use { cursor ->
             if (cursor.moveToNext()) {
                 val encryptedName = cursor.getString(cursor.getColumnIndexOrThrow("name"))
                 val enc = cursor.getInt(cursor.getColumnIndexOrThrow("enc"))
 
+                if (encryptedName == null) {
+                    IrisLogger.error("[getNameOfUserId] name column is null for userId=$userId")
+                    return@use "Unknown"
+                }
+
                 try {
                     KakaoDecrypt.decrypt(enc, encryptedName, Configurable.botId)
                 } catch (e: Exception) {
-                    System.err.println("Decryption error in getNameOfUserId: $e");
+                    IrisLogger.error("Decryption error in getNameOfUserId: $e")
                     encryptedName
                 }
             } else {
-                null
+                IrisLogger.error("[getNameOfUserId] No user found for userId=$userId")
+                "Unknown"
             }
         }
     }
 
-
-    fun getChatInfo(chatId: Long, userId: Long): Array<String?> {
-        val sender = if (userId == Configurable.botId) {
-            Configurable.botName
-        } else {
-            getNameOfUserId(userId)
-        }
+    fun getChatInfo(
+        chatId: Long,
+        userId: Long,
+    ): Array<String?> {
+        val sender =
+            if (userId == Configurable.botId) {
+                Configurable.botName
+            } else {
+                getNameOfUserId(userId)
+            }
 
         connection.rawQuery(
-            "SELECT private_meta FROM chat_rooms WHERE id = ?", arrayOf(chatId.toString())
+            "SELECT private_meta FROM chat_rooms WHERE id = ?",
+            arrayOf(chatId.toString()),
         ).use { cursor ->
             if (cursor.moveToNext()) {
                 val value = cursor.getString(0)
@@ -100,7 +111,7 @@ class KakaoDB {
 
         connection.rawQuery(
             "SELECT name FROM db2.open_link WHERE id = (SELECT link_id FROM chat_rooms WHERE id = ?)",
-            arrayOf(chatId.toString())
+            arrayOf(chatId.toString()),
         ).use { cursor ->
             if (cursor.moveToNext()) {
                 return arrayOf(cursor.getString(0), sender)
@@ -127,11 +138,13 @@ class KakaoDB {
         return dict
     }
 
+    // 스키마는 런타임에 변경되지 않으므로 lazy 캐싱
+    private val hasOpenChatMember: Boolean by lazy { checkNewDb() }
 
-    fun checkNewDb(): Boolean {
+    private fun checkNewDb(): Boolean {
         return connection.rawQuery(
             "SELECT name FROM db2.sqlite_master WHERE type='table' AND name='open_chat_member'",
-            null
+            null,
         ).use { cursor ->
             cursor.count > 0
         }
@@ -140,12 +153,13 @@ class KakaoDB {
     fun closeConnection() {
         if (connection.isOpen) {
             connection.close()
-            println("Database connection closed.")
+            IrisLogger.info("Database connection closed.")
         }
     }
 
     fun executeQuery(
-        sqlQuery: String, bindArgs: Array<String?>?
+        sqlQuery: String,
+        bindArgs: Array<String?>?,
     ): List<Map<String, String?>> {
         val resultList: MutableList<Map<String, String?>> = ArrayList()
         connection.rawQuery(sqlQuery, bindArgs).use { cursor ->
@@ -164,8 +178,10 @@ class KakaoDB {
 
     companion object {
         private val DB_PATH = "${PathUtils.getAppPath()}databases"
+
         fun decryptRow(row: Map<String, String?>): Map<String, String?> {
-            @Suppress("NAME_SHADOWING") var row = row.toMutableMap()
+            @Suppress("NAME_SHADOWING")
+            var row = row.toMutableMap()
 
             try {
                 if (row.contains("message") || row.contains("attachment")) {
@@ -178,37 +194,45 @@ class KakaoDB {
                             val keysToDecrypt = arrayOf("message", "attachment")
                             row = decryptRowValues(row, enc, userId, keysToDecrypt)
                         } catch (e: JSONException) {
-                            System.err.println("Error parsing 'v' for decryption: $e")
+                            IrisLogger.error("Error parsing 'v' for decryption: $e")
                         }
                     }
                 }
 
-                val keywords = listOf("name", "nick_name", "nickname", "profile_image_url", "full_profile_image_url", "original_profile_image_url", "status_message", "contact_name", "board_v")
+                val keywords =
+                    listOf("name", "nick_name", "nickname", "profile_image_url", "full_profile_image_url", "original_profile_image_url", "status_message", "contact_name", "board_v")
 
                 if (row.contains("enc") && keywords.any { row.contains(it) }) {
                     val botId = Configurable.botId
                     val enc = row["enc"]?.toIntOrNull() ?: 0
-                    val keysToDecrypt = arrayOf("nick_name", "name", "nickname", "profile_image_url", "full_profile_image_url", "original_profile_image_url", "status_message","contact_name","v","board_v")
+                    val keysToDecrypt =
+                        arrayOf("nick_name", "name", "nickname", "profile_image_url", "full_profile_image_url", "original_profile_image_url", "status_message", "contact_name", "v", "board_v")
                     row = decryptRowValues(row, enc, botId, keysToDecrypt)
                 }
             } catch (e: Exception) {
-                System.err.println("JSON processing error during decryption: $e")
+                IrisLogger.error("JSON processing error during decryption: $e")
             }
 
             return row
         }
-        private fun decryptRowValues(row: MutableMap<String, String?>, enc: Int, botId: Long, keysToDecrypt: Array<String>): MutableMap<String, String?> {
+
+        private fun decryptRowValues(
+            row: MutableMap<String, String?>,
+            enc: Int,
+            botId: Long,
+            keysToDecrypt: Array<String>,
+        ): MutableMap<String, String?> {
             for (key in keysToDecrypt) {
                 if (row.containsKey(key)) {
                     try {
                         val encryptedValue = row.getOrDefault(key, "") as? String
-                        if (encryptedValue != "{}" && encryptedValue != "[]"){
+                        if (encryptedValue != "{}" && encryptedValue != "[]") {
                             encryptedValue?.let {
                                 row[key] = KakaoDecrypt.decrypt(enc, it, botId)
                             }
                         }
                     } catch (e: Exception) {
-                        System.err.println("Decryption error for $key: $e")
+                        IrisLogger.error("Decryption error for $key: $e")
                     }
                 }
             }

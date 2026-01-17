@@ -17,8 +17,8 @@ import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import party.qwer.iris.model.AotResponse
 import party.qwer.iris.model.ApiResponse
 import party.qwer.iris.model.CommonErrorResponse
@@ -32,18 +32,17 @@ import party.qwer.iris.model.QueryResponse
 import party.qwer.iris.model.ReplyRequest
 import party.qwer.iris.model.ReplyType
 
-
 class IrisServer(
     private val kakaoDB: KakaoDB,
     private val dbObserver: DBObserver,
     private val observerHelper: ObserverHelper,
-    private val notificationReferer: String
+    private val notificationReferer: String,
 ) {
     fun startServer() {
         embeddedServer(
             CIO,
             port = Configurable.botSocketPort,
-            host = "0.0.0.0"
+            host = "0.0.0.0",
         ) {
             install(ContentNegotiation) {
                 json()
@@ -52,9 +51,10 @@ class IrisServer(
             install(StatusPages) {
                 exception<Throwable> { call, cause ->
                     call.respond(
-                        HttpStatusCode.InternalServerError, CommonErrorResponse(
-                            message = cause.message ?: "unknown error"
-                        )
+                        HttpStatusCode.InternalServerError,
+                        CommonErrorResponse(
+                            message = cause.message ?: "unknown error",
+                        ),
                     )
                 }
             }
@@ -70,13 +70,14 @@ class IrisServer(
                         call.respond(
                             DashboardStatusResponse(
                                 isObserving = dbObserver.isPollingThreadAlive,
-                                statusMessage = if (dbObserver.isPollingThreadAlive) {
-                                    "Observing database"
-                                } else {
-                                    "Not observing database"
-                                },
-                                lastLogs = observerHelper.lastChatLogs
-                            )
+                                statusMessage =
+                                    if (dbObserver.isPollingThreadAlive) {
+                                        "Observing database"
+                                    } else {
+                                        "Not observing database"
+                                    },
+                                lastLogs = observerHelper.lastChatLogs,
+                            ),
                         )
                     }
                 }
@@ -90,7 +91,7 @@ class IrisServer(
                                 db_polling_rate = Configurable.dbPollingRate,
                                 message_send_rate = Configurable.messageSendRate,
                                 bot_id = Configurable.botId,
-                            )
+                            ),
                         )
                     }
 
@@ -134,6 +135,7 @@ class IrisServer(
                             }
                         }
 
+                        Configurable.saveConfigNow()
                         call.respond(ApiResponse(success = true, message = "success"))
                     }
                 }
@@ -144,8 +146,8 @@ class IrisServer(
                     call.respond(
                         AotResponse(
                             success = true,
-                            aot = Json.parseToJsonElement(aotToken.toString()).jsonObject
-                        )
+                            aot = Json.parseToJsonElement(aotToken.toString()).jsonObject,
+                        ),
                     )
                 }
 
@@ -155,20 +157,25 @@ class IrisServer(
                     val threadId = replyRequest.threadId?.toLong()
 
                     when (replyRequest.type) {
-                        ReplyType.TEXT -> Replier.sendMessage(
-                            notificationReferer,
-                            roomId,
-                            replyRequest.data.jsonPrimitive.content,
-                            threadId
-                        )
+                        ReplyType.TEXT ->
+                            Replier.sendMessage(
+                                notificationReferer,
+                                roomId,
+                                replyRequest.data.jsonPrimitive.content,
+                                threadId,
+                            )
 
-                        ReplyType.IMAGE -> Replier.sendPhoto(
-                            roomId, replyRequest.data.jsonPrimitive.content
-                        )
+                        ReplyType.IMAGE ->
+                            Replier.sendPhoto(
+                                roomId,
+                                replyRequest.data.jsonPrimitive.content,
+                            )
 
-                        ReplyType.IMAGE_MULTIPLE -> Replier.sendMultiplePhotos(
-                            roomId,
-                            replyRequest.data.jsonArray.map { it.jsonPrimitive.content })
+                        ReplyType.IMAGE_MULTIPLE ->
+                            Replier.sendMultiplePhotos(
+                                roomId,
+                                replyRequest.data.jsonArray.map { it.jsonPrimitive.content },
+                            )
                     }
 
                     call.respond(ApiResponse(success = true, message = "success"))
@@ -178,13 +185,20 @@ class IrisServer(
                     val queryRequest = call.receive<QueryRequest>()
 
                     try {
-                        val rows = kakaoDB.executeQuery(
-                            queryRequest.query,
-                            (queryRequest.bind?.map { it.content } ?: listOf()).toTypedArray())
+                        val rows =
+                            kakaoDB.executeQuery(
+                                queryRequest.query,
+                                (queryRequest.bind?.map { it.content } ?: listOf()).toTypedArray(),
+                            )
 
-                        call.respond(QueryResponse(data = rows.map {
-                            KakaoDB.decryptRow(it)
-                        }))
+                        call.respond(
+                            QueryResponse(
+                                data =
+                                    rows.map {
+                                        KakaoDB.decryptRow(it)
+                                    },
+                            ),
+                        )
                     } catch (e: Exception) {
                         throw Exception("Query 오류: query=${queryRequest.query}, err=${e.message}")
                     }
@@ -192,15 +206,15 @@ class IrisServer(
 
                 post("/decrypt") {
                     val decryptRequest = call.receive<DecryptRequest>()
-                    val plaintext = KakaoDecrypt.decrypt(
-                        decryptRequest.enc,
-                        decryptRequest.b64_ciphertext,
-                        decryptRequest.user_id ?: Configurable.botId
-                    )
+                    val plaintext =
+                        KakaoDecrypt.decrypt(
+                            decryptRequest.enc,
+                            decryptRequest.b64_ciphertext,
+                            decryptRequest.user_id ?: Configurable.botId,
+                        )
 
                     call.respond(DecryptResponse(plain_text = plaintext))
                 }
-
             }
         }.start(wait = true)
     }

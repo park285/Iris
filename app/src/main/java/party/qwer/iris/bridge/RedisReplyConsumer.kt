@@ -1,21 +1,20 @@
 package party.qwer.iris.bridge
 
+import party.qwer.iris.IrisLogger
 import party.qwer.iris.Replier
-import party.qwer.iris.util.RedisPoolConfig
+import party.qwer.iris.util.RedisConnectionManager
 import redis.clients.jedis.JedisPooled
 import redis.clients.jedis.StreamEntryID
+import redis.clients.jedis.exceptions.JedisDataException
 import redis.clients.jedis.params.XReadGroupParams
 import redis.clients.jedis.resps.StreamEntry
-import redis.clients.jedis.exceptions.JedisDataException
 import java.io.Closeable
 import java.util.concurrent.atomic.AtomicBoolean
 
 class RedisReplyConsumer(
-    host: String,
-    port: Int,
     private val notificationReferer: String,
 ) : Closeable {
-    private val jedis = JedisPooled(RedisPoolConfig.createPoolConfig(), host, port)
+    private val jedis: JedisPooled = RedisConnectionManager.getPool()
 
     private val started = AtomicBoolean(false)
     private val thread =
@@ -32,27 +31,37 @@ class RedisReplyConsumer(
     }
 
     private fun runLoop() {
+        // at-most-once 정책 통일: 재시작 시 pending/이전 메시지를 통째로 폐기 (group reset)
+        try {
+            resetConsumerGroupOnStartup()
+        } catch (e: Exception) {
+            IrisLogger.error(
+                "[RedisReplyConsumer] Group reset failed, continuing without reset: ${e.message}",
+            )
+            e.printStackTrace()
+        }
+
         while (started.get()) {
             try {
                 consumeMessages()
             } catch (e: Exception) {
                 if (e is JedisDataException && e.message?.contains("NOGROUP") == true) {
-                    System.err.println(
+                    IrisLogger.error(
                         "[RedisReplyConsumer] NOGROUP detected, re-creating group $CONSUMER_GROUP on $STREAM_KEY",
                     )
                     try {
                         jedis.xgroupCreate(STREAM_KEY, CONSUMER_GROUP, StreamEntryID.XGROUP_LAST_ENTRY, true)
-                        System.err.println(
+                        IrisLogger.error(
                             "[RedisReplyConsumer] Group re-created: $CONSUMER_GROUP on $STREAM_KEY",
                         )
                     } catch (groupEx: Exception) {
-                        System.err.println(
+                        IrisLogger.error(
                             "[RedisReplyConsumer] Group re-create failed: ${groupEx.message}",
                         )
                         groupEx.printStackTrace()
                     }
                 } else {
-                    System.err.println(
+                    IrisLogger.error(
                         "[RedisReplyConsumer] Fatal error, retrying in ${RETRY_DELAY_MS}ms: ${e.message}",
                     )
                     e.printStackTrace()
@@ -65,20 +74,39 @@ class RedisReplyConsumer(
             }
         }
 
+        // 공유 풀 사용 - RedisConnectionManager에서 lifecycle 관리
+    }
+
+    private fun resetConsumerGroupOnStartup() {
+        runCatching {
+            jedis.xgroupDestroy(STREAM_KEY, CONSUMER_GROUP)
+        }.onSuccess { destroyed ->
+            if (destroyed == 1L) {
+                IrisLogger.info(
+                    "[RedisReplyConsumer] Group destroyed: $CONSUMER_GROUP on $STREAM_KEY (pending cleared)",
+                )
+            } else {
+                IrisLogger.debug(
+                    "[RedisReplyConsumer] Group destroy skipped: $CONSUMER_GROUP on $STREAM_KEY (not found)",
+                )
+            }
+        }.onFailure { e ->
+            IrisLogger.debug(
+                "[RedisReplyConsumer] Group destroy failed/skipped: ${e.message}",
+            )
+        }
+
         try {
-            jedis.close()
-        } catch (_: Exception) {
+            jedis.xgroupCreate(STREAM_KEY, CONSUMER_GROUP, StreamEntryID.XGROUP_LAST_ENTRY, true)
+            IrisLogger.info(
+                "[RedisReplyConsumer] Group created: $CONSUMER_GROUP on $STREAM_KEY (id=\\$)",
+            )
+        } catch (e: Exception) {
+            IrisLogger.debug("[RedisReplyConsumer] Group create skipped: ${e.message}")
         }
     }
 
     private fun consumeMessages() {
-        try {
-            jedis.xgroupCreate(STREAM_KEY, CONSUMER_GROUP, StreamEntryID.XGROUP_LAST_ENTRY, true)
-            println("[RedisReplyConsumer] Group created: $CONSUMER_GROUP on $STREAM_KEY")
-        } catch (e: Exception) {
-            println("[RedisReplyConsumer] Group create skipped: ${e.message}")
-        }
-
         val params =
             XReadGroupParams
                 .xReadGroupParams()
@@ -95,7 +123,7 @@ class RedisReplyConsumer(
                 try {
                     handleMessage(entry)
                 } catch (e: Exception) {
-                    System.err.println(
+                    IrisLogger.error(
                         "[RedisReplyConsumer] Error processing entry ${entry.id}: ${e.message}",
                     )
                     e.printStackTrace()
@@ -117,7 +145,7 @@ class RedisReplyConsumer(
 
             val roomId = chatIdStr?.toLongOrNull()
             if (roomId == null) {
-                System.err.println(
+                IrisLogger.error(
                     "[RedisReplyConsumer] Invalid chatId format (not Long): " +
                         "chatId=$chatIdStr, text preview: ${text.take(TEXT_PREVIEW_LENGTH)}",
                 )
@@ -138,14 +166,14 @@ class RedisReplyConsumer(
                     Replier.sendMessage(notificationReferer, roomId, text, threadId)
                 }
                 else -> {
-                    System.err.println(
+                    IrisLogger.error(
                         "[RedisReplyConsumer] Unknown type: $typeStr, treating as final",
                     )
                     Replier.sendMessage(notificationReferer, roomId, text, threadId)
                 }
             }
         } catch (e: Exception) {
-            System.err.println(
+            IrisLogger.error(
                 "[RedisReplyConsumer] Exception in handleMessage for $id: ${e.message}, ACKing anyway (at-most-once)",
             )
             e.printStackTrace()

@@ -11,5 +11,5 @@ data class ConfigRequest(
     @Serializable(with = LongAsStringSerializer::class)
     val rate: Long? = null,
     @Serializable(with = IntAsStringSerializer::class)
-    val port: Int? = null
+    val port: Int? = null,
 )
