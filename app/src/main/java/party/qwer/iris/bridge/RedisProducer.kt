@@ -1,5 +1,6 @@
 package party.qwer.iris.bridge
 
+import party.qwer.iris.Configurable
 import party.qwer.iris.IrisLogger
 import party.qwer.iris.util.RedisConnectionManager
 import redis.clients.jedis.JedisPooled
@@ -28,6 +29,7 @@ class RedisProducer : Closeable {
                 msg.startsWith(PREFIX_ASSISTANT) -> STREAM_ASSISTANT
                 msg.startsWith(PREFIX_GENERIC) -> STREAM_HOLOLIVE
                 msg.startsWith(PREFIX_20Q) -> STREAM_20Q
+                Configurable.isAssistantFullRoom(room) -> STREAM_ASSISTANT
                 else -> return true
             }
 

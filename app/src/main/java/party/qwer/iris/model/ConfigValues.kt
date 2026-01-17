@@ -7,8 +7,6 @@ import kotlinx.serialization.Serializable
 data class ConfigValues(
     var botName: String = "Iris",
     var botHttpPort: Int = 3000,
-    // MQ/Redis bridge configuration
-    // redroid는 bridge 네트워크에서 실행되므로 docker0 gateway IP 사용
     @SerialName("mqHost")
     var mqHost: String = "172.17.0.1",
     @SerialName("mqPort")
@@ -21,4 +19,6 @@ data class ConfigValues(
     var relayUserEmail: String = "",
     var relaySessionId: String = "",
     var relaySecret: String = "",
+    @SerialName("assistantFullRooms")
+    var assistantFullRooms: List<String> = emptyList(),
 )

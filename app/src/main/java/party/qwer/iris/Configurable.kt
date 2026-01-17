@@ -176,5 +176,10 @@ class Configurable {
                 markDirty()
                 IrisLogger.debug("MQ port updated to: $mqPort")
             }
+
+        val assistantFullRooms: List<String>
+            get() = configValues.assistantFullRooms
+
+        fun isAssistantFullRoom(roomId: String): Boolean = assistantFullRooms.contains(roomId)
     }
 }
