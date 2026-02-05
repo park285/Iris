@@ -26,10 +26,11 @@ class RedisProducer : Closeable {
             when {
                 msg.startsWith(PREFIX_COMMENT) -> return true
                 msg.startsWith(PREFIX_TURTLE_SOUP) -> STREAM_TURTLE_SOUP
-                msg.startsWith(PREFIX_ASSISTANT) -> STREAM_ASSISTANT
+                msg.startsWith(PREFIX_OPENCLAW) -> STREAM_OPENCLAW
+                msg.startsWith(PREFIX_ASSISTANT) -> STREAM_OPENCLAW
                 msg.startsWith(PREFIX_GENERIC) -> STREAM_HOLOLIVE
                 msg.startsWith(PREFIX_20Q) -> STREAM_20Q
-                Configurable.isAssistantFullRoom(room) -> STREAM_ASSISTANT
+                Configurable.isAssistantFullRoom(room) -> STREAM_OPENCLAW
                 else -> return true
             }
 
@@ -65,11 +66,12 @@ class RedisProducer : Closeable {
         private const val STREAM_TURTLE_SOUP = "kakao:turtle-soup"
         private const val STREAM_HOLOLIVE = "kakao:hololive"
         private const val STREAM_20Q = "kakao:20q"
-        private const val STREAM_ASSISTANT = "kakao:assistant"
+        private const val STREAM_OPENCLAW = "kakao:openclaw"
         private const val PREFIX_COMMENT = "//"
         private const val PREFIX_TURTLE_SOUP = "/스프"
         private const val PREFIX_GENERIC = "!"
         private const val PREFIX_20Q = "/스자"
         private const val PREFIX_ASSISTANT = "/어시"
+        private const val PREFIX_OPENCLAW = "/몰트"
     }
 }
