@@ -5,7 +5,7 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 
-class DBObserver(private val kakaoDb: KakaoDB, private val observerHelper: ObserverHelper) {
+class DBObserver(private val observerHelper: ObserverHelper) {
     private var scheduler: ScheduledExecutorService? = null
     private var scheduledFuture: ScheduledFuture<*>? = null
 
@@ -24,7 +24,7 @@ class DBObserver(private val kakaoDb: KakaoDB, private val observerHelper: Obser
             scheduledFuture =
                 scheduler?.scheduleWithFixedDelay({
                     try {
-                        observerHelper.checkChange(kakaoDb)
+                        observerHelper.checkChange()
                     } catch (e: Exception) {
                         IrisLogger.error("Error during DB polling: $e")
                     }

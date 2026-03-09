@@ -2,7 +2,6 @@
 // Kakaodecrypt : jiru/kakaodecrypt
 package party.qwer.iris
 
-import party.qwer.iris.util.RedisConnectionManager
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -16,15 +15,13 @@ class Main {
             try {
                 val notificationReferer = readNotificationReferer()
 
-                // UDS bridge support removed: MQTT must use tcp:// broker URLs directly
-
                 Replier.startMessageSender()
                 IrisLogger.info("Message sender thread started")
 
                 val kakaoDb = KakaoDB()
-                val observerHelper = ObserverHelper(kakaoDb, notificationReferer)
+                val observerHelper = ObserverHelper(kakaoDb)
 
-                val dbObserver = DBObserver(kakaoDb, observerHelper)
+                val dbObserver = DBObserver(observerHelper)
                 dbObserver.startPolling()
                 IrisLogger.info("DBObserver started")
 
@@ -39,8 +36,8 @@ class Main {
                         IrisLogger.info("[Main] Shutdown signal received, cleaning up...")
                         dbObserver.stopPolling()
                         imageDeleter.stopDeletion()
+                        observerHelper.close()
                         Replier.shutdown()
-                        RedisConnectionManager.close()
                         kakaoDb.closeConnection()
                         IrisLogger.info("[Main] Cleanup completed")
                         shutdownLatch.countDown()

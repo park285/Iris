@@ -9,57 +9,80 @@ import org.json.JSONException
 import org.json.JSONObject
 
 class KakaoDB {
-    lateinit var connection: SQLiteDatabase
+    private lateinit var connection: SQLiteDatabase
+    private val dbLock = Any()
 
     init {
         try {
-            connection =
+            val openedConnection =
                 SQLiteDatabase.openDatabase(
-                    "$DB_PATH/KakaoTalk.db", null, SQLiteDatabase.OPEN_READWRITE,
+                    "$DB_PATH/KakaoTalk.db",
+                    null,
+                    SQLiteDatabase.OPEN_READWRITE,
                 )
-            connection.execSQL("ATTACH DATABASE '$DB_PATH/KakaoTalk2.db' AS db2")
-            connection.execSQL("ATTACH DATABASE '$DB_PATH/multi_profile_database.db' AS db3")
+            openedConnection.execSQL("ATTACH DATABASE '$DB_PATH/KakaoTalk2.db' AS db2")
+            openedConnection.execSQL("ATTACH DATABASE '$DB_PATH/multi_profile_database.db' AS db3")
+            connection = openedConnection
             Configurable.botId = botUserId
         } catch (e: SQLiteException) {
-            IrisLogger.error("SQLiteException: " + e.message)
+            IrisLogger.error("SQLiteException: ${e.message}")
             IrisLogger.error("You don't have a permission to access KakaoTalk Database.")
             System.exit(1)
         }
     }
 
     val botUserId: Long
-        get() {
-            return connection.rawQuery(
-                "SELECT user_id FROM chat_logs WHERE v LIKE '%\"isMine\":true%' ORDER BY _id DESC LIMIT 1;",
-                null,
-            ).use { cursor ->
-                if (cursor.moveToFirst()) {
-                    val botUserId = cursor.getLong(0)
-                    IrisLogger.info("Bot user_id is detected: $botUserId")
-
-                    botUserId
-                } else {
-                    IrisLogger.error("Warning: Bot user_id not found in chat_logs with isMine:true. Decryption might not work correctly.")
-
-                    0
+        get() =
+            withPrimaryConnection { db ->
+                db.rawQuery(
+                    """
+                    SELECT user_id
+                    FROM chat_logs
+                    WHERE v LIKE '%"isMine":true%'
+                    ORDER BY _id DESC
+                    LIMIT 1
+                    """.trimIndent(),
+                    null,
+                ).use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val detectedBotUserId = cursor.getLong(0)
+                        IrisLogger.info("Bot user_id is detected: $detectedBotUserId")
+                        detectedBotUserId
+                    } else {
+                        IrisLogger.error(
+                            "Warning: Bot user_id not found in chat_logs with isMine:true. " +
+                                "Decryption might not work correctly.",
+                        )
+                        0L
+                    }
                 }
             }
-        }
 
     fun getNameOfUserId(userId: Long): String? {
-        val stringUserId = arrayOf(userId.toString())
+        val bindArgs = arrayOf(userId.toString())
         val sql =
             if (hasOpenChatMember) {
-                "WITH info AS (SELECT ? AS user_id) " + "SELECT COALESCE(open_chat_member.nickname, friends.name) AS name, " + "COALESCE(open_chat_member.enc, friends.enc) AS enc " + "FROM info " + "LEFT JOIN db2.open_chat_member ON open_chat_member.user_id = info.user_id " + "LEFT JOIN db2.friends ON friends.id = info.user_id;"
+                """
+                WITH info AS (SELECT ? AS user_id)
+                SELECT COALESCE(open_chat_member.nickname, friends.name) AS name,
+                       COALESCE(open_chat_member.enc, friends.enc) AS enc
+                FROM info
+                LEFT JOIN db2.open_chat_member ON open_chat_member.user_id = info.user_id
+                LEFT JOIN db2.friends ON friends.id = info.user_id
+                """.trimIndent()
             } else {
                 "SELECT name, enc FROM db2.friends WHERE id = ?"
             }
 
-        return connection.rawQuery(sql, stringUserId).use { cursor ->
-            if (cursor.moveToNext()) {
+        return withPrimaryConnection { db ->
+            db.rawQuery(sql, bindArgs).use { cursor ->
+                if (!cursor.moveToNext()) {
+                    IrisLogger.error("[getNameOfUserId] No user found for userId=$userId")
+                    return@use "Unknown"
+                }
+
                 val encryptedName = cursor.getString(cursor.getColumnIndexOrThrow("name"))
                 val enc = cursor.getInt(cursor.getColumnIndexOrThrow("enc"))
-
                 if (encryptedName == null) {
                     IrisLogger.error("[getNameOfUserId] name column is null for userId=$userId")
                     return@use "Unknown"
@@ -71,9 +94,6 @@ class KakaoDB {
                     IrisLogger.error("Decryption error in getNameOfUserId: $e")
                     encryptedName
                 }
-            } else {
-                IrisLogger.error("[getNameOfUserId] No user found for userId=$userId")
-                "Unknown"
             }
         }
     }
@@ -89,82 +109,147 @@ class KakaoDB {
                 getNameOfUserId(userId)
             }
 
-        connection.rawQuery(
-            "SELECT private_meta FROM chat_rooms WHERE id = ?",
-            arrayOf(chatId.toString()),
-        ).use { cursor ->
-            if (cursor.moveToNext()) {
-                val value = cursor.getString(0)
-                if (!value.isNullOrEmpty()) {
-                    try {
-                        val meta = Json.decodeFromString<Map<String, JsonElement>>(value)
-                        val name = meta["name"]
-
-                        if (name != null) {
-                            return arrayOf(name.jsonPrimitive.content, sender)
+        withPrimaryConnection { db ->
+            db.rawQuery(
+                "SELECT private_meta FROM chat_rooms WHERE id = ?",
+                arrayOf(chatId.toString()),
+            ).use { cursor ->
+                if (cursor.moveToNext()) {
+                    val value = cursor.getString(0)
+                    if (!value.isNullOrEmpty()) {
+                        try {
+                            val meta = Json.decodeFromString<Map<String, JsonElement>>(value)
+                            val name = meta["name"]?.jsonPrimitive?.content
+                            if (!name.isNullOrBlank()) {
+                                return arrayOf(name, sender)
+                            }
+                        } catch (_: Exception) {
                         }
-                    } catch (_: Exception) {
                     }
                 }
             }
-        }
 
-        connection.rawQuery(
-            "SELECT name FROM db2.open_link WHERE id = (SELECT link_id FROM chat_rooms WHERE id = ?)",
-            arrayOf(chatId.toString()),
-        ).use { cursor ->
-            if (cursor.moveToNext()) {
-                return arrayOf(cursor.getString(0), sender)
+            db.rawQuery(
+                "SELECT name FROM db2.open_link WHERE id = (SELECT link_id FROM chat_rooms WHERE id = ?)",
+                arrayOf(chatId.toString()),
+            ).use { cursor ->
+                if (cursor.moveToNext()) {
+                    return arrayOf(cursor.getString(0), sender)
+                }
             }
         }
 
         return arrayOf(sender, sender)
     }
 
-    fun logToDict(logId: Long): Map<String, String?> {
-        val dict: MutableMap<String, String?> = HashMap()
-
-        connection.rawQuery("SELECT * FROM chat_logs ORDER BY _id DESC LIMIT 1", null)
-            .use { cursor ->
-                if (cursor.moveToNext()) {
-                    val columnNames = cursor.columnNames
-                    for (columnName in columnNames) {
-                        val columnIndex = cursor.getColumnIndexOrThrow(columnName)
-                        dict[columnName] = cursor.getString(columnIndex)
-                    }
+    fun latestLogId(): Long =
+        withPrimaryConnection { db ->
+            db.rawQuery("SELECT _id FROM chat_logs ORDER BY _id DESC LIMIT 1", null).use { cursor ->
+                if (cursor.moveToFirst()) {
+                    cursor.getLong(0)
+                } else {
+                    0L
                 }
             }
+        }
 
-        return dict
-    }
-
-    // 스키마는 런타임에 변경되지 않으므로 lazy 캐싱
-    private val hasOpenChatMember: Boolean by lazy { checkNewDb() }
-
-    private fun checkNewDb(): Boolean {
-        return connection.rawQuery(
-            "SELECT name FROM db2.sqlite_master WHERE type='table' AND name='open_chat_member'",
-            null,
-        ).use { cursor ->
-            cursor.count > 0
+    fun pollChatLogsAfter(
+        afterLogId: Long,
+        limit: Int = DEFAULT_POLL_BATCH_SIZE,
+    ): List<ChatLogEntry> {
+        val effectiveLimit = limit.coerceIn(1, DEFAULT_POLL_BATCH_SIZE)
+        return withPrimaryConnection { db ->
+            db.rawQuery(
+                """
+                SELECT _id, chat_id, user_id, message, attachment, type, v, created_at
+                FROM chat_logs
+                WHERE _id > ?
+                ORDER BY _id ASC
+                LIMIT $effectiveLimit
+                """.trimIndent(),
+                arrayOf(afterLogId.toString()),
+            ).use { cursor ->
+                val rows = ArrayList<ChatLogEntry>(effectiveLimit)
+                while (cursor.moveToNext()) {
+                    rows.add(
+                        ChatLogEntry(
+                            id = cursor.getLong(0),
+                            chatId = cursor.getLong(1),
+                            userId = cursor.getLong(2),
+                            message = cursor.getString(3).orEmpty(),
+                            attachment = cursor.getString(4),
+                            type = cursor.getString(5),
+                            metadata = cursor.getString(6).orEmpty(),
+                            createdAt = cursor.getString(7),
+                        ),
+                    )
+                }
+                rows
+            }
         }
     }
 
     fun closeConnection() {
-        if (connection.isOpen) {
-            connection.close()
-            IrisLogger.info("Database connection closed.")
+        synchronized(dbLock) {
+            if (connection.isOpen) {
+                connection.close()
+                IrisLogger.info("Database connection closed.")
+            }
         }
     }
 
     fun executeQuery(
         sqlQuery: String,
         bindArgs: Array<String?>?,
+        maxRows: Int = DEFAULT_QUERY_RESULT_LIMIT,
     ): List<Map<String, String?>> {
-        val resultList: MutableList<Map<String, String?>> = ArrayList()
-        connection.rawQuery(sqlQuery, bindArgs).use { cursor ->
+        val queryConnection = openDetachedReadConnection()
+        return try {
+            readQueryRows(queryConnection, sqlQuery, bindArgs, maxRows.coerceAtLeast(1))
+        } finally {
+            queryConnection.close()
+        }
+    }
+
+    private val hasOpenChatMember: Boolean by lazy { checkNewDb() }
+
+    private fun checkNewDb(): Boolean =
+        withPrimaryConnection { db ->
+            db.rawQuery(
+                "SELECT name FROM db2.sqlite_master WHERE type='table' AND name='open_chat_member'",
+                null,
+            ).use { cursor ->
+                cursor.count > 0
+            }
+        }
+
+    private inline fun <T> withPrimaryConnection(block: (SQLiteDatabase) -> T): T =
+        synchronized(dbLock) {
+            block(connection)
+        }
+
+    private fun openDetachedReadConnection(): SQLiteDatabase {
+        val queryConnection =
+            SQLiteDatabase.openDatabase(
+                "$DB_PATH/KakaoTalk.db",
+                null,
+                SQLiteDatabase.OPEN_READONLY,
+            )
+        queryConnection.execSQL("ATTACH DATABASE '$DB_PATH/KakaoTalk2.db' AS db2")
+        queryConnection.execSQL("ATTACH DATABASE '$DB_PATH/multi_profile_database.db' AS db3")
+        return queryConnection
+    }
+
+    private fun readQueryRows(
+        queryConnection: SQLiteDatabase,
+        sqlQuery: String,
+        bindArgs: Array<String?>?,
+        maxRows: Int,
+    ): List<Map<String, String?>> {
+        val resultList: MutableList<Map<String, String?>> = ArrayList(minOf(maxRows, 64))
+        queryConnection.rawQuery(sqlQuery, bindArgs).use { cursor ->
             val columnNames = cursor.columnNames
-            while (cursor.moveToNext()) {
+            while (cursor.moveToNext() && resultList.size < maxRows) {
                 val row: MutableMap<String, String?> = HashMap()
                 for (columnName in columnNames) {
                     val columnIndex = cursor.getColumnIndexOrThrow(columnName)
@@ -176,8 +261,21 @@ class KakaoDB {
         return resultList
     }
 
+    data class ChatLogEntry(
+        val id: Long,
+        val chatId: Long,
+        val userId: Long,
+        val message: String,
+        val attachment: String?,
+        val type: String?,
+        val metadata: String,
+        val createdAt: String?,
+    )
+
     companion object {
         private val DB_PATH = "${PathUtils.getAppPath()}databases"
+        const val DEFAULT_QUERY_RESULT_LIMIT = 500
+        const val DEFAULT_POLL_BATCH_SIZE = 100
 
         fun decryptRow(row: Map<String, String?>): Map<String, String?> {
             @Suppress("NAME_SHADOWING")
@@ -190,7 +288,7 @@ class KakaoDB {
                         try {
                             val vJson = JSONObject(vStr)
                             val enc = vJson.optInt("enc", 0)
-                            val userId = row.get("user_id")?.toLongOrNull() ?: Configurable.botId
+                            val userId = row["user_id"]?.toLongOrNull() ?: Configurable.botId
                             val keysToDecrypt = arrayOf("message", "attachment")
                             row = decryptRowValues(row, enc, userId, keysToDecrypt)
                         } catch (e: JSONException) {
@@ -200,13 +298,34 @@ class KakaoDB {
                 }
 
                 val keywords =
-                    listOf("name", "nick_name", "nickname", "profile_image_url", "full_profile_image_url", "original_profile_image_url", "status_message", "contact_name", "board_v")
+                    listOf(
+                        "name",
+                        "nick_name",
+                        "nickname",
+                        "profile_image_url",
+                        "full_profile_image_url",
+                        "original_profile_image_url",
+                        "status_message",
+                        "contact_name",
+                        "board_v",
+                    )
 
                 if (row.contains("enc") && keywords.any { row.contains(it) }) {
                     val botId = Configurable.botId
                     val enc = row["enc"]?.toIntOrNull() ?: 0
                     val keysToDecrypt =
-                        arrayOf("nick_name", "name", "nickname", "profile_image_url", "full_profile_image_url", "original_profile_image_url", "status_message", "contact_name", "v", "board_v")
+                        arrayOf(
+                            "nick_name",
+                            "name",
+                            "nickname",
+                            "profile_image_url",
+                            "full_profile_image_url",
+                            "original_profile_image_url",
+                            "status_message",
+                            "contact_name",
+                            "v",
+                            "board_v",
+                        )
                     row = decryptRowValues(row, enc, botId, keysToDecrypt)
                 }
             } catch (e: Exception) {
