@@ -5,17 +5,16 @@ import kotlinx.serialization.json.Json
 import party.qwer.iris.model.ConfigValues
 import java.io.File
 import java.io.IOException
-import java.util.UUID
 
 class Configurable {
     companion object {
+        private const val DEFAULT_WEBHOOK_ROUTE = "hololive"
         private val CONFIG_FILE_PATH: String by lazy {
             System.getenv("IRIS_CONFIG_PATH") ?: "/data/local/tmp/config.json"
         }
 
         @Volatile
         private var configValues: ConfigValues = ConfigValues()
-        private val runtimeSessionId: String = UUID.randomUUID().toString()
 
         @Volatile
         private var isDirty = false
@@ -109,6 +108,43 @@ class Configurable {
                 IrisLogger.debug("Bot port updated to: $botSocketPort")
             }
 
+        val webhooks: Map<String, String>
+            get() {
+                val configured = configValues.webhooks.filterValues { it.isNotBlank() }
+                if (configured.isNotEmpty()) {
+                    return configured
+                }
+
+                val envFallback = mutableMapOf<String, String>()
+                System.getenv("IRIS_WEBHOOK_HOLOLIVE")?.takeIf { it.isNotBlank() }?.let { envFallback["hololive"] = it }
+                System.getenv("IRIS_WEBHOOK_TWENTYQ")?.takeIf { it.isNotBlank() }?.let { envFallback["twentyq"] = it }
+                System.getenv("IRIS_WEBHOOK_TURTLE_SOUP")?.takeIf { it.isNotBlank() }?.let { envFallback["turtle-soup"] = it }
+                return envFallback
+            }
+
+        var defaultWebhookEndpoint: String
+            get() = webhooks[DEFAULT_WEBHOOK_ROUTE].orEmpty()
+            set(value) {
+                val normalized = value.trim()
+                val updatedWebhooks =
+                    configValues.webhooks.toMutableMap().apply {
+                        if (normalized.isBlank()) {
+                            remove(DEFAULT_WEBHOOK_ROUTE)
+                        } else {
+                            put(DEFAULT_WEBHOOK_ROUTE, normalized)
+                        }
+                    }
+                configValues.webhooks = updatedWebhooks.toMap()
+                markDirty()
+                IrisLogger.debug("Default webhook endpoint updated for route '$DEFAULT_WEBHOOK_ROUTE'")
+            }
+
+        val webhookToken: String
+            get() = configValues.webhookToken.ifBlank { System.getenv("IRIS_WEBHOOK_TOKEN") ?: "" }
+
+        val botToken: String
+            get() = configValues.botToken.ifBlank { System.getenv("IRIS_BOT_TOKEN") ?: "" }
+
         var dbPollingRate: Long
             get() = configValues.dbPollingRate
             set(value) {
@@ -161,25 +197,5 @@ class Configurable {
                 configValues.relaySecret = value
                 markDirty()
             }
-        var mqHost: String
-            get() = configValues.mqHost
-            set(value) {
-                configValues.mqHost = value
-                markDirty()
-                IrisLogger.debug("MQ host updated to: $mqHost")
-            }
-
-        var mqPort: Int
-            get() = configValues.mqPort
-            set(value) {
-                configValues.mqPort = value
-                markDirty()
-                IrisLogger.debug("MQ port updated to: $mqPort")
-            }
-
-        val assistantFullRooms: List<String>
-            get() = configValues.assistantFullRooms
-
-        fun isAssistantFullRoom(roomId: String): Boolean = assistantFullRooms.contains(roomId)
     }
 }

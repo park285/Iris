@@ -7,10 +7,12 @@ import kotlinx.serialization.Serializable
 data class ConfigValues(
     var botName: String = "Iris",
     var botHttpPort: Int = 3000,
-    @SerialName("mqHost")
-    var mqHost: String = "172.17.0.1",
-    @SerialName("mqPort")
-    var mqPort: Int = 1833,
+    @SerialName("webhooks")
+    var webhooks: Map<String, String> = emptyMap(),
+    @SerialName("webhookToken")
+    var webhookToken: String = "",
+    @SerialName("botToken")
+    var botToken: String = "",
     var dbPollingRate: Long = 100,
     var messageSendRate: Long = 50,
     var messageMaxChars: Int = 100000,
@@ -19,6 +21,4 @@ data class ConfigValues(
     var relayUserEmail: String = "",
     var relaySessionId: String = "",
     var relaySecret: String = "",
-    @SerialName("assistantFullRooms")
-    var assistantFullRooms: List<String> = emptyList(),
 )

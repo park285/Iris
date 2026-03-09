@@ -15,6 +15,7 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -38,6 +39,12 @@ class IrisServer(
     private val observerHelper: ObserverHelper,
     private val notificationReferer: String,
 ) {
+    private val serverJson =
+        Json {
+            ignoreUnknownKeys = true
+            explicitNulls = false
+        }
+
     fun startServer() {
         embeddedServer(
             CIO,
@@ -45,15 +52,32 @@ class IrisServer(
             host = "0.0.0.0",
         ) {
             install(ContentNegotiation) {
-                json()
+                json(serverJson)
             }
 
             install(StatusPages) {
+                exception<ApiRequestException> { call, cause ->
+                    call.respond(
+                        cause.status,
+                        CommonErrorResponse(message = cause.message),
+                    )
+                }
+
+                exception<SerializationException> { call, cause ->
+                    IrisLogger.error("[IrisServer] Invalid JSON request: ${cause.message}")
+                    call.respond(
+                        HttpStatusCode.BadRequest,
+                        CommonErrorResponse(message = "invalid json request"),
+                    )
+                }
+
                 exception<Throwable> { call, cause ->
+                    IrisLogger.error("[IrisServer] Unhandled error: ${cause.message}")
+                    cause.printStackTrace()
                     call.respond(
                         HttpStatusCode.InternalServerError,
                         CommonErrorResponse(
-                            message = cause.message ?: "unknown error",
+                            message = "internal server error",
                         ),
                     )
                 }
@@ -86,11 +110,12 @@ class IrisServer(
                     get {
                         call.respond(
                             ConfigResponse(
-                                bot_name = Configurable.botName,
-                                bot_http_port = Configurable.botSocketPort,
-                                db_polling_rate = Configurable.dbPollingRate,
-                                message_send_rate = Configurable.messageSendRate,
-                                bot_id = Configurable.botId,
+                                botName = Configurable.botName,
+                                webEndpoint = Configurable.defaultWebhookEndpoint,
+                                botHttpPort = Configurable.botSocketPort,
+                                dbPollingRate = Configurable.dbPollingRate,
+                                messageSendRate = Configurable.messageSendRate,
+                                botId = Configurable.botId,
                             ),
                         )
                     }
@@ -100,38 +125,52 @@ class IrisServer(
                         val req = call.receive<ConfigRequest>()
 
                         when (name) {
+                            "endpoint" -> {
+                                val value = req.endpoint?.trim() ?: throw ApiRequestException("missing endpoint value")
+                                if (value.isNotEmpty() && !value.startsWith("http://") && !value.startsWith("https://")) {
+                                    throw ApiRequestException("endpoint must start with http:// or https://")
+                                }
+                                Configurable.defaultWebhookEndpoint = value
+                            }
+
                             "botname" -> {
                                 val value = req.botname
                                 if (value.isNullOrBlank()) {
-                                    throw Exception("missing or empty value")
+                                    throw ApiRequestException("missing or empty botname")
                                 }
                                 Configurable.botName = value
                             }
 
                             "dbrate" -> {
-                                val value = req.rate ?: throw Exception("missing or invalid value")
+                                val value = req.rate ?: throw ApiRequestException("missing or invalid rate")
+                                if (value < 1) {
+                                    throw ApiRequestException("rate must be greater than 0")
+                                }
 
                                 Configurable.dbPollingRate = value
                             }
 
                             "sendrate" -> {
-                                val value = req.rate ?: throw Exception("missing or invalid value")
+                                val value = req.rate ?: throw ApiRequestException("missing or invalid rate")
+                                if (value < 0) {
+                                    throw ApiRequestException("rate must be 0 or greater")
+                                }
 
                                 Configurable.messageSendRate = value
                             }
 
                             "botport" -> {
-                                val value = req.port ?: throw Exception("missing or invalid value")
+                                val value = req.port ?: throw ApiRequestException("missing or invalid port")
 
                                 if (value < 1 || value > 65535) {
-                                    throw Exception("Invalid port number. Port must be between 1 and 65535.")
+                                    throw ApiRequestException("invalid port number; port must be between 1 and 65535")
                                 }
 
                                 Configurable.botSocketPort = value
                             }
 
                             else -> {
-                                throw Exception("Unknown config $name")
+                                throw ApiRequestException("unknown config '$name'")
                             }
                         }
 
@@ -153,28 +192,31 @@ class IrisServer(
 
                 post("/reply") {
                     val replyRequest = call.receive<ReplyRequest>()
-                    val roomId = replyRequest.room.toLong()
-                    val threadId = replyRequest.threadId?.toLong()
+                    val roomId = replyRequest.room.toLongOrNull() ?: throw ApiRequestException("room must be a numeric string")
+                    val threadId =
+                        replyRequest.threadId?.let {
+                            it.toLongOrNull() ?: throw ApiRequestException("threadId must be a numeric string")
+                        }
 
                     when (replyRequest.type) {
                         ReplyType.TEXT ->
                             Replier.sendMessage(
                                 notificationReferer,
                                 roomId,
-                                replyRequest.data.jsonPrimitive.content,
+                                extractTextPayload(replyRequest),
                                 threadId,
                             )
 
                         ReplyType.IMAGE ->
                             Replier.sendPhoto(
                                 roomId,
-                                replyRequest.data.jsonPrimitive.content,
+                                extractSingleImagePayload(replyRequest),
                             )
 
                         ReplyType.IMAGE_MULTIPLE ->
                             Replier.sendMultiplePhotos(
                                 roomId,
-                                replyRequest.data.jsonArray.map { it.jsonPrimitive.content },
+                                extractImagePayloads(replyRequest),
                             )
                     }
 
@@ -183,13 +225,20 @@ class IrisServer(
 
                 post("/query") {
                     val queryRequest = call.receive<QueryRequest>()
+                    if (queryRequest.query.isBlank()) {
+                        throw ApiRequestException("query must not be blank")
+                    }
 
                     try {
                         val rows =
                             kakaoDB.executeQuery(
                                 queryRequest.query,
                                 (queryRequest.bind?.map { it.content } ?: listOf()).toTypedArray(),
+                                MAX_QUERY_ROWS + 1,
                             )
+                        if (rows.size > MAX_QUERY_ROWS) {
+                            throw ApiRequestException("query returned too many rows; limit is $MAX_QUERY_ROWS")
+                        }
 
                         call.respond(
                             QueryResponse(
@@ -200,7 +249,10 @@ class IrisServer(
                             ),
                         )
                     } catch (e: Exception) {
-                        throw Exception("Query 오류: query=${queryRequest.query}, err=${e.message}")
+                        IrisLogger.error(
+                            "[IrisServer] Query execution failed: query=${queryRequest.query}, err=${e.message}",
+                        )
+                        throw ApiRequestException("query execution failed: ${e.message}")
                     }
                 }
 
@@ -217,5 +269,31 @@ class IrisServer(
                 }
             }
         }.start(wait = true)
+    }
+
+    private fun extractTextPayload(replyRequest: ReplyRequest): String {
+        return runCatching { replyRequest.data.jsonPrimitive.content }
+            .getOrElse { throw ApiRequestException("text replies require string data") }
+    }
+
+    private fun extractSingleImagePayload(replyRequest: ReplyRequest): String {
+        return extractTextPayload(replyRequest)
+    }
+
+    private fun extractImagePayloads(replyRequest: ReplyRequest): List<String> {
+        return runCatching {
+            replyRequest.data.jsonArray.map { element -> element.jsonPrimitive.content }
+        }.getOrElse {
+            throw ApiRequestException("image_multiple replies require a JSON array of base64 strings")
+        }
+    }
+
+    private class ApiRequestException(
+        override val message: String,
+        val status: HttpStatusCode = HttpStatusCode.BadRequest,
+    ) : RuntimeException(message)
+
+    companion object {
+        private const val MAX_QUERY_ROWS = 500
     }
 }
