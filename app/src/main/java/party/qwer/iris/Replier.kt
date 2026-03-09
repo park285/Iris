@@ -186,12 +186,14 @@ class Replier {
             base64ImageDataString: String,
         ) {
             coroutineScope.launch {
+                val preparedImages =
+                    prepareImages(
+                        room = room,
+                        base64ImageDataStrings = listOf(base64ImageDataString),
+                    ) ?: return@launch
                 messageChannel.send(
                     SendMessageRequest {
-                        sendPhotoInternal(
-                            room,
-                            base64ImageDataString,
-                        )
+                        sendPreparedImages(preparedImages)
                     },
                 )
             }
@@ -202,28 +204,36 @@ class Replier {
             base64ImageDataStrings: List<String>,
         ) {
             coroutineScope.launch {
+                val preparedImages =
+                    prepareImages(
+                        room = room,
+                        base64ImageDataStrings = base64ImageDataStrings,
+                    ) ?: return@launch
                 messageChannel.send(
                     SendMessageRequest {
-                        sendMultiplePhotosInternal(
-                            room,
-                            base64ImageDataStrings,
-                        )
+                        sendPreparedImages(preparedImages)
                     },
                 )
             }
         }
 
-        private fun sendPhotoInternal(
-            room: Long,
-            base64ImageDataString: String,
-        ) {
-            sendMultiplePhotosInternal(room, listOf(base64ImageDataString))
-        }
-
-        private fun sendMultiplePhotosInternal(
+        private fun prepareImages(
             room: Long,
             base64ImageDataStrings: List<String>,
-        ) {
+        ): PreparedImages? {
+            return try {
+                prepareImagesInternal(room, base64ImageDataStrings)
+            } catch (e: Exception) {
+                IrisLogger.error("Error preparing images for room=$room: ${e.message}")
+                e.printStackTrace()
+                null
+            }
+        }
+
+        private fun prepareImagesInternal(
+            room: Long,
+            base64ImageDataStrings: List<String>,
+        ): PreparedImages {
             val picDir =
                 File(IMAGE_DIR_PATH).apply {
                     if (!exists()) {
@@ -231,11 +241,10 @@ class Replier {
                     }
                 }
 
+            val timestamp = System.currentTimeMillis().toString()
             val uris =
                 base64ImageDataStrings.mapIndexed { idx, base64ImageDataString ->
                     val decodedImage = Base64.decode(base64ImageDataString, Base64.DEFAULT)
-                    val timestamp = System.currentTimeMillis().toString()
-
                     val imageFile =
                         File(picDir, "${timestamp}_$idx.png").apply {
                             writeBytes(decodedImage)
@@ -246,17 +255,18 @@ class Replier {
                     imageUri
                 }
 
-            if (uris.isEmpty()) {
-                IrisLogger.error("No image URIs created, cannot send multiple photos.")
-                return
-            }
+            require(uris.isNotEmpty()) { "no image URIs created" }
 
+            return PreparedImages(room = room, uris = ArrayList(uris))
+        }
+
+        private fun sendPreparedImages(preparedImages: PreparedImages) {
             val intent =
                 Intent(Intent.ACTION_SEND_MULTIPLE).apply {
                     setPackage("com.kakao.talk")
                     type = "image/*"
-                    putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
-                    putExtra("key_id", room)
+                    putParcelableArrayListExtra(Intent.EXTRA_STREAM, preparedImages.uris)
+                    putExtra("key_id", preparedImages.room)
                     putExtra("key_type", 1)
                     putExtra("key_from_direct_share", true)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
@@ -273,6 +283,11 @@ class Replier {
         internal fun interface SendMessageRequest {
             suspend fun send()
         }
+
+        private data class PreparedImages(
+            val room: Long,
+            val uris: ArrayList<Uri>,
+        )
 
         // Android Q+ deprecated ACTION_MEDIA_SCANNER_SCAN_FILE
         // Context 없는 환경이므로 MediaScannerConnection 사용 불가

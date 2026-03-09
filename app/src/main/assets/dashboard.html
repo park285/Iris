@@ -968,15 +968,18 @@
             },
             body: JSON.stringify(formData)
         })
-            .then(response => response.json())
-            .then(data => {
+            .then(async response => {
+                const data = await response.json();
+                return { ok: response.ok, data };
+            })
+            .then(({ ok, data }) => {
                 if (responseArea) responseArea.textContent = JSON.stringify(data, null, 2);
                 if (endpoint.startsWith('/config/')) {
-                    if (data.success) {
+                    if (ok && data.success) {
                         alert('Config updated successfully: ' + data.message);
                         location.reload();
                     } else {
-                        alert('Config update failed: ' + data.error);
+                        alert('Config update failed: ' + (data.message || 'unknown error'));
                     }
                 }
             })
