@@ -21,3 +21,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Iris"
 include(":app")
+include(":kakao-thread-fix")

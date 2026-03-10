@@ -17,11 +17,17 @@ local.properties
 
 # Claude Code / AI Assistant
 .claude/
+.codex/
+.omx/
+.tasklists/
 .cursor/
 .aider*
 
 # Serena MCP
 .serena/
+
+# Nested module build outputs
+**/build/
 
 # Backup files
 *.backup
