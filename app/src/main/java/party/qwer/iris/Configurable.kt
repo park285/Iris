@@ -46,9 +46,12 @@ class Configurable {
 
             try {
                 val jsonString = configFile.readText()
-                IrisLogger.debug("jsonString from file: $jsonString")
                 configValues = json.decodeFromString(ConfigValues.serializer(), jsonString)
-                saveConfig()
+                IrisLogger.debug(
+                    "Loaded config from $CONFIG_FILE_PATH " +
+                        "(webhookTokenConfigured=${configValues.webhookToken.isNotBlank()}, " +
+                        "botTokenConfigured=${configValues.botToken.isNotBlank()})",
+                )
             } catch (e: IOException) {
                 IrisLogger.error("Error reading config.json from $CONFIG_FILE_PATH, creating default config: ${e.message}")
                 saveConfig()
@@ -60,10 +63,12 @@ class Configurable {
 
         private fun saveConfig() {
             try {
-                IrisLogger.debug("saveConfig: configValues before serialization: $configValues")
-
                 val jsonString = json.encodeToString(ConfigValues.serializer(), configValues)
-                IrisLogger.debug("saveConfig: jsonString: $jsonString")
+                IrisLogger.debug(
+                    "Saving config to $CONFIG_FILE_PATH " +
+                        "(webhookTokenConfigured=${configValues.webhookToken.isNotBlank()}, " +
+                        "botTokenConfigured=${configValues.botToken.isNotBlank()})",
+                )
 
                 File(CONFIG_FILE_PATH).writeText(jsonString)
                 isDirty = false
@@ -87,6 +92,9 @@ class Configurable {
         var botId: Long
             get() = configValues.botId
             set(value) {
+                if (configValues.botId == value) {
+                    return
+                }
                 configValues.botId = value
                 markDirty()
                 IrisLogger.debug("Bot Id is updated to: $botId")
@@ -95,6 +103,9 @@ class Configurable {
         var botName: String
             get() = configValues.botName
             set(value) {
+                if (configValues.botName == value) {
+                    return
+                }
                 configValues.botName = value
                 markDirty()
                 IrisLogger.debug("Bot name updated to: $botName")
@@ -103,6 +114,9 @@ class Configurable {
         var botSocketPort: Int
             get() = configValues.botHttpPort
             set(value) {
+                if (configValues.botHttpPort == value) {
+                    return
+                }
                 configValues.botHttpPort = value
                 markDirty()
                 IrisLogger.debug("Bot port updated to: $botSocketPort")
@@ -112,6 +126,9 @@ class Configurable {
             get() = configValues.webhooks[DEFAULT_WEBHOOK_ROUTE].orEmpty()
             set(value) {
                 val normalized = value.trim()
+                if (defaultWebhookEndpoint == normalized) {
+                    return
+                }
                 configValues.webhooks =
                     if (normalized.isBlank()) {
                         emptyMap()
@@ -131,6 +148,9 @@ class Configurable {
         var dbPollingRate: Long
             get() = configValues.dbPollingRate
             set(value) {
+                if (configValues.dbPollingRate == value) {
+                    return
+                }
                 configValues.dbPollingRate = value
                 markDirty()
                 IrisLogger.debug("DbPollingRate updated to: $dbPollingRate")
@@ -139,6 +159,9 @@ class Configurable {
         var messageSendRate: Long
             get() = configValues.messageSendRate
             set(value) {
+                if (configValues.messageSendRate == value) {
+                    return
+                }
                 configValues.messageSendRate = value
                 markDirty()
                 IrisLogger.debug("MessageSendRate updated to: $messageSendRate")

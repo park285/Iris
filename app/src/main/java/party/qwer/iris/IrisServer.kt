@@ -211,10 +211,10 @@ class IrisServer(
                                     },
                             ),
                         )
+                    } catch (e: ApiRequestException) {
+                        throw e
                     } catch (e: Exception) {
-                        IrisLogger.error(
-                            "[IrisServer] Query execution failed: ${e.message}",
-                        )
+                        IrisLogger.error("[IrisServer] Query execution failed", e)
                         throw ApiRequestException("query execution failed")
                     }
                 }
@@ -225,7 +225,9 @@ class IrisServer(
     private suspend fun requireBotToken(call: ApplicationCall): Boolean {
         val expectedToken = Configurable.botToken
         if (expectedToken.isBlank()) {
-            return true
+            IrisLogger.error("[IrisServer] Refusing protected request because bot token is not configured")
+            call.respond(HttpStatusCode.ServiceUnavailable, CommonErrorResponse(message = "service unavailable"))
+            return false
         }
         if (call.request.headers[HEADER_BOT_TOKEN] == expectedToken) {
             return true
