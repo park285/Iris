@@ -29,6 +29,7 @@ class Replier {
         private val coroutineScope = CoroutineScope(Dispatchers.IO)
         private var messageSenderJob: Job? = null
         private val mutex = Mutex()
+        private val imageDir = File(IMAGE_DIR_PATH)
 
         init {
             startMessageSender()
@@ -231,26 +232,26 @@ class Replier {
             room: Long,
             base64ImageDataStrings: List<String>,
         ): PreparedImages {
-            val picDir =
-                File(IMAGE_DIR_PATH).apply {
-                    if (!exists()) {
-                        mkdirs()
-                    }
+            require(base64ImageDataStrings.isNotEmpty()) { "no image data provided" }
+            if (!imageDir.exists()) {
+                check(imageDir.mkdirs() || imageDir.exists()) {
+                    "Failed to create image directory: ${imageDir.absolutePath}"
                 }
+            }
 
             val timestamp = System.currentTimeMillis().toString()
-            val uris =
-                base64ImageDataStrings.mapIndexed { idx, base64ImageDataString ->
-                    val decodedImage = Base64.decode(base64ImageDataString, Base64.DEFAULT)
-                    val imageFile =
-                        File(picDir, "${timestamp}_$idx.png").apply {
-                            writeBytes(decodedImage)
-                        }
+            val uris = ArrayList<Uri>(base64ImageDataStrings.size)
+            base64ImageDataStrings.forEachIndexed { idx, base64ImageDataString ->
+                val decodedImage = Base64.decode(base64ImageDataString, Base64.DEFAULT)
+                val imageFile =
+                    File(imageDir, "${timestamp}_$idx.png").apply {
+                        writeBytes(decodedImage)
+                    }
 
-                    val imageUri = Uri.fromFile(imageFile)
-                    mediaScan(imageUri)
-                    imageUri
-                }
+                val imageUri = Uri.fromFile(imageFile)
+                mediaScan(imageUri)
+                uris.add(imageUri)
+            }
 
             require(uris.isNotEmpty()) { "no image URIs created" }
 

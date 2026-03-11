@@ -223,7 +223,7 @@ class KakaoDB {
                     "SELECT name FROM db2.sqlite_master WHERE type='table' AND name='open_chat_member'",
                     null,
                 ).use { cursor ->
-                    cursor.count > 0
+                    cursor.moveToFirst()
                 }
         }
 
@@ -253,11 +253,14 @@ class KakaoDB {
         val resultList: MutableList<Map<String, String?>> = ArrayList(minOf(maxRows, 64))
         queryConnection.rawQuery(sqlQuery, bindArgs).use { cursor ->
             val columnNames = cursor.columnNames
+            val columnIndices =
+                IntArray(columnNames.size) { index ->
+                    cursor.getColumnIndexOrThrow(columnNames[index])
+                }
             while (cursor.moveToNext() && resultList.size < maxRows) {
-                val row: MutableMap<String, String?> = HashMap()
-                for (columnName in columnNames) {
-                    val columnIndex = cursor.getColumnIndexOrThrow(columnName)
-                    row[columnName] = cursor.getString(columnIndex)
+                val row: MutableMap<String, String?> = HashMap(columnNames.size)
+                for (index in columnNames.indices) {
+                    row[columnNames[index]] = cursor.getString(columnIndices[index])
                 }
                 resultList.add(row)
             }

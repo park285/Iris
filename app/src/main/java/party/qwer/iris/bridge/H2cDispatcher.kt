@@ -84,10 +84,11 @@ class H2cDispatcher : Closeable {
     @Volatile
     private var started = false
     private val outboxDir = File(OUTBOX_DIR_PATH)
-    private val queuedPaths =
+    private val admissionStore = DurableAdmissionStore(outboxDir, json)
+    private val queuedAdmissionKeys =
         java.util.concurrent.ConcurrentHashMap
             .newKeySet<String>()
-    private val deliveryQueue = LinkedBlockingQueue<DeliveryWorkItem>()
+    private val deliveryQueue = LinkedBlockingQueue<StoredDelivery>()
     private val workerCounter = AtomicInteger(0)
     private val workerPool: ExecutorService =
         Executors.newFixedThreadPool(
@@ -100,20 +101,9 @@ class H2cDispatcher : Closeable {
         )
 
     init {
-        if (!outboxDir.exists()) {
-            check(outboxDir.mkdirs() || outboxDir.exists()) {
-                "Failed to create outbox directory: ${outboxDir.absolutePath}"
-            }
-        }
-
-        val pendingFiles =
-            outboxDir
-                .listFiles { file -> file.isFile && file.extension == OUTBOX_FILE_EXTENSION }
-                ?.sortedBy { it.name }
-                .orEmpty()
-        pendingFiles.forEach { file ->
-            if (queuedPaths.add(file.absolutePath)) {
-                deliveryQueue.put(DeliveryWorkItem.Persisted(file, null))
+        admissionStore.recoverPending().forEach { storedDelivery ->
+            if (queuedAdmissionKeys.add(storedDelivery.handle.key)) {
+                deliveryQueue.put(storedDelivery)
             }
         }
 
@@ -144,17 +134,14 @@ class H2cDispatcher : Closeable {
 
         val delivery = buildQueuedDelivery(command, webhookUrl, targetRoute)
         try {
-            val outboxFile = outboxFileFor(delivery)
-            if (!outboxFile.exists()) {
-                persistDelivery(outboxFile, delivery)
-            }
-            if (queuedPaths.add(outboxFile.absolutePath)) {
-                deliveryQueue.put(DeliveryWorkItem.Persisted(outboxFile, delivery))
+            val storedDelivery = admissionStore.admit(delivery)
+            if (queuedAdmissionKeys.add(storedDelivery.handle.key)) {
+                deliveryQueue.put(storedDelivery)
             }
             return RoutingResult.ACCEPTED
         } catch (e: Exception) {
             IrisLogger.error(
-                "[H2cDispatcher] Failed to persist delivery: route=$targetRoute, " +
+                "[H2cDispatcher] Failed to admit delivery: route=$targetRoute, " +
                     "messageId=${delivery.messageId}: ${e.message}",
             )
             return RoutingResult.RETRY_LATER
@@ -203,108 +190,67 @@ class H2cDispatcher : Closeable {
     }
 
     @Throws(InterruptedException::class)
-    private fun handleQueuedItem(item: DeliveryWorkItem) {
-        val resolved = resolveQueuedDelivery(item) ?: return
-
+    private fun handleQueuedItem(item: StoredDelivery) {
         val outcome =
             try {
-                dispatchWithRetry(resolved.delivery)
+                dispatchWithRetry(item.delivery)
             } finally {
-                if (resolved.persistedFile != null) {
-                    queuedPaths.remove(resolved.persistedFile.absolutePath)
-                }
+                queuedAdmissionKeys.remove(item.handle.key)
             }
 
-        handleDeliveryOutcome(resolved, outcome)
+        handleDeliveryOutcome(item, outcome)
     }
-
-    private fun resolveQueuedDelivery(item: DeliveryWorkItem): ResolvedDelivery? =
-        when (item) {
-            is DeliveryWorkItem.Memory -> ResolvedDelivery(item.delivery, null)
-            is DeliveryWorkItem.Persisted ->
-                item.delivery?.let { delivery ->
-                    ResolvedDelivery(delivery, item.file)
-                } ?: runCatching {
-                    json.decodeFromString(QueuedDelivery.serializer(), item.file.readText())
-                }.map { delivery ->
-                    ResolvedDelivery(delivery, item.file)
-                }.getOrElse { error ->
-                    IrisLogger.error("[H2cDispatcher] Invalid outbox file ${item.file.name}: ${error.message}")
-                    item.file.delete()
-                    null
-                }
-        }
 
     @Throws(InterruptedException::class)
     private fun handleDeliveryOutcome(
-        resolved: ResolvedDelivery,
+        item: StoredDelivery,
         outcome: DeliveryOutcome,
     ) {
         when (outcome) {
-            DeliveryOutcome.SUCCESS -> handleSuccessfulDelivery(resolved)
-            DeliveryOutcome.DROP -> handleDroppedDelivery(resolved)
-            DeliveryOutcome.RETRY_LATER -> handleRetryLaterDelivery(resolved)
+            DeliveryOutcome.SUCCESS -> handleSuccessfulDelivery(item)
+            DeliveryOutcome.DROP -> handleDroppedDelivery(item)
+            DeliveryOutcome.RETRY_LATER -> handleRetryLaterDelivery(item)
         }
     }
 
-    private fun handleSuccessfulDelivery(resolved: ResolvedDelivery) {
-        if (resolved.persistedFile != null && !resolved.persistedFile.delete()) {
+    private fun handleSuccessfulDelivery(item: StoredDelivery) {
+        if (!admissionStore.complete(item.handle)) {
             IrisLogger.error(
-                "[H2cDispatcher] Delivered but failed to delete outbox file: ${resolved.persistedFile.name}",
+                "[H2cDispatcher] Delivered but failed to retire durable admission: ${item.handle.key}",
             )
         }
         IrisLogger.debug(
-            "[H2cDispatcher] Delivery completed: route=${resolved.delivery.route}, " +
-                "messageId=${resolved.delivery.messageId}",
+            "[H2cDispatcher] Delivery completed: route=${item.delivery.route}, " +
+                "messageId=${item.delivery.messageId}",
         )
     }
 
-    private fun handleDroppedDelivery(resolved: ResolvedDelivery) {
-        if (resolved.persistedFile != null && !resolved.persistedFile.delete()) {
+    private fun handleDroppedDelivery(item: StoredDelivery) {
+        if (!admissionStore.complete(item.handle)) {
             IrisLogger.error(
-                "[H2cDispatcher] Dropped but failed to delete outbox file: ${resolved.persistedFile.name}",
+                "[H2cDispatcher] Dropped but failed to retire durable admission: ${item.handle.key}",
             )
         }
         IrisLogger.error(
-            "[H2cDispatcher] Delivery dropped: route=${resolved.delivery.route}, " +
-                "messageId=${resolved.delivery.messageId}",
+            "[H2cDispatcher] Delivery dropped: route=${item.delivery.route}, " +
+                "messageId=${item.delivery.messageId}",
         )
     }
 
     @Throws(InterruptedException::class)
-    private fun handleRetryLaterDelivery(resolved: ResolvedDelivery) {
+    private fun handleRetryLaterDelivery(item: StoredDelivery) {
         IrisLogger.error(
-            "[H2cDispatcher] Delivery deferred for retry: route=${resolved.delivery.route}, " +
-                "messageId=${resolved.delivery.messageId}",
+            "[H2cDispatcher] Delivery deferred for retry: route=${item.delivery.route}, " +
+                "messageId=${item.delivery.messageId}",
         )
 
-        val retryFile = retryFileFor(resolved)
-        if (started || retryFile?.exists() == true) {
+        if (started || admissionStore.isRecoverable(item.handle)) {
             Thread.sleep(RETRY_LATER_REQUEUE_DELAY_MS)
-            if (retryFile != null) {
-                if (queuedPaths.add(retryFile.absolutePath)) {
-                    deliveryQueue.put(DeliveryWorkItem.Persisted(retryFile, null))
-                }
-            } else {
-                deliveryQueue.put(DeliveryWorkItem.Memory(resolved.delivery))
+            if (queuedAdmissionKeys.add(item.handle.key)) {
+                deliveryQueue.put(item)
             }
         }
     }
-
-    private fun retryFileFor(resolved: ResolvedDelivery): File? =
-        resolved.persistedFile ?: runCatching {
-            val outboxFile = outboxFileFor(resolved.delivery)
-            if (!outboxFile.exists()) {
-                persistDelivery(outboxFile, resolved.delivery)
-            }
-            outboxFile
-        }.getOrElse { error ->
-            IrisLogger.error(
-                "[H2cDispatcher] Failed to persist retry delivery: route=${resolved.delivery.route}, " +
-                    "messageId=${resolved.delivery.messageId}: ${error.message}",
-            )
-            null
-        }
 
     private fun dispatchWithRetry(delivery: QueuedDelivery): DeliveryOutcome {
         val body = buildRequestBody(delivery)
@@ -412,36 +358,6 @@ class H2cDispatcher : Closeable {
         return null
     }
 
-    private fun persistDelivery(
-        outboxFile: File,
-        delivery: QueuedDelivery,
-    ) {
-        val tempFile = File(outboxFile.parentFile, "${outboxFile.name}.tmp")
-        val payload = json.encodeToString(QueuedDelivery.serializer(), delivery)
-        FileOutputStream(tempFile).use { output ->
-            output.write(payload.toByteArray(Charsets.UTF_8))
-            output.fd.sync()
-        }
-        check(tempFile.renameTo(outboxFile)) {
-            tempFile.delete()
-            "Failed to promote outbox temp file: ${outboxFile.name}"
-        }
-    }
-
-    private fun outboxFileFor(delivery: QueuedDelivery): File {
-        val fileName =
-            buildString {
-                append(delivery.sourceLogId.toString().padStart(20, '0'))
-                append(FILE_NAME_SEPARATOR)
-                append(delivery.route.replace(FILE_NAME_SANITIZE_REGEX, "_"))
-                append(FILE_NAME_SEPARATOR)
-                append(delivery.messageId.replace(FILE_NAME_SANITIZE_REGEX, "_"))
-                append('.')
-                append(OUTBOX_FILE_EXTENSION)
-            }
-        return File(outboxDir, fileName)
-    }
-
     private fun buildQueuedDelivery(
         command: RoutingCommand,
         webhookUrl: String,
@@ -487,35 +403,6 @@ class H2cDispatcher : Closeable {
         HTTP1,
     }
 
-    @Serializable
-    private data class QueuedDelivery(
-        val sourceLogId: Long,
-        val url: String,
-        val text: String,
-        val room: String,
-        val sender: String,
-        val userId: String,
-        val threadId: String?,
-        val messageId: String,
-        val route: String,
-    )
-
-    private sealed interface DeliveryWorkItem {
-        data class Memory(
-            val delivery: QueuedDelivery,
-        ) : DeliveryWorkItem
-
-        data class Persisted(
-            val file: File,
-            val delivery: QueuedDelivery?,
-        ) : DeliveryWorkItem
-    }
-
-    private data class ResolvedDelivery(
-        val delivery: QueuedDelivery,
-        val persistedFile: File?,
-    )
-
     companion object {
         private const val QUEUE_POLL_TIMEOUT_MS = 1_000L
         private const val WORKER_RETRY_DELAY_MS = 1_000L
@@ -539,9 +426,6 @@ class H2cDispatcher : Closeable {
         private const val NONE = "<none>"
 
         private const val OUTBOX_DIR_PATH = "/data/local/tmp/iris-webhook-outbox"
-        private const val OUTBOX_FILE_EXTENSION = "json"
-        private const val FILE_NAME_SEPARATOR = "__"
-        private val FILE_NAME_SANITIZE_REGEX = Regex("[^A-Za-z0-9._-]")
 
         private const val CONNECT_TIMEOUT_MS = 10_000L
         private const val REQUEST_TIMEOUT_MS = 30_000L
@@ -557,4 +441,268 @@ private fun nextBackoffDelayMs(attempt: Int): Long {
     val boundedDelay = baseDelay.coerceAtMost(30_000L)
     val jitter = Random.nextLong(0, 500L + 1)
     return boundedDelay + jitter
+}
+
+@Serializable
+private data class QueuedDelivery(
+    val sourceLogId: Long,
+    val url: String,
+    val text: String,
+    val room: String,
+    val sender: String,
+    val userId: String,
+    val threadId: String?,
+    val messageId: String,
+    val route: String,
+)
+
+private sealed interface DurableHandle {
+    val key: String
+
+    data class Journal(
+        val messageId: String,
+    ) : DurableHandle {
+        override val key: String = "journal:$messageId"
+    }
+
+    data class LegacyFile(
+        val file: File,
+    ) : DurableHandle {
+        override val key: String = "legacy:${file.absolutePath}"
+    }
+}
+
+private data class StoredDelivery(
+    val handle: DurableHandle,
+    val delivery: QueuedDelivery,
+)
+
+@Serializable
+private data class JournalRecord(
+    val type: String,
+    val messageId: String,
+    val delivery: QueuedDelivery? = null,
+)
+
+private class DurableAdmissionStore(
+    private val outboxDir: File,
+    private val json: Json,
+) {
+    private val pendingJournalDeliveries = linkedMapOf<String, QueuedDelivery>()
+    private val journalFile = File(outboxDir, JOURNAL_FILE_NAME)
+    private var journalRecordCount = 0
+
+    init {
+        ensureOutboxDir()
+        loadJournal()
+    }
+
+    fun recoverPending(): List<StoredDelivery> =
+        synchronized(this) {
+            val recovered = ArrayList<StoredDelivery>()
+            val seenMessageIds = HashSet<String>()
+
+            recoverLegacyFiles().forEach { storedDelivery ->
+                if (seenMessageIds.add(storedDelivery.delivery.messageId)) {
+                    recovered.add(storedDelivery)
+                }
+            }
+
+            pendingJournalDeliveries.values.forEach { delivery ->
+                if (seenMessageIds.add(delivery.messageId)) {
+                    recovered.add(
+                        StoredDelivery(
+                            handle = DurableHandle.Journal(delivery.messageId),
+                            delivery = delivery,
+                        ),
+                    )
+                }
+            }
+
+            recovered
+        }
+
+    fun admit(delivery: QueuedDelivery): StoredDelivery =
+        synchronized(this) {
+            pendingJournalDeliveries[delivery.messageId]?.let { existing ->
+                StoredDelivery(DurableHandle.Journal(existing.messageId), existing)
+            } ?: run {
+                appendJournalRecord(
+                    JournalRecord(
+                        type = JOURNAL_OP_ADMIT,
+                        messageId = delivery.messageId,
+                        delivery = delivery,
+                    ),
+                    sync = true,
+                )
+                pendingJournalDeliveries[delivery.messageId] = delivery
+                StoredDelivery(DurableHandle.Journal(delivery.messageId), delivery)
+            }
+        }
+
+    fun complete(handle: DurableHandle): Boolean =
+        synchronized(this) {
+            when (handle) {
+                is DurableHandle.LegacyFile -> handle.file.delete()
+                is DurableHandle.Journal -> retireJournalAdmission(handle.messageId)
+            }
+        }
+
+    fun isRecoverable(handle: DurableHandle): Boolean =
+        synchronized(this) {
+            when (handle) {
+                is DurableHandle.LegacyFile -> handle.file.exists()
+                is DurableHandle.Journal -> pendingJournalDeliveries.containsKey(handle.messageId)
+            }
+        }
+
+    private fun retireJournalAdmission(messageId: String): Boolean {
+        val delivery = pendingJournalDeliveries[messageId] ?: return true
+        val completionRecord =
+            JournalRecord(
+                type = JOURNAL_OP_COMPLETE,
+                messageId = messageId,
+            )
+
+        return runCatching {
+            pendingJournalDeliveries.remove(messageId)
+            if (pendingJournalDeliveries.isEmpty() && journalFile.exists() && journalFile.delete()) {
+                journalRecordCount = 0
+                true
+            } else {
+                appendJournalRecord(completionRecord, sync = false)
+                compactJournalIfNeeded()
+                true
+            }
+        }.getOrElse { error ->
+            pendingJournalDeliveries[messageId] = delivery
+            IrisLogger.error(
+                "[H2cDispatcher] Failed to retire journal admission: " +
+                    "messageId=$messageId: ${error.message}",
+            )
+            false
+        }
+    }
+
+    private fun recoverLegacyFiles(): List<StoredDelivery> =
+        outboxDir
+            .listFiles { file -> file.isFile && file.extension == LEGACY_OUTBOX_FILE_EXTENSION }
+            ?.sortedBy { it.name }
+            .orEmpty()
+            .mapNotNull { file ->
+                runCatching {
+                    StoredDelivery(
+                        handle = DurableHandle.LegacyFile(file),
+                        delivery = json.decodeFromString(QueuedDelivery.serializer(), file.readText()),
+                    )
+                }.getOrElse { error ->
+                    IrisLogger.error("[H2cDispatcher] Invalid outbox file ${file.name}: ${error.message}")
+                    file.delete()
+                    null
+                }
+            }
+
+    private fun loadJournal() {
+        if (!journalFile.exists()) {
+            return
+        }
+
+        journalFile.forEachLine { line ->
+            if (line.isBlank()) {
+                return@forEachLine
+            }
+
+            val record =
+                runCatching {
+                    json.decodeFromString(JournalRecord.serializer(), line)
+                }.getOrElse { error ->
+                    IrisLogger.error("[H2cDispatcher] Invalid journal entry: ${error.message}")
+                    return@forEachLine
+                }
+
+            when (record.type) {
+                JOURNAL_OP_ADMIT -> {
+                    val delivery = record.delivery
+                    if (delivery == null) {
+                        IrisLogger.error("[H2cDispatcher] Journal admit entry missing delivery: ${record.messageId}")
+                        return@forEachLine
+                    }
+                    pendingJournalDeliveries[delivery.messageId] = delivery
+                    journalRecordCount++
+                }
+
+                JOURNAL_OP_COMPLETE -> {
+                    pendingJournalDeliveries.remove(record.messageId)
+                    journalRecordCount++
+                }
+                else -> IrisLogger.error("[H2cDispatcher] Unknown journal entry type: ${record.type}")
+            }
+        }
+    }
+
+    private fun appendJournalRecord(
+        record: JournalRecord,
+        sync: Boolean,
+    ) {
+        ensureOutboxDir()
+        val payload = json.encodeToString(JournalRecord.serializer(), record) + "\n"
+        FileOutputStream(journalFile, true).use { output ->
+            output.write(payload.toByteArray(Charsets.UTF_8))
+            if (sync) {
+                output.fd.sync()
+            }
+        }
+        journalRecordCount++
+    }
+
+    private fun ensureOutboxDir() {
+        check(outboxDir.mkdirs() || outboxDir.exists()) {
+            "Failed to create outbox directory: ${outboxDir.absolutePath}"
+        }
+    }
+
+    private fun compactJournalIfNeeded() {
+        if (journalRecordCount < JOURNAL_COMPACTION_RECORD_THRESHOLD) {
+            return
+        }
+        if (pendingJournalDeliveries.size * JOURNAL_COMPACTION_PENDING_RATIO_DENOMINATOR > journalRecordCount) {
+            return
+        }
+
+        val tempFile = File(outboxDir, "$JOURNAL_FILE_NAME.tmp")
+        runCatching {
+            FileOutputStream(tempFile, false).use { output ->
+                pendingJournalDeliveries.values.forEach { delivery ->
+                    val payload =
+                        json.encodeToString(
+                            JournalRecord.serializer(),
+                            JournalRecord(
+                                type = JOURNAL_OP_ADMIT,
+                                messageId = delivery.messageId,
+                                delivery = delivery,
+                            ),
+                        ) + "\n"
+                    output.write(payload.toByteArray(Charsets.UTF_8))
+                }
+                output.fd.sync()
+            }
+            check(tempFile.renameTo(journalFile)) {
+                tempFile.delete()
+                "Failed to promote compacted journal file"
+            }
+            journalRecordCount = pendingJournalDeliveries.size
+        }.onFailure { error ->
+            tempFile.delete()
+            IrisLogger.error("[H2cDispatcher] Journal compaction failed: ${error.message}")
+        }
+    }
+
+    companion object {
+        private const val JOURNAL_FILE_NAME = "queue.log"
+        private const val LEGACY_OUTBOX_FILE_EXTENSION = "json"
+        private const val JOURNAL_OP_ADMIT = "admit"
+        private const val JOURNAL_OP_COMPLETE = "complete"
+        private const val JOURNAL_COMPACTION_RECORD_THRESHOLD = 128
+        private const val JOURNAL_COMPACTION_PENDING_RATIO_DENOMINATOR = 2
+    }
 }
