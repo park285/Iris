@@ -263,7 +263,7 @@ class H2cDispatcher : Closeable {
             }
 
             try {
-                Thread.sleep(nextBackoffMs(attempt))
+                Thread.sleep(nextBackoffDelayMs(attempt))
             } catch (_: InterruptedException) {
                 Thread.currentThread().interrupt()
                 return DeliveryOutcome.RETRY_LATER
@@ -338,7 +338,7 @@ class H2cDispatcher : Closeable {
             return DeliveryOutcome.SUCCESS
         }
 
-        if (!shouldRetry(statusCode)) {
+        if (!shouldRetryStatus(statusCode)) {
             IrisLogger.error(
                 "[H2cDispatcher] Non-retriable status $statusCode for route=${delivery.route}, " +
                     "url=${delivery.url}, messageId=${delivery.messageId}, attempt=$attemptLabel",
@@ -351,16 +351,6 @@ class H2cDispatcher : Closeable {
                 "url=${delivery.url}, messageId=${delivery.messageId}, attempt=$attemptLabel",
         )
         return null
-    }
-
-    private fun shouldRetry(statusCode: Int): Boolean = statusCode == 408 || statusCode == 429 || statusCode >= 500
-
-    private fun nextBackoffMs(attempt: Int): Long {
-        val cappedAttempt = attempt.coerceAtMost(MAX_BACKOFF_SHIFT)
-        val baseDelay = INITIAL_BACKOFF_MS shl cappedAttempt
-        val boundedDelay = baseDelay.coerceAtMost(MAX_BACKOFF_MS)
-        val jitter = Random.nextLong(0, MAX_JITTER_MS + 1)
-        return boundedDelay + jitter
     }
 
     private fun ensureOutboxDir() {
@@ -497,11 +487,6 @@ class H2cDispatcher : Closeable {
         private const val KEEP_ALIVE_DURATION_MS = 30_000L
         private const val MAX_DELIVERY_ATTEMPTS = 6
 
-        private const val INITIAL_BACKOFF_MS = 1_000L
-        private const val MAX_BACKOFF_MS = 30_000L
-        private const val MAX_JITTER_MS = 500L
-        private const val MAX_BACKOFF_SHIFT = 5
-
         private const val ROUTE_HOLOLIVE = "hololive"
         private const val PREFIX_COMMENT = "//"
         private const val PREFIX_GENERIC = "!"
@@ -522,4 +507,14 @@ class H2cDispatcher : Closeable {
         private const val REQUEST_TIMEOUT_MS = 30_000L
         private const val SOCKET_TIMEOUT_MS = 30_000L
     }
+}
+
+private fun shouldRetryStatus(statusCode: Int): Boolean = statusCode == 408 || statusCode == 429 || statusCode >= 500
+
+private fun nextBackoffDelayMs(attempt: Int): Long {
+    val cappedAttempt = attempt.coerceAtMost(5)
+    val baseDelay = 1_000L shl cappedAttempt
+    val boundedDelay = baseDelay.coerceAtMost(30_000L)
+    val jitter = Random.nextLong(0, 500L + 1)
+    return boundedDelay + jitter
 }

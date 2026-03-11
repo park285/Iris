@@ -17,11 +17,15 @@ class ObserverHelper(
 
     private val chatInfoCache =
         object : LinkedHashMap<Pair<Long, Long>, Array<String?>>(64, 0.75f, true) {
-            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Pair<Long, Long>, Array<String?>>?): Boolean = size > 64
+            override fun removeEldestEntry(
+                eldest: MutableMap.MutableEntry<Pair<Long, Long>, Array<String?>>?,
+            ): Boolean = size > 64
         }
     private val recentCommandFingerprints =
         object : LinkedHashMap<CommandFingerprint, Long>(128, 0.75f, true) {
-            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<CommandFingerprint, Long>?): Boolean = size > MAX_COMMAND_FINGERPRINTS
+            override fun removeEldestEntry(
+                eldest: MutableMap.MutableEntry<CommandFingerprint, Long>?,
+            ): Boolean = size > MAX_COMMAND_FINGERPRINTS
         }
 
     init {

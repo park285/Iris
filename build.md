@@ -13,8 +13,8 @@
 1. ./gradlew build
 
 ## 실행
-1. `output/Iris-{buildType}.dex`를 장치로 옮깁니다.
+1. `output/Iris-{buildType}.apk`를 장치로 옮깁니다.
 2. 아래 명령어를 장치에서 실행합니다.
 ```shell
-CLASSPATH=/data/local/tmp/Iris.dex app_process / party.qwer.iris.Main
+CLASSPATH=/data/local/tmp/Iris.apk app_process / party.qwer.iris.Main
 ```

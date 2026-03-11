@@ -9,7 +9,7 @@ import org.json.JSONException
 import org.json.JSONObject
 
 class KakaoDB {
-    private lateinit var connection: SQLiteDatabase
+    private val connection: SQLiteDatabase
     private val dbLock = Any()
 
     init {
@@ -348,7 +348,7 @@ class KakaoDB {
             for (key in keysToDecrypt) {
                 if (row.containsKey(key)) {
                     try {
-                        val encryptedValue = row.getOrDefault(key, "") as? String
+                        val encryptedValue = row.getOrDefault(key, "")
                         if (encryptedValue != "{}" && encryptedValue != "[]") {
                             encryptedValue?.let {
                                 row[key] = KakaoDecrypt.decrypt(enc, it, botId)

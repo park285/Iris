@@ -35,10 +35,10 @@ class AndroidHiddenApi {
                         "startService",
                         IApplicationThread,
                         Intent::class.java,
-                        java.lang.String::class.java,
+                        String::class.java,
                         java.lang.Boolean.TYPE,
-                        java.lang.String::class.java,
-                        java.lang.String::class.java,
+                        String::class.java,
+                        String::class.java,
                         java.lang.Integer.TYPE,
                     )
 
@@ -65,9 +65,9 @@ class AndroidHiddenApi {
                         "startService",
                         IApplicationThread,
                         Intent::class.java,
-                        java.lang.String::class.java,
+                        String::class.java,
                         java.lang.Boolean.TYPE,
-                        java.lang.String::class.java,
+                        String::class.java,
                         java.lang.Integer.TYPE,
                     )
 
@@ -294,10 +294,7 @@ class AndroidHiddenApi {
         }
 
         private fun getService(name: String): IBinder {
-            val method =
-                Class
-                    .forName("android.os.ServiceManager")
-                    .getMethod("getService", String::class.java)
+            val method = Class.forName("android.os.ServiceManager").getMethod("getService", String::class.java)
 
             return method.invoke(null, name) as IBinder
         }

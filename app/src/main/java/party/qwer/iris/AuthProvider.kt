@@ -70,18 +70,10 @@ object AuthProvider {
         val prefsFile = File(prefsFilePath)
         val aotFile = File(aotFilePath)
 
-        if (!prefsFile.exists()) {
-            throw IllegalStateException("Preferences file not found: ${prefsFile.path}")
-        }
-        if (!prefsFile.canRead()) {
-            throw IllegalStateException("Preferences file cannot be read (check permissions): ${prefsFile.path}")
-        }
-        if (!aotFile.exists()) {
-            throw IllegalStateException("AOT file not found: ${aotFile.path}")
-        }
-        if (!aotFile.canRead()) {
-            throw IllegalStateException("AOT file cannot be read (check permissions): ${aotFile.path}")
-        }
+        check(prefsFile.exists()) { "Preferences file not found: ${prefsFile.path}" }
+        check(prefsFile.canRead()) { "Preferences file cannot be read (check permissions): ${prefsFile.path}" }
+        check(aotFile.exists()) { "AOT file not found: ${aotFile.path}" }
+        check(aotFile.canRead()) { "AOT file cannot be read (check permissions): ${aotFile.path}" }
 
         val prefsContent =
             try {
@@ -92,13 +84,12 @@ object AuthProvider {
 
         val regex = Regex("""<string name="d_id">\s*(.*?)\s*</string>""")
         val matchResult =
-            regex.find(prefsContent)
-                ?: throw IllegalStateException("Failed to find d_id pattern in preferences file content.")
+            checkNotNull(regex.find(prefsContent)) {
+                "Failed to find d_id pattern in preferences file content."
+            }
 
         val deviceId = matchResult.groupValues[1]
-        if (deviceId.isBlank()) {
-            throw IllegalStateException("Extracted d_id value is blank from preferences file.")
-        }
+        check(deviceId.isNotBlank()) { "Extracted d_id value is blank from preferences file." }
 
         val aot =
             try {
@@ -107,9 +98,7 @@ object AuthProvider {
                 throw IllegalStateException("Failed to read AOT file: ${e.message}", e)
             }
 
-        if (aot.isBlank()) {
-            throw IllegalStateException("AOT file content is empty or blank.")
-        }
+        check(aot.isNotBlank()) { "AOT file content is empty or blank." }
 
         return arrayOf(aot, deviceId)
     }
