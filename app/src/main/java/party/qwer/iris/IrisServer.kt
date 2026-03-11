@@ -17,15 +17,11 @@ import io.ktor.server.routing.routing
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import party.qwer.iris.model.AotResponse
 import party.qwer.iris.model.ApiResponse
 import party.qwer.iris.model.CommonErrorResponse
 import party.qwer.iris.model.ConfigRequest
 import party.qwer.iris.model.ConfigResponse
-import party.qwer.iris.model.DecryptRequest
-import party.qwer.iris.model.DecryptResponse
 import party.qwer.iris.model.QueryRequest
 import party.qwer.iris.model.QueryResponse
 import party.qwer.iris.model.ReplyRequest
@@ -150,20 +146,6 @@ class IrisServer(
                     }
                 }
 
-                get("/aot") {
-                    if (!requireBotToken(call)) {
-                        return@get
-                    }
-                    val aotToken = AuthProvider.getToken()
-
-                    call.respond(
-                        AotResponse(
-                            success = true,
-                            aot = Json.parseToJsonElement(aotToken.toString()).jsonObject,
-                        ),
-                    )
-                }
-
                 post("/reply") {
                     if (!requireBotToken(call)) {
                         return@post
@@ -235,21 +217,6 @@ class IrisServer(
                         )
                         throw ApiRequestException("query execution failed")
                     }
-                }
-
-                post("/decrypt") {
-                    if (!requireBotToken(call)) {
-                        return@post
-                    }
-                    val decryptRequest = call.receive<DecryptRequest>()
-                    val plaintext =
-                        KakaoDecrypt.decrypt(
-                            decryptRequest.enc,
-                            decryptRequest.b64_ciphertext,
-                            decryptRequest.user_id ?: Configurable.botId,
-                        )
-
-                    call.respond(DecryptResponse(plain_text = plaintext))
                 }
             }
         }.start(wait = true)

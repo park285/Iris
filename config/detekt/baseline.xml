@@ -7,9 +7,6 @@
     <ID>ConstructorParameterNaming:ConfigResponse.kt$ConfigResponse$val bot_name: String</ID>
     <ID>ConstructorParameterNaming:ConfigResponse.kt$ConfigResponse$val db_polling_rate: Long</ID>
     <ID>ConstructorParameterNaming:ConfigResponse.kt$ConfigResponse$val message_send_rate: Long</ID>
-    <ID>ConstructorParameterNaming:DecryptRequest.kt$DecryptRequest$val b64_ciphertext: String</ID>
-    <ID>ConstructorParameterNaming:DecryptRequest.kt$DecryptRequest$val user_id: Long?</ID>
-    <ID>ConstructorParameterNaming:DecryptResponse.kt$DecryptResponse$val plain_text: String</ID>
     <ID>CyclomaticComplexMethod:IrisServer.kt$IrisServer$fun startServer()</ID>
     <ID>FunctionParameterNaming:KakaoDecrypt.kt$KakaoDecrypt.Companion$b64_ciphertext: String</ID>
     <ID>FunctionParameterNaming:KakaoDecrypt.kt$KakaoDecrypt.Companion$user_id: Long</ID>
@@ -19,7 +16,6 @@
     <ID>LongMethod:IrisServer.kt$IrisServer$fun startServer()</ID>
     <ID>LongMethod:KakaoDecrypt.kt$KakaoDecrypt.Companion$@Throws(Exception::class) fun decrypt( encType: Int, b64_ciphertext: String, user_id: Long, ): String</ID>
     <ID>LongMethod:KakaoDecrypt.kt$KakaoDecrypt.Companion$private fun incept(n: Int): String</ID>
-    <ID>MaxLineLength:AuthProvider.kt$AuthProvider$intArrayOf(67, 109, -115, -110, -23, 119, 33, 86, -99, -28, -102, 109, -73, 13, 43, -96, 109, -76, 91, -83, 73, -14, 107, -88, 6, 11, 74, 109, 84, -68, -80, 15)</ID>
     <ID>MaxLineLength:KakaoDB.kt$KakaoDB$"WITH info AS (SELECT ? AS user_id) " + "SELECT COALESCE(open_chat_member.nickname, friends.name) AS name, " + "COALESCE(open_chat_member.enc, friends.enc) AS enc " + "FROM info " + "LEFT JOIN db2.open_chat_member ON open_chat_member.user_id = info.user_id " + "LEFT JOIN db2.friends ON friends.id = info.user_id;"</ID>
     <ID>MaxLineLength:KakaoDB.kt$KakaoDB.Companion$arrayOf("nick_name", "name", "nickname", "profile_image_url", "full_profile_image_url", "original_profile_image_url", "status_message", "contact_name", "v", "board_v")</ID>
     <ID>MaxLineLength:KakaoDB.kt$KakaoDB.Companion$listOf("name", "nick_name", "nickname", "profile_image_url", "full_profile_image_url", "original_profile_image_url", "status_message", "contact_name", "board_v")</ID>
@@ -29,7 +25,6 @@
     <ID>NestedBlockDepth:KakaoDB.kt$KakaoDB$fun getChatInfo( chatId: Long, userId: Long, ): Array&lt;String?&gt;</ID>
     <ID>NestedBlockDepth:KakaoDB.kt$KakaoDB.Companion$fun decryptRow(row: Map&lt;String, String?&gt;): Map&lt;String, String?&gt;</ID>
     <ID>NestedBlockDepth:KakaoDB.kt$KakaoDB.Companion$private fun decryptRowValues( row: MutableMap&lt;String, String?&gt;, enc: Int, botId: Long, keysToDecrypt: Array&lt;String&gt;, ): MutableMap&lt;String, String?&gt;</ID>
-    <ID>ThrowsCount:AuthProvider.kt$AuthProvider$private fun readFiles(): Array&lt;String&gt;</ID>
     <ID>ThrowsCount:IrisServer.kt$IrisServer$fun startServer()</ID>
     <ID>UtilityClassWithPublicConstructor:AndroidHiddenApi.kt$AndroidHiddenApi</ID>
     <ID>UtilityClassWithPublicConstructor:Configurable.kt$Configurable</ID>
