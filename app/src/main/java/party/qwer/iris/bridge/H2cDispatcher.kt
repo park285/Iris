@@ -98,7 +98,7 @@ class H2cDispatcher : Closeable {
     private val queuedPaths =
         java.util.concurrent.ConcurrentHashMap
             .newKeySet<String>()
-    private val deliveryQueue = LinkedBlockingQueue<File>()
+    private val deliveryQueue = LinkedBlockingQueue<DeliveryWorkItem>()
     private val workerCounter = AtomicInteger(0)
     private val workerPool: ExecutorService =
         Executors.newFixedThreadPool(
@@ -111,13 +111,42 @@ class H2cDispatcher : Closeable {
         )
 
     init {
-        ensureOutboxDir()
-        recoverPendingDeliveries()
-        startWorkers()
+        if (!outboxDir.exists()) {
+            check(outboxDir.mkdirs() || outboxDir.exists()) {
+                "Failed to create outbox directory: ${outboxDir.absolutePath}"
+            }
+        }
+
+        val pendingFiles =
+            outboxDir
+                .listFiles { file -> file.isFile && file.extension == OUTBOX_FILE_EXTENSION }
+                ?.sortedBy { it.name }
+                .orEmpty()
+        pendingFiles.forEach { file ->
+            if (queuedPaths.add(file.absolutePath)) {
+                deliveryQueue.put(DeliveryWorkItem.Persisted(file, null))
+            }
+        }
+
+        if (!started) {
+            synchronized(this) {
+                if (!started) {
+                    started = true
+                    workerPool.submit {
+                        runWorkerLoop()
+                    }
+                }
+            }
+        }
     }
 
     fun route(command: RoutingCommand): RoutingResult {
-        val targetRoute = resolveRoute(command.text) ?: return RoutingResult.SKIPPED
+        val targetRoute =
+            when {
+                command.text.startsWith(PREFIX_COMMENT) -> null
+                command.text.startsWith(PREFIX_GENERIC) -> ROUTE_HOLOLIVE
+                else -> null
+            } ?: return RoutingResult.SKIPPED
         val webhookUrl = Configurable.defaultWebhookEndpoint.takeIf { it.isNotBlank() }
         if (webhookUrl.isNullOrBlank()) {
             IrisLogger.error("[H2cDispatcher] No webhook URL configured for route: $targetRoute")
@@ -125,21 +154,25 @@ class H2cDispatcher : Closeable {
         }
 
         val delivery = buildQueuedDelivery(command, webhookUrl, targetRoute)
-        val outboxFile = outboxFileFor(delivery)
-        if (!outboxFile.exists()) {
-            try {
+        try {
+            val outboxFile = outboxFileFor(delivery)
+            if (!outboxFile.exists()) {
                 persistDelivery(outboxFile, delivery)
-            } catch (e: Exception) {
-                IrisLogger.error(
-                    "[H2cDispatcher] Failed to persist delivery: route=$targetRoute, " +
-                        "messageId=${delivery.messageId}: ${e.message}",
-                )
-                return RoutingResult.RETRY_LATER
             }
+            if (queuedPaths.add(outboxFile.absolutePath)) {
+                deliveryQueue.put(DeliveryWorkItem.Persisted(outboxFile, delivery))
+            }
+            return RoutingResult.ACCEPTED
+        } catch (e: Exception) {
+            IrisLogger.error(
+                "[H2cDispatcher] Failed to persist delivery: route=$targetRoute, " +
+                    "messageId=${delivery.messageId}: ${e.message}",
+            )
+            return RoutingResult.RETRY_LATER
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            return RoutingResult.RETRY_LATER
         }
-
-        enqueueIfAbsent(outboxFile)
-        return RoutingResult.ACCEPTED
     }
 
     override fun close() {
@@ -156,29 +189,12 @@ class H2cDispatcher : Closeable {
         http1Client.close()
     }
 
-    private fun startWorkers() {
-        if (started) {
-            return
-        }
-
-        synchronized(this) {
-            if (started) {
-                return
-            }
-
-            started = true
-            workerPool.submit {
-                runWorkerLoop()
-            }
-        }
-    }
-
     private fun runWorkerLoop() {
         while (started || deliveryQueue.isNotEmpty()) {
             try {
-                val file = deliveryQueue.poll(QUEUE_POLL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                if (file != null) {
-                    handleQueuedFile(file)
+                val item = deliveryQueue.poll(QUEUE_POLL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                if (item != null) {
+                    handleQueuedItem(item)
                 }
             } catch (_: InterruptedException) {
                 Thread.currentThread().interrupt()
@@ -196,57 +212,108 @@ class H2cDispatcher : Closeable {
     }
 
     @Throws(InterruptedException::class)
-    private fun handleQueuedFile(file: File) {
+    private fun handleQueuedItem(item: DeliveryWorkItem) {
+        val resolved = resolveQueuedDelivery(item) ?: return
+
         val outcome =
             try {
-                deliverFile(file)
+                dispatchWithRetry(resolved.delivery)
             } finally {
-                queuedPaths.remove(file.absolutePath)
+                if (resolved.persistedFile != null) {
+                    queuedPaths.remove(resolved.persistedFile.absolutePath)
+                }
             }
 
-        if (outcome == DeliveryOutcome.RETRY_LATER && (started || file.exists())) {
+        handleDeliveryOutcome(resolved, outcome)
+    }
+
+    private fun resolveQueuedDelivery(item: DeliveryWorkItem): ResolvedDelivery? =
+        when (item) {
+            is DeliveryWorkItem.Memory -> ResolvedDelivery(item.delivery, null)
+            is DeliveryWorkItem.Persisted ->
+                item.delivery?.let { delivery ->
+                    ResolvedDelivery(delivery, item.file)
+                } ?: runCatching {
+                    json.decodeFromString(QueuedDelivery.serializer(), item.file.readText())
+                }.map { delivery ->
+                    ResolvedDelivery(delivery, item.file)
+                }.getOrElse { error ->
+                    IrisLogger.error("[H2cDispatcher] Invalid outbox file ${item.file.name}: ${error.message}")
+                    item.file.delete()
+                    null
+                }
+        }
+
+    @Throws(InterruptedException::class)
+    private fun handleDeliveryOutcome(
+        resolved: ResolvedDelivery,
+        outcome: DeliveryOutcome,
+    ) {
+        when (outcome) {
+            DeliveryOutcome.SUCCESS -> handleSuccessfulDelivery(resolved)
+            DeliveryOutcome.DROP -> handleDroppedDelivery(resolved)
+            DeliveryOutcome.RETRY_LATER -> handleRetryLaterDelivery(resolved)
+        }
+    }
+
+    private fun handleSuccessfulDelivery(resolved: ResolvedDelivery) {
+        if (resolved.persistedFile != null && !resolved.persistedFile.delete()) {
+            IrisLogger.error(
+                "[H2cDispatcher] Delivered but failed to delete outbox file: ${resolved.persistedFile.name}",
+            )
+        }
+        IrisLogger.debug(
+            "[H2cDispatcher] Delivery completed: route=${resolved.delivery.route}, " +
+                "messageId=${resolved.delivery.messageId}",
+        )
+    }
+
+    private fun handleDroppedDelivery(resolved: ResolvedDelivery) {
+        if (resolved.persistedFile != null && !resolved.persistedFile.delete()) {
+            IrisLogger.error(
+                "[H2cDispatcher] Dropped but failed to delete outbox file: ${resolved.persistedFile.name}",
+            )
+        }
+        IrisLogger.error(
+            "[H2cDispatcher] Delivery dropped: route=${resolved.delivery.route}, " +
+                "messageId=${resolved.delivery.messageId}",
+        )
+    }
+
+    @Throws(InterruptedException::class)
+    private fun handleRetryLaterDelivery(resolved: ResolvedDelivery) {
+        IrisLogger.error(
+            "[H2cDispatcher] Delivery deferred for retry: route=${resolved.delivery.route}, " +
+                "messageId=${resolved.delivery.messageId}",
+        )
+
+        val retryFile = retryFileFor(resolved)
+        if (started || retryFile?.exists() == true) {
             Thread.sleep(RETRY_LATER_REQUEUE_DELAY_MS)
-            enqueueIfAbsent(file)
+            if (retryFile != null) {
+                if (queuedPaths.add(retryFile.absolutePath)) {
+                    deliveryQueue.put(DeliveryWorkItem.Persisted(retryFile, null))
+                }
+            } else {
+                deliveryQueue.put(DeliveryWorkItem.Memory(resolved.delivery))
+            }
         }
     }
 
-    private fun deliverFile(file: File): DeliveryOutcome {
-        val delivery =
-            runCatching {
-                json.decodeFromString(QueuedDelivery.serializer(), file.readText())
-            }.getOrElse { error ->
-                IrisLogger.error("[H2cDispatcher] Invalid outbox file ${file.name}: ${error.message}")
-                file.delete()
-                return DeliveryOutcome.DROP
+    private fun retryFileFor(resolved: ResolvedDelivery): File? =
+        resolved.persistedFile ?: runCatching {
+            val outboxFile = outboxFileFor(resolved.delivery)
+            if (!outboxFile.exists()) {
+                persistDelivery(outboxFile, resolved.delivery)
             }
-
-        return when (dispatchWithRetry(delivery)) {
-            DeliveryOutcome.SUCCESS -> {
-                if (!file.delete()) {
-                    IrisLogger.error("[H2cDispatcher] Delivered but failed to delete outbox file: ${file.name}")
-                }
-                IrisLogger.debug(
-                    "[H2cDispatcher] Delivery completed: route=${delivery.route}, messageId=${delivery.messageId}",
-                )
-                DeliveryOutcome.SUCCESS
-            }
-            DeliveryOutcome.DROP -> {
-                if (!file.delete()) {
-                    IrisLogger.error("[H2cDispatcher] Dropped but failed to delete outbox file: ${file.name}")
-                }
-                IrisLogger.error(
-                    "[H2cDispatcher] Delivery dropped: route=${delivery.route}, messageId=${delivery.messageId}",
-                )
-                DeliveryOutcome.DROP
-            }
-            DeliveryOutcome.RETRY_LATER -> {
-                IrisLogger.error(
-                    "[H2cDispatcher] Delivery deferred for retry: route=${delivery.route}, messageId=${delivery.messageId}",
-                )
-                DeliveryOutcome.RETRY_LATER
-            }
+            outboxFile
+        }.getOrElse { error ->
+            IrisLogger.error(
+                "[H2cDispatcher] Failed to persist retry delivery: route=${resolved.delivery.route}, " +
+                    "messageId=${resolved.delivery.messageId}: ${error.message}",
+            )
+            null
         }
-    }
 
     private fun dispatchWithRetry(delivery: QueuedDelivery): DeliveryOutcome {
         val body = buildRequestBody(delivery)
@@ -353,34 +420,6 @@ class H2cDispatcher : Closeable {
         return null
     }
 
-    private fun ensureOutboxDir() {
-        if (outboxDir.exists()) {
-            return
-        }
-        check(outboxDir.mkdirs() || outboxDir.exists()) {
-            "Failed to create outbox directory: ${outboxDir.absolutePath}"
-        }
-    }
-
-    private fun recoverPendingDeliveries() {
-        val pendingFiles =
-            outboxDir
-                .listFiles { file -> file.isFile && file.extension == OUTBOX_FILE_EXTENSION }
-                ?.sortedBy { it.name }
-                .orEmpty()
-
-        pendingFiles.forEach { file ->
-            enqueueIfAbsent(file)
-        }
-    }
-
-    private fun enqueueIfAbsent(file: File) {
-        if (!queuedPaths.add(file.absolutePath)) {
-            return
-        }
-        deliveryQueue.put(file)
-    }
-
     private fun persistDelivery(
         outboxFile: File,
         delivery: QueuedDelivery,
@@ -410,13 +449,6 @@ class H2cDispatcher : Closeable {
             }
         return File(outboxDir, fileName)
     }
-
-    private fun resolveRoute(message: String): String? =
-        when {
-            message.startsWith(PREFIX_COMMENT) -> null
-            message.startsWith(PREFIX_GENERIC) -> ROUTE_HOLOLIVE
-            else -> null
-        }
 
     private fun buildQueuedDelivery(
         command: RoutingCommand,
@@ -474,6 +506,22 @@ class H2cDispatcher : Closeable {
         val threadId: String?,
         val messageId: String,
         val route: String,
+    )
+
+    private sealed interface DeliveryWorkItem {
+        data class Memory(
+            val delivery: QueuedDelivery,
+        ) : DeliveryWorkItem
+
+        data class Persisted(
+            val file: File,
+            val delivery: QueuedDelivery?,
+        ) : DeliveryWorkItem
+    }
+
+    private data class ResolvedDelivery(
+        val delivery: QueuedDelivery,
+        val persistedFile: File?,
     )
 
     companion object {
