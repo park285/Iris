@@ -1,7 +1,9 @@
 package party.qwer.iris
 
 object IrisLogger {
-    enum class Level(val priority: Int) {
+    enum class Level(
+        val priority: Int,
+    ) {
         ERROR(3),
         INFO(2),
         DEBUG(1),
@@ -22,6 +24,16 @@ object IrisLogger {
     fun error(message: String) {
         if (currentLevel.priority <= Level.ERROR.priority) {
             System.err.println(message)
+        }
+    }
+
+    fun error(
+        message: String,
+        throwable: Throwable,
+    ) {
+        if (currentLevel.priority <= Level.ERROR.priority) {
+            System.err.println(message)
+            System.err.println(throwable.stackTraceToString())
         }
     }
 

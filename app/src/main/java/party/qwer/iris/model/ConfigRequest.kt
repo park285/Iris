@@ -7,7 +7,6 @@ import party.qwer.iris.util.IntAsStringSerializer
 @Serializable
 data class ConfigRequest(
     val endpoint: String? = null,
-    val botname: String? = null,
     @Serializable(with = LongAsStringSerializer::class)
     val rate: Long? = null,
     @Serializable(with = IntAsStringSerializer::class)

@@ -108,33 +108,16 @@ class Configurable {
                 IrisLogger.debug("Bot port updated to: $botSocketPort")
             }
 
-        val webhooks: Map<String, String>
-            get() {
-                val configured = configValues.webhooks.filterValues { it.isNotBlank() }
-                if (configured.isNotEmpty()) {
-                    return configured
-                }
-
-                val envFallback = mutableMapOf<String, String>()
-                System.getenv("IRIS_WEBHOOK_HOLOLIVE")?.takeIf { it.isNotBlank() }?.let { envFallback["hololive"] = it }
-                System.getenv("IRIS_WEBHOOK_TWENTYQ")?.takeIf { it.isNotBlank() }?.let { envFallback["twentyq"] = it }
-                System.getenv("IRIS_WEBHOOK_TURTLE_SOUP")?.takeIf { it.isNotBlank() }?.let { envFallback["turtle-soup"] = it }
-                return envFallback
-            }
-
         var defaultWebhookEndpoint: String
-            get() = webhooks[DEFAULT_WEBHOOK_ROUTE].orEmpty()
+            get() = configValues.webhooks[DEFAULT_WEBHOOK_ROUTE].orEmpty()
             set(value) {
                 val normalized = value.trim()
-                val updatedWebhooks =
-                    configValues.webhooks.toMutableMap().apply {
-                        if (normalized.isBlank()) {
-                            remove(DEFAULT_WEBHOOK_ROUTE)
-                        } else {
-                            put(DEFAULT_WEBHOOK_ROUTE, normalized)
-                        }
+                configValues.webhooks =
+                    if (normalized.isBlank()) {
+                        emptyMap()
+                    } else {
+                        mapOf(DEFAULT_WEBHOOK_ROUTE to normalized)
                     }
-                configValues.webhooks = updatedWebhooks.toMap()
                 markDirty()
                 IrisLogger.debug("Default webhook endpoint updated for route '$DEFAULT_WEBHOOK_ROUTE'")
             }
@@ -160,42 +143,6 @@ class Configurable {
                 markDirty()
                 IrisLogger.debug("MessageSendRate updated to: $messageSendRate")
                 Replier.restartMessageSender()
-            }
-
-        var messageMaxChars: Int
-            get() = configValues.messageMaxChars
-            set(value) {
-                configValues.messageMaxChars = value
-                markDirty()
-                IrisLogger.debug("MessageMaxChars updated to: $messageMaxChars")
-            }
-
-        var relayUserId: String
-            get() = configValues.relayUserId
-            set(value) {
-                configValues.relayUserId = value
-                markDirty()
-            }
-
-        var relayUserEmail: String
-            get() = configValues.relayUserEmail
-            set(value) {
-                configValues.relayUserEmail = value
-                markDirty()
-            }
-
-        var relaySessionId: String
-            get() = configValues.relaySessionId
-            set(value) {
-                configValues.relaySessionId = value
-                markDirty()
-            }
-
-        var relaySecret: String
-            get() = configValues.relaySecret
-            set(value) {
-                configValues.relaySecret = value
-                markDirty()
             }
     }
 }

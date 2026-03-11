@@ -12,9 +12,6 @@
 ### cmdline에서 빌드
 1. ./gradlew build
 
-### cmdline에서 빌드 (윈도우)
-1. .\gradlew.bat build
-
 ## 실행
 1. `output/Iris-{buildType}.dex`를 장치로 옮깁니다.
 2. 아래 명령어를 장치에서 실행합니다.

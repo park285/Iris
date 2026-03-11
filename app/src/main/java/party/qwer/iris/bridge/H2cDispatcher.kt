@@ -34,7 +34,25 @@ class H2cDispatcher : Closeable {
             encodeDefaults = true
         }
 
-    private val client =
+    private val webhookTransport: WebhookTransport =
+        run {
+            val raw =
+                System
+                    .getenv("IRIS_WEBHOOK_TRANSPORT")
+                    ?.trim()
+                    ?.lowercase()
+                    .orEmpty()
+            when (raw) {
+                "http1", "http1_1", "http", "https" -> WebhookTransport.HTTP1
+                "", "h2c" -> WebhookTransport.H2C
+                else -> WebhookTransport.H2C
+            }
+        }
+
+    private val h2cClient: HttpClient = createClient(listOf(Protocol.H2_PRIOR_KNOWLEDGE))
+    private val http1Client: HttpClient = createClient(listOf(Protocol.HTTP_1_1))
+
+    private fun createClient(okhttpProtocols: List<Protocol>): HttpClient =
         HttpClient(OkHttp) {
             expectSuccess = false
             install(HttpTimeout) {
@@ -44,7 +62,7 @@ class H2cDispatcher : Closeable {
             }
             engine {
                 config {
-                    protocols(listOf(Protocol.H2_PRIOR_KNOWLEDGE))
+                    protocols(okhttpProtocols)
                     retryOnConnectionFailure(true)
                     dispatcher(
                         Dispatcher().apply {
@@ -63,20 +81,28 @@ class H2cDispatcher : Closeable {
             }
         }
 
+    private fun clientFor(webhookUrl: String): HttpClient {
+        if (webhookUrl.startsWith("https://")) {
+            return http1Client
+        }
+
+        return when (webhookTransport) {
+            WebhookTransport.H2C -> h2cClient
+            WebhookTransport.HTTP1 -> http1Client
+        }
+    }
+
     @Volatile
     private var started = false
     private val outboxDir = File(OUTBOX_DIR_PATH)
-    private val queuedPaths = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
-    private val routeQueues =
-        mapOf(
-            ROUTE_HOLOLIVE to LinkedBlockingQueue<File>(),
-            ROUTE_TWENTYQ to LinkedBlockingQueue<File>(),
-            ROUTE_TURTLE_SOUP to LinkedBlockingQueue<File>(),
-        )
+    private val queuedPaths =
+        java.util.concurrent.ConcurrentHashMap
+            .newKeySet<String>()
+    private val deliveryQueue = LinkedBlockingQueue<File>()
     private val workerCounter = AtomicInteger(0)
     private val workerPool: ExecutorService =
         Executors.newFixedThreadPool(
-            routeQueues.size,
+            1,
             ThreadFactory { runnable ->
                 Thread(runnable, "Iris-H2cDispatcher-${workerCounter.incrementAndGet()}").apply {
                     isDaemon = true
@@ -92,9 +118,9 @@ class H2cDispatcher : Closeable {
 
     fun route(command: RoutingCommand): RoutingResult {
         val targetRoute = resolveRoute(command.text) ?: return RoutingResult.SKIPPED
-        val webhookUrl = Configurable.webhooks[targetRoute]
+        val webhookUrl = Configurable.defaultWebhookEndpoint.takeIf { it.isNotBlank() }
         if (webhookUrl.isNullOrBlank()) {
-            IrisLogger.error("[H2cDispatcher] No webhook URL for route: $targetRoute")
+            IrisLogger.error("[H2cDispatcher] No webhook URL configured for route: $targetRoute")
             return RoutingResult.SKIPPED
         }
 
@@ -112,7 +138,7 @@ class H2cDispatcher : Closeable {
             }
         }
 
-        enqueueIfAbsent(outboxFile, targetRoute)
+        enqueueIfAbsent(outboxFile)
         return RoutingResult.ACCEPTED
     }
 
@@ -126,7 +152,8 @@ class H2cDispatcher : Closeable {
                 )
             }
         }
-        client.close()
+        h2cClient.close()
+        http1Client.close()
     }
 
     private fun startWorkers() {
@@ -140,29 +167,24 @@ class H2cDispatcher : Closeable {
             }
 
             started = true
-            routeQueues.forEach { (route, queue) ->
-                workerPool.submit {
-                    runWorkerLoop(route, queue)
-                }
+            workerPool.submit {
+                runWorkerLoop()
             }
         }
     }
 
-    private fun runWorkerLoop(
-        route: String,
-        queue: LinkedBlockingQueue<File>,
-    ) {
-        while (started || queue.isNotEmpty()) {
+    private fun runWorkerLoop() {
+        while (started || deliveryQueue.isNotEmpty()) {
             try {
-                val file = queue.poll(QUEUE_POLL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                val file = deliveryQueue.poll(QUEUE_POLL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
                 if (file != null) {
-                    handleQueuedFile(route, file)
+                    handleQueuedFile(file)
                 }
             } catch (_: InterruptedException) {
                 Thread.currentThread().interrupt()
                 return
             } catch (e: Exception) {
-                IrisLogger.error("[H2cDispatcher] Worker loop error for route=$route: ${e.message}")
+                IrisLogger.error("[H2cDispatcher] Worker loop error: ${e.message}")
                 try {
                     Thread.sleep(WORKER_RETRY_DELAY_MS)
                 } catch (_: InterruptedException) {
@@ -174,27 +196,21 @@ class H2cDispatcher : Closeable {
     }
 
     @Throws(InterruptedException::class)
-    private fun handleQueuedFile(
-        route: String,
-        file: File,
-    ) {
+    private fun handleQueuedFile(file: File) {
         val outcome =
             try {
-                deliverFile(route, file)
+                deliverFile(file)
             } finally {
                 queuedPaths.remove(file.absolutePath)
             }
 
         if (outcome == DeliveryOutcome.RETRY_LATER && (started || file.exists())) {
             Thread.sleep(RETRY_LATER_REQUEUE_DELAY_MS)
-            enqueueIfAbsent(file, route)
+            enqueueIfAbsent(file)
         }
     }
 
-    private fun deliverFile(
-        route: String,
-        file: File,
-    ): DeliveryOutcome {
+    private fun deliverFile(file: File): DeliveryOutcome {
         val delivery =
             runCatching {
                 json.decodeFromString(QueuedDelivery.serializer(), file.readText())
@@ -210,7 +226,7 @@ class H2cDispatcher : Closeable {
                     IrisLogger.error("[H2cDispatcher] Delivered but failed to delete outbox file: ${file.name}")
                 }
                 IrisLogger.debug(
-                    "[H2cDispatcher] Delivery completed: route=$route, messageId=${delivery.messageId}",
+                    "[H2cDispatcher] Delivery completed: route=${delivery.route}, messageId=${delivery.messageId}",
                 )
                 DeliveryOutcome.SUCCESS
             }
@@ -219,13 +235,13 @@ class H2cDispatcher : Closeable {
                     IrisLogger.error("[H2cDispatcher] Dropped but failed to delete outbox file: ${file.name}")
                 }
                 IrisLogger.error(
-                    "[H2cDispatcher] Delivery dropped: route=$route, messageId=${delivery.messageId}",
+                    "[H2cDispatcher] Delivery dropped: route=${delivery.route}, messageId=${delivery.messageId}",
                 )
                 DeliveryOutcome.DROP
             }
             DeliveryOutcome.RETRY_LATER -> {
                 IrisLogger.error(
-                    "[H2cDispatcher] Delivery deferred for retry: route=$route, messageId=${delivery.messageId}",
+                    "[H2cDispatcher] Delivery deferred for retry: route=${delivery.route}, messageId=${delivery.messageId}",
                 )
                 DeliveryOutcome.RETRY_LATER
             }
@@ -262,6 +278,9 @@ class H2cDispatcher : Closeable {
 
     private fun buildRequestBody(delivery: QueuedDelivery): String =
         buildJsonObject {
+            put("route", delivery.route)
+            put("messageId", delivery.messageId)
+            put("sourceLogId", delivery.sourceLogId)
             put("text", delivery.text)
             put("room", delivery.room)
             put("sender", delivery.sender)
@@ -280,14 +299,16 @@ class H2cDispatcher : Closeable {
                     "messageId=${delivery.messageId}, attempt=$attemptLabel",
             )
             runBlocking {
-                client.preparePost(delivery.url) {
-                    header(HEADER_CONTENT_TYPE, APPLICATION_JSON)
-                    setBody(body)
-                    header(HEADER_IRIS_TOKEN, Configurable.webhookToken)
-                    header(HEADER_IRIS_MESSAGE_ID, delivery.messageId)
-                }.execute { response ->
-                    classifyResponse(delivery, attemptLabel, response.status.value)
-                }
+                clientFor(delivery.url)
+                    .preparePost(delivery.url) {
+                        header(HEADER_CONTENT_TYPE, APPLICATION_JSON)
+                        setBody(body)
+                        header(HEADER_IRIS_TOKEN, Configurable.webhookToken)
+                        header(HEADER_IRIS_MESSAGE_ID, delivery.messageId)
+                        header(HEADER_IRIS_ROUTE, delivery.route)
+                    }.execute { response ->
+                        classifyResponse(delivery, attemptLabel, response.status.value)
+                    }
             }
         } catch (e: Exception) {
             IrisLogger.error(
@@ -353,33 +374,21 @@ class H2cDispatcher : Closeable {
 
     private fun recoverPendingDeliveries() {
         val pendingFiles =
-            outboxDir.listFiles { file -> file.isFile && file.extension == OUTBOX_FILE_EXTENSION }
+            outboxDir
+                .listFiles { file -> file.isFile && file.extension == OUTBOX_FILE_EXTENSION }
                 ?.sortedBy { it.name }
                 .orEmpty()
 
         pendingFiles.forEach { file ->
-            val baseName = file.name.removeSuffix(".$OUTBOX_FILE_EXTENSION")
-            val parts = baseName.split(FILE_NAME_SEPARATOR, limit = 3)
-            if (parts.size == 3) {
-                enqueueIfAbsent(file, parts[1])
-            }
+            enqueueIfAbsent(file)
         }
     }
 
-    private fun enqueueIfAbsent(
-        file: File,
-        route: String,
-    ) {
-        val queue = routeQueues[route]
-        if (queue == null) {
-            IrisLogger.error("[H2cDispatcher] Unknown route queue for file=${file.name}, route=$route")
-            return
-        }
-
+    private fun enqueueIfAbsent(file: File) {
         if (!queuedPaths.add(file.absolutePath)) {
             return
         }
-        queue.put(file)
+        deliveryQueue.put(file)
     }
 
     private fun persistDelivery(
@@ -415,9 +424,7 @@ class H2cDispatcher : Closeable {
     private fun resolveRoute(message: String): String? =
         when {
             message.startsWith(PREFIX_COMMENT) -> null
-            message.startsWith(PREFIX_TURTLE_SOUP) -> ROUTE_TURTLE_SOUP
             message.startsWith(PREFIX_GENERIC) -> ROUTE_HOLOLIVE
-            message.startsWith(PREFIX_20Q) -> ROUTE_TWENTYQ
             else -> null
         }
 
@@ -461,6 +468,11 @@ class H2cDispatcher : Closeable {
         RETRY_LATER,
     }
 
+    private enum class WebhookTransport {
+        H2C,
+        HTTP1,
+    }
+
     @Serializable
     private data class QueuedDelivery(
         val sourceLogId: Long,
@@ -490,16 +502,13 @@ class H2cDispatcher : Closeable {
         private const val MAX_JITTER_MS = 500L
         private const val MAX_BACKOFF_SHIFT = 5
 
-        private const val ROUTE_TURTLE_SOUP = "turtle-soup"
         private const val ROUTE_HOLOLIVE = "hololive"
-        private const val ROUTE_TWENTYQ = "twentyq"
         private const val PREFIX_COMMENT = "//"
-        private const val PREFIX_TURTLE_SOUP = "/스프"
         private const val PREFIX_GENERIC = "!"
-        private const val PREFIX_20Q = "/스자"
 
         private const val HEADER_IRIS_TOKEN = "X-Iris-Token"
         private const val HEADER_IRIS_MESSAGE_ID = "X-Iris-Message-Id"
+        private const val HEADER_IRIS_ROUTE = "X-Iris-Route"
         private const val HEADER_CONTENT_TYPE = "Content-Type"
         private const val APPLICATION_JSON = "application/json"
         private const val NONE = "<none>"

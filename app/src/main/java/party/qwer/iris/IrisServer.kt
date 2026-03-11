@@ -1,8 +1,8 @@
 package party.qwer.iris
 
-import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
+import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.install
 import io.ktor.server.cio.CIO
 import io.ktor.server.engine.embeddedServer
@@ -10,7 +10,6 @@ import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
-import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
@@ -25,7 +24,6 @@ import party.qwer.iris.model.ApiResponse
 import party.qwer.iris.model.CommonErrorResponse
 import party.qwer.iris.model.ConfigRequest
 import party.qwer.iris.model.ConfigResponse
-import party.qwer.iris.model.DashboardStatusResponse
 import party.qwer.iris.model.DecryptRequest
 import party.qwer.iris.model.DecryptResponse
 import party.qwer.iris.model.QueryRequest
@@ -35,8 +33,6 @@ import party.qwer.iris.model.ReplyType
 
 class IrisServer(
     private val kakaoDB: KakaoDB,
-    private val dbObserver: DBObserver,
-    private val observerHelper: ObserverHelper,
     private val notificationReferer: String,
 ) {
     private val serverJson =
@@ -72,8 +68,7 @@ class IrisServer(
                 }
 
                 exception<Throwable> { call, cause ->
-                    IrisLogger.error("[IrisServer] Unhandled error: ${cause.message}")
-                    cause.printStackTrace()
+                    IrisLogger.error("[IrisServer] Unhandled error: ${cause.message}", cause)
                     call.respond(
                         HttpStatusCode.InternalServerError,
                         CommonErrorResponse(
@@ -84,30 +79,11 @@ class IrisServer(
             }
 
             routing {
-                route("/dashboard") {
-                    get {
-                        val html = PageRenderer.renderDashboard()
-                        call.respondText(html, ContentType.Text.Html)
-                    }
-
-                    get("status") {
-                        call.respond(
-                            DashboardStatusResponse(
-                                isObserving = dbObserver.isPollingThreadAlive,
-                                statusMessage =
-                                    if (dbObserver.isPollingThreadAlive) {
-                                        "Observing database"
-                                    } else {
-                                        "Not observing database"
-                                    },
-                                lastLogs = observerHelper.lastChatLogs,
-                            ),
-                        )
-                    }
-                }
-
                 route("/config") {
                     get {
+                        if (!requireBotToken(call)) {
+                            return@get
+                        }
                         call.respond(
                             ConfigResponse(
                                 botName = Configurable.botName,
@@ -121,6 +97,9 @@ class IrisServer(
                     }
 
                     post("{name}") {
+                        if (!requireBotToken(call)) {
+                            return@post
+                        }
                         val name = call.parameters["name"]
                         val req = call.receive<ConfigRequest>()
 
@@ -131,14 +110,6 @@ class IrisServer(
                                     throw ApiRequestException("endpoint must start with http:// or https://")
                                 }
                                 Configurable.defaultWebhookEndpoint = value
-                            }
-
-                            "botname" -> {
-                                val value = req.botname
-                                if (value.isNullOrBlank()) {
-                                    throw ApiRequestException("missing or empty botname")
-                                }
-                                Configurable.botName = value
                             }
 
                             "dbrate" -> {
@@ -180,6 +151,9 @@ class IrisServer(
                 }
 
                 get("/aot") {
+                    if (!requireBotToken(call)) {
+                        return@get
+                    }
                     val aotToken = AuthProvider.getToken()
 
                     call.respond(
@@ -191,6 +165,10 @@ class IrisServer(
                 }
 
                 post("/reply") {
+                    if (!requireBotToken(call)) {
+                        return@post
+                    }
+
                     val replyRequest = call.receive<ReplyRequest>()
                     val roomId = replyRequest.room.toLongOrNull() ?: throw ApiRequestException("room must be a numeric string")
                     val threadId =
@@ -224,6 +202,9 @@ class IrisServer(
                 }
 
                 post("/query") {
+                    if (!requireBotToken(call)) {
+                        return@post
+                    }
                     val queryRequest = call.receive<QueryRequest>()
                     if (queryRequest.query.isBlank()) {
                         throw ApiRequestException("query must not be blank")
@@ -250,13 +231,16 @@ class IrisServer(
                         )
                     } catch (e: Exception) {
                         IrisLogger.error(
-                            "[IrisServer] Query execution failed: query=${queryRequest.query}, err=${e.message}",
+                            "[IrisServer] Query execution failed: ${e.message}",
                         )
-                        throw ApiRequestException("query execution failed: ${e.message}")
+                        throw ApiRequestException("query execution failed")
                     }
                 }
 
                 post("/decrypt") {
+                    if (!requireBotToken(call)) {
+                        return@post
+                    }
                     val decryptRequest = call.receive<DecryptRequest>()
                     val plaintext =
                         KakaoDecrypt.decrypt(
@@ -271,22 +255,31 @@ class IrisServer(
         }.start(wait = true)
     }
 
-    private fun extractTextPayload(replyRequest: ReplyRequest): String {
-        return runCatching { replyRequest.data.jsonPrimitive.content }
+    private suspend fun requireBotToken(call: ApplicationCall): Boolean {
+        val expectedToken = Configurable.botToken
+        if (expectedToken.isBlank()) {
+            return true
+        }
+        if (call.request.headers[HEADER_BOT_TOKEN] == expectedToken) {
+            return true
+        }
+
+        call.respond(HttpStatusCode.Unauthorized, CommonErrorResponse(message = "unauthorized"))
+        return false
+    }
+
+    private fun extractTextPayload(replyRequest: ReplyRequest): String =
+        runCatching { replyRequest.data.jsonPrimitive.content }
             .getOrElse { throw ApiRequestException("text replies require string data") }
-    }
 
-    private fun extractSingleImagePayload(replyRequest: ReplyRequest): String {
-        return extractTextPayload(replyRequest)
-    }
+    private fun extractSingleImagePayload(replyRequest: ReplyRequest): String = extractTextPayload(replyRequest)
 
-    private fun extractImagePayloads(replyRequest: ReplyRequest): List<String> {
-        return runCatching {
+    private fun extractImagePayloads(replyRequest: ReplyRequest): List<String> =
+        runCatching {
             replyRequest.data.jsonArray.map { element -> element.jsonPrimitive.content }
         }.getOrElse {
             throw ApiRequestException("image_multiple replies require a JSON array of base64 strings")
         }
-    }
 
     private class ApiRequestException(
         override val message: String,
@@ -295,5 +288,6 @@ class IrisServer(
 
     companion object {
         private const val MAX_QUERY_ROWS = 500
+        private const val HEADER_BOT_TOKEN = "X-Bot-Token"
     }
 }

@@ -6,7 +6,10 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.Volatile
 
-class ImageDeleter(private val imageDirPath: String, private val deletionInterval: Long) {
+class ImageDeleter(
+    private val imageDirPath: String,
+    private val deletionInterval: Long,
+) {
     @Volatile
     private var running = true
     private val scheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()

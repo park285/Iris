@@ -1,6 +1,5 @@
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.detekt)
     alias(libs.plugins.ktlint)
@@ -52,25 +51,23 @@ kotlin {
     jvmToolchain(21)
 }
 
-android.applicationVariants.all {
-    val variant = this
-    val outputPath = "${rootProject.rootDir.path}/output"
-
-    variant.assembleProvider.configure {
+private fun registerAssembleOutputCopyTask(variantName: String) {
+    val assembleTaskName = "assemble${variantName.replaceFirstChar { it.uppercase() }}"
+    tasks.matching { it.name == assembleTaskName }.configureEach {
         doLast {
             copy {
-                variant.outputs.forEach { output ->
-                    val file = output.outputFile
-
-                    from(file)
-                    into(outputPath)
-                    rename { fileName ->
-                        fileName.replace(file.name, "Iris-${output.name}.apk")
-                    }
-                }
+                from(layout.buildDirectory.dir("outputs/apk/$variantName"))
+                include("*.apk")
+                into("${rootProject.rootDir.path}/output")
+                rename { "Iris-$variantName.apk" }
             }
         }
     }
+}
+
+afterEvaluate {
+    registerAssembleOutputCopyTask("debug")
+    registerAssembleOutputCopyTask("release")
 }
 
 // Detekt 설정

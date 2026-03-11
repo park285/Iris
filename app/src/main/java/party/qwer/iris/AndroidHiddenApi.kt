@@ -87,11 +87,12 @@ class AndroidHiddenApi {
 
             val sdk = android.os.Build.VERSION.SDK_INT
             val methods =
-                IActivityManager.methods.map {
-                    it.toString().trim()
-                }.filter {
-                    it.contains("startService")
-                }.joinToString("\n")
+                IActivityManager.methods
+                    .map {
+                        it.toString().trim()
+                    }.filter {
+                        it.contains("startService")
+                    }.joinToString("\n")
 
             val errorMsg =
                 """
@@ -101,7 +102,7 @@ class AndroidHiddenApi {
                 """.trimIndent()
 
             IrisLogger.error(errorMsg)
-            throw Exception(errorMsg)
+            throw IllegalStateException(errorMsg)
         }
 
         private fun getStartActivityMethod(): (Intent) -> Unit {
@@ -198,11 +199,12 @@ class AndroidHiddenApi {
 
             val sdk = android.os.Build.VERSION.SDK_INT
             val methods =
-                IActivityManager.methods.map {
-                    it.toString().trim()
-                }.filter {
-                    it.contains("startActivity")
-                }.joinToString("\n")
+                IActivityManager.methods
+                    .map {
+                        it.toString().trim()
+                    }.filter {
+                        it.contains("startActivity")
+                    }.joinToString("\n")
 
             val errorMsg =
                 """
@@ -212,7 +214,7 @@ class AndroidHiddenApi {
                 """.trimIndent()
 
             IrisLogger.error(errorMsg)
-            throw Exception(errorMsg)
+            throw IllegalStateException(errorMsg)
         }
 
         private fun getBroadcastIntentMethod(): (Intent) -> Unit {
@@ -273,11 +275,12 @@ class AndroidHiddenApi {
 
             val sdk = android.os.Build.VERSION.SDK_INT
             val methods =
-                IActivityManager.methods.map {
-                    it.toString().trim()
-                }.filter {
-                    it.contains("broadcastIntent")
-                }.joinToString("\n")
+                IActivityManager.methods
+                    .map {
+                        it.toString().trim()
+                    }.filter {
+                        it.contains("broadcastIntent")
+                    }.joinToString("\n")
 
             val errorMsg =
                 """
@@ -287,12 +290,13 @@ class AndroidHiddenApi {
                 """.trimIndent()
 
             IrisLogger.error(errorMsg)
-            throw Exception(errorMsg)
+            throw IllegalStateException(errorMsg)
         }
 
         private fun getService(name: String): IBinder {
             val method =
-                Class.forName("android.os.ServiceManager")
+                Class
+                    .forName("android.os.ServiceManager")
                     .getMethod("getService", String::class.java)
 
             return method.invoke(null, name) as IBinder

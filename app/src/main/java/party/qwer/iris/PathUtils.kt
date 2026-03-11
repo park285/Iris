@@ -12,7 +12,7 @@ object PathUtils {
         when {
             File(mirrorPath).exists() -> mirrorPath.also { IrisLogger.debug("Using mirrorPath: $it") }
             File(defaultPath).exists() -> defaultPath.also { IrisLogger.debug("Using defaultPath: $it") }
-            else -> throw RuntimeException("KakaoTalk app path not found")
+            else -> throw IllegalStateException("KakaoTalk app path not found")
         }
     }
 

@@ -15,10 +15,5 @@ data class ConfigValues(
     var botToken: String = "",
     var dbPollingRate: Long = 100,
     var messageSendRate: Long = 50,
-    var messageMaxChars: Int = 100000,
     var botId: Long = 0L,
-    var relayUserId: String = "",
-    var relayUserEmail: String = "",
-    var relaySessionId: String = "",
-    var relaySecret: String = "",
 )

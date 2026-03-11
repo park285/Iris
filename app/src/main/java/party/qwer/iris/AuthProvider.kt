@@ -18,7 +18,7 @@ object AuthProvider {
         try {
             Cipher.getInstance("AES/CBC/PKCS5Padding")
         } catch (e: Exception) {
-            throw RuntimeException("Failed to get Cipher instance", e)
+            throw IllegalStateException("Failed to get Cipher instance", e)
         }
     }
 
@@ -34,7 +34,7 @@ object AuthProvider {
                         cipher.init(Cipher.DECRYPT_MODE, secretKey, IvParameterSpec(keys1.toByteArray()))
                         cipherInitialized = true
                     } catch (e: Exception) {
-                        throw RuntimeException("Failed to initialize Cipher", e)
+                        throw IllegalStateException("Failed to initialize Cipher", e)
                     }
                 }
             }
@@ -56,9 +56,9 @@ object AuthProvider {
             decryptedAotJson.put("d_id", deviceId)
             return decryptedAotJson
         } catch (e: JSONException) {
-            throw Exception("Failed to parse decrypted AOT string into JSON: ${e.message}", e)
+            throw IllegalStateException("Failed to parse decrypted AOT string into JSON: ${e.message}", e)
         } catch (e: Exception) {
-            throw Exception("Failed during AOT decryption or JSON processing: ${e.message}", e)
+            throw IllegalStateException("Failed during AOT decryption or JSON processing: ${e.message}", e)
         }
     }
 
@@ -71,50 +71,48 @@ object AuthProvider {
         val aotFile = File(aotFilePath)
 
         if (!prefsFile.exists()) {
-            throw Exception("Preferences file not found: ${prefsFile.path}")
+            throw IllegalStateException("Preferences file not found: ${prefsFile.path}")
         }
         if (!prefsFile.canRead()) {
-            throw Exception("Preferences file cannot be read (check permissions): ${prefsFile.path}")
+            throw IllegalStateException("Preferences file cannot be read (check permissions): ${prefsFile.path}")
         }
         if (!aotFile.exists()) {
-            throw Exception("AOT file not found: ${aotFile.path}")
+            throw IllegalStateException("AOT file not found: ${aotFile.path}")
         }
         if (!aotFile.canRead()) {
-            throw Exception("AOT file cannot be read (check permissions): ${aotFile.path}")
+            throw IllegalStateException("AOT file cannot be read (check permissions): ${aotFile.path}")
         }
 
         val prefsContent =
             try {
                 prefsFile.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
             } catch (e: Exception) {
-                throw Exception("Failed to read preferences file: ${e.message}", e)
+                throw IllegalStateException("Failed to read preferences file: ${e.message}", e)
             }
 
         val regex = Regex("""<string name="d_id">\s*(.*?)\s*</string>""")
         val matchResult =
             regex.find(prefsContent)
-                ?: throw Exception("Failed to find d_id pattern in preferences file content.")
+                ?: throw IllegalStateException("Failed to find d_id pattern in preferences file content.")
 
         val deviceId = matchResult.groupValues[1]
         if (deviceId.isBlank()) {
-            throw Exception("Extracted d_id value is blank from preferences file.")
+            throw IllegalStateException("Extracted d_id value is blank from preferences file.")
         }
 
         val aot =
             try {
                 aotFile.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
             } catch (e: Exception) {
-                throw Exception("Failed to read AOT file: ${e.message}", e)
+                throw IllegalStateException("Failed to read AOT file: ${e.message}", e)
             }
 
         if (aot.isBlank()) {
-            throw Exception("AOT file content is empty or blank.")
+            throw IllegalStateException("AOT file content is empty or blank.")
         }
 
         return arrayOf(aot, deviceId)
     }
 
-    private fun IntArray.toByteArray(): ByteArray {
-        return this.map { it.toByte() }.toByteArray()
-    }
+    private fun IntArray.toByteArray(): ByteArray = this.map { it.toByte() }.toByteArray()
 }

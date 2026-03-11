@@ -54,8 +54,7 @@ class Replier {
                                     delay(Configurable.messageSendRate)
                                 }
                             } catch (e: Exception) {
-                                IrisLogger.error("[Replier] Error sending message from channel: $e")
-                                e.printStackTrace()
+                                IrisLogger.error("[Replier] Error sending message from channel: ${e.message}", e)
                             }
                         }
                         IrisLogger.debug("[Replier] messageSenderJob terminated (channel closed)")
@@ -125,7 +124,8 @@ class Replier {
                 Intent().apply {
                     component =
                         ComponentName(
-                            "com.kakao.talk", "com.kakao.talk.notification.NotificationActionService",
+                            "com.kakao.talk",
+                            "com.kakao.talk.notification.NotificationActionService",
                         )
                     putExtra("noti_referer", referer)
                     putExtra("chat_id", chatId)
@@ -151,8 +151,7 @@ class Replier {
                 AndroidHiddenApi.startService(intent)
                 IrisLogger.debug("[Replier] AndroidHiddenApi.startService returned successfully")
             } catch (e: Exception) {
-                IrisLogger.error("[Replier] AndroidHiddenApi.startService failed: ${e.message}")
-                e.printStackTrace()
+                IrisLogger.error("[Replier] AndroidHiddenApi.startService failed: ${e.message}", e)
                 throw e
             }
         }
@@ -220,15 +219,13 @@ class Replier {
         private fun prepareImages(
             room: Long,
             base64ImageDataStrings: List<String>,
-        ): PreparedImages? {
-            return try {
+        ): PreparedImages? =
+            try {
                 prepareImagesInternal(room, base64ImageDataStrings)
             } catch (e: Exception) {
-                IrisLogger.error("Error preparing images for room=$room: ${e.message}")
-                e.printStackTrace()
+                IrisLogger.error("Error preparing images for room=$room: ${e.message}", e)
                 null
             }
-        }
 
         private fun prepareImagesInternal(
             room: Long,

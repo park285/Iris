@@ -17,15 +17,11 @@ class ObserverHelper(
 
     private val chatInfoCache =
         object : LinkedHashMap<Pair<Long, Long>, Array<String?>>(64, 0.75f, true) {
-            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Pair<Long, Long>, Array<String?>>?): Boolean {
-                return size > 64
-            }
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Pair<Long, Long>, Array<String?>>?): Boolean = size > 64
         }
     private val recentCommandFingerprints =
         object : LinkedHashMap<CommandFingerprint, Long>(128, 0.75f, true) {
-            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<CommandFingerprint, Long>?): Boolean {
-                return size > MAX_COMMAND_FINGERPRINTS
-            }
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<CommandFingerprint, Long>?): Boolean = size > MAX_COMMAND_FINGERPRINTS
         }
 
     init {
@@ -218,15 +214,16 @@ class ObserverHelper(
                 chatInfoCache.getOrPut(cacheKey) {
                     db.getChatInfo(chatId, userId)
                 }
-            chatInfo[1]?.trim()?.takeIf { it.isNotEmpty() } ?: userId.toString()
+            chatInfo[1]
+                ?.trim()
+                ?.takeUnless { it.isEmpty() || it.equals("Unknown", ignoreCase = true) }
+                ?: userId.toString()
         } catch (e: Exception) {
-            IrisLogger.debugLazy { "[ObserverHelper] getChatInfo failed: ${e.message}, using fallback" }
+            IrisLogger.debugLazy { "[ObserverHelper] getChatInfo failed: ${e.message}, using userId fallback" }
             userId.toString()
         }
 
-    private fun looksLikeCommand(message: String): Boolean {
-        return message.trimStart().let { it.startsWith("!") || it.startsWith("/") }
-    }
+    private fun looksLikeCommand(message: String): Boolean = message.trimStart().let { it.startsWith("!") || it.startsWith("/") }
 
     private fun shouldSkipOrigin(
         origin: String,

@@ -25,37 +25,37 @@ class KakaoDB {
             connection = openedConnection
             Configurable.botId = botUserId
         } catch (e: SQLiteException) {
-            IrisLogger.error("SQLiteException: ${e.message}")
-            IrisLogger.error("You don't have a permission to access KakaoTalk Database.")
-            System.exit(1)
+            IrisLogger.error("SQLiteException: ${e.message}", e)
+            throw IllegalStateException("You don't have a permission to access KakaoTalk Database.", e)
         }
     }
 
     val botUserId: Long
         get() =
             withPrimaryConnection { db ->
-                db.rawQuery(
-                    """
-                    SELECT user_id
-                    FROM chat_logs
-                    WHERE v LIKE '%"isMine":true%'
-                    ORDER BY _id DESC
-                    LIMIT 1
-                    """.trimIndent(),
-                    null,
-                ).use { cursor ->
-                    if (cursor.moveToFirst()) {
-                        val detectedBotUserId = cursor.getLong(0)
-                        IrisLogger.info("Bot user_id is detected: $detectedBotUserId")
-                        detectedBotUserId
-                    } else {
-                        IrisLogger.error(
-                            "Warning: Bot user_id not found in chat_logs with isMine:true. " +
-                                "Decryption might not work correctly.",
-                        )
-                        0L
+                db
+                    .rawQuery(
+                        """
+                        SELECT user_id
+                        FROM chat_logs
+                        WHERE v LIKE '%"isMine":true%'
+                        ORDER BY _id DESC
+                        LIMIT 1
+                        """.trimIndent(),
+                        null,
+                    ).use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val detectedBotUserId = cursor.getLong(0)
+                            IrisLogger.info("Bot user_id is detected: $detectedBotUserId")
+                            detectedBotUserId
+                        } else {
+                            IrisLogger.error(
+                                "Warning: Bot user_id not found in chat_logs with isMine:true. " +
+                                    "Decryption might not work correctly.",
+                            )
+                            0L
+                        }
                     }
-                }
             }
 
     fun getNameOfUserId(userId: Long): String? {
@@ -110,33 +110,35 @@ class KakaoDB {
             }
 
         withPrimaryConnection { db ->
-            db.rawQuery(
-                "SELECT private_meta FROM chat_rooms WHERE id = ?",
-                arrayOf(chatId.toString()),
-            ).use { cursor ->
-                if (cursor.moveToNext()) {
-                    val value = cursor.getString(0)
-                    if (!value.isNullOrEmpty()) {
-                        try {
-                            val meta = Json.decodeFromString<Map<String, JsonElement>>(value)
-                            val name = meta["name"]?.jsonPrimitive?.content
-                            if (!name.isNullOrBlank()) {
-                                return arrayOf(name, sender)
+            db
+                .rawQuery(
+                    "SELECT private_meta FROM chat_rooms WHERE id = ?",
+                    arrayOf(chatId.toString()),
+                ).use { cursor ->
+                    if (cursor.moveToNext()) {
+                        val value = cursor.getString(0)
+                        if (!value.isNullOrEmpty()) {
+                            try {
+                                val meta = Json.decodeFromString<Map<String, JsonElement>>(value)
+                                val name = meta["name"]?.jsonPrimitive?.content
+                                if (!name.isNullOrBlank()) {
+                                    return arrayOf(name, sender)
+                                }
+                            } catch (_: Exception) {
                             }
-                        } catch (_: Exception) {
                         }
                     }
                 }
-            }
 
-            db.rawQuery(
-                "SELECT name FROM db2.open_link WHERE id = (SELECT link_id FROM chat_rooms WHERE id = ?)",
-                arrayOf(chatId.toString()),
-            ).use { cursor ->
-                if (cursor.moveToNext()) {
-                    return arrayOf(cursor.getString(0), sender)
+            db
+                .rawQuery(
+                    "SELECT name FROM db2.open_link WHERE id = (SELECT link_id FROM chat_rooms WHERE id = ?)",
+                    arrayOf(chatId.toString()),
+                ).use { cursor ->
+                    if (cursor.moveToNext()) {
+                        return arrayOf(cursor.getString(0), sender)
+                    }
                 }
-            }
         }
 
         return arrayOf(sender, sender)
@@ -159,33 +161,34 @@ class KakaoDB {
     ): List<ChatLogEntry> {
         val effectiveLimit = limit.coerceIn(1, DEFAULT_POLL_BATCH_SIZE)
         return withPrimaryConnection { db ->
-            db.rawQuery(
-                """
-                SELECT _id, chat_id, user_id, message, attachment, type, v, created_at
-                FROM chat_logs
-                WHERE _id > ?
-                ORDER BY _id ASC
-                LIMIT $effectiveLimit
-                """.trimIndent(),
-                arrayOf(afterLogId.toString()),
-            ).use { cursor ->
-                val rows = ArrayList<ChatLogEntry>(effectiveLimit)
-                while (cursor.moveToNext()) {
-                    rows.add(
-                        ChatLogEntry(
-                            id = cursor.getLong(0),
-                            chatId = cursor.getLong(1),
-                            userId = cursor.getLong(2),
-                            message = cursor.getString(3).orEmpty(),
-                            attachment = cursor.getString(4),
-                            type = cursor.getString(5),
-                            metadata = cursor.getString(6).orEmpty(),
-                            createdAt = cursor.getString(7),
-                        ),
-                    )
+            db
+                .rawQuery(
+                    """
+                    SELECT _id, chat_id, user_id, message, attachment, type, v, created_at
+                    FROM chat_logs
+                    WHERE _id > ?
+                    ORDER BY _id ASC
+                    LIMIT $effectiveLimit
+                    """.trimIndent(),
+                    arrayOf(afterLogId.toString()),
+                ).use { cursor ->
+                    val rows = ArrayList<ChatLogEntry>(effectiveLimit)
+                    while (cursor.moveToNext()) {
+                        rows.add(
+                            ChatLogEntry(
+                                id = cursor.getLong(0),
+                                chatId = cursor.getLong(1),
+                                userId = cursor.getLong(2),
+                                message = cursor.getString(3).orEmpty(),
+                                attachment = cursor.getString(4),
+                                type = cursor.getString(5),
+                                metadata = cursor.getString(6).orEmpty(),
+                                createdAt = cursor.getString(7),
+                            ),
+                        )
+                    }
+                    rows
                 }
-                rows
-            }
         }
     }
 
@@ -215,12 +218,13 @@ class KakaoDB {
 
     private fun checkNewDb(): Boolean =
         withPrimaryConnection { db ->
-            db.rawQuery(
-                "SELECT name FROM db2.sqlite_master WHERE type='table' AND name='open_chat_member'",
-                null,
-            ).use { cursor ->
-                cursor.count > 0
-            }
+            db
+                .rawQuery(
+                    "SELECT name FROM db2.sqlite_master WHERE type='table' AND name='open_chat_member'",
+                    null,
+                ).use { cursor ->
+                    cursor.count > 0
+                }
         }
 
     private inline fun <T> withPrimaryConnection(block: (SQLiteDatabase) -> T): T =

@@ -53,8 +53,6 @@ class Main {
                     val irisServer =
                         IrisServer(
                             kakaoDb,
-                            dbObserver,
-                            observerHelper,
                             notificationReferer,
                         )
                     irisServer.startServer()
@@ -62,8 +60,7 @@ class Main {
                     // Server runs until terminated
                 }
             } catch (e: Exception) {
-                IrisLogger.error("Iris Error")
-                e.printStackTrace()
+                IrisLogger.error("Iris Error: ${e.message}", e)
             }
         }
 
