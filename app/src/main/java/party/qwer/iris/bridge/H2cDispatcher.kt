@@ -1,19 +1,16 @@
 package party.qwer.iris.bridge
 
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.okhttp.OkHttp
-import io.ktor.client.plugins.HttpTimeout
-import io.ktor.client.request.header
-import io.ktor.client.request.preparePost
-import io.ktor.client.request.setBody
-import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import okhttp3.ConnectionPool
 import okhttp3.Dispatcher
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
 import okhttp3.Protocol
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import party.qwer.iris.Configurable
 import party.qwer.iris.IrisLogger
 import java.io.Closeable
@@ -49,39 +46,31 @@ class H2cDispatcher : Closeable {
             }
         }
 
-    private val h2cClient: HttpClient = createClient(listOf(Protocol.H2_PRIOR_KNOWLEDGE))
-    private val http1Client: HttpClient = createClient(listOf(Protocol.HTTP_1_1))
+    private val h2cClient: OkHttpClient = createClient(listOf(Protocol.H2_PRIOR_KNOWLEDGE))
+    private val http1Client: OkHttpClient = createClient(listOf(Protocol.HTTP_1_1))
 
-    private fun createClient(okhttpProtocols: List<Protocol>): HttpClient =
-        HttpClient(OkHttp) {
-            expectSuccess = false
-            install(HttpTimeout) {
-                connectTimeoutMillis = CONNECT_TIMEOUT_MS
-                requestTimeoutMillis = REQUEST_TIMEOUT_MS
-                socketTimeoutMillis = SOCKET_TIMEOUT_MS
-            }
-            engine {
-                config {
-                    protocols(okhttpProtocols)
-                    retryOnConnectionFailure(true)
-                    dispatcher(
-                        Dispatcher().apply {
-                            maxRequests = MAX_CONCURRENT_REQUESTS
-                            maxRequestsPerHost = MAX_CONCURRENT_REQUESTS_PER_HOST
-                        },
-                    )
-                    connectionPool(
-                        ConnectionPool(
-                            MAX_IDLE_CONNECTIONS,
-                            KEEP_ALIVE_DURATION_MS,
-                            TimeUnit.MILLISECONDS,
-                        ),
-                    )
-                }
-            }
-        }
+    private fun createClient(okhttpProtocols: List<Protocol>): OkHttpClient =
+        OkHttpClient
+            .Builder()
+            .protocols(okhttpProtocols)
+            .retryOnConnectionFailure(true)
+            .dispatcher(
+                Dispatcher().apply {
+                    maxRequests = MAX_CONCURRENT_REQUESTS
+                    maxRequestsPerHost = MAX_CONCURRENT_REQUESTS_PER_HOST
+                },
+            ).connectionPool(
+                ConnectionPool(
+                    MAX_IDLE_CONNECTIONS,
+                    KEEP_ALIVE_DURATION_MS,
+                    TimeUnit.MILLISECONDS,
+                ),
+            ).connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .readTimeout(SOCKET_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .callTimeout(REQUEST_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .build()
 
-    private fun clientFor(webhookUrl: String): HttpClient {
+    private fun clientFor(webhookUrl: String): OkHttpClient {
         if (webhookUrl.startsWith("https://")) {
             return http1Client
         }
@@ -185,8 +174,10 @@ class H2cDispatcher : Closeable {
                 )
             }
         }
-        h2cClient.close()
-        http1Client.close()
+        h2cClient.dispatcher.executorService.shutdown()
+        h2cClient.connectionPool.evictAll()
+        http1Client.dispatcher.executorService.shutdown()
+        http1Client.connectionPool.evictAll()
     }
 
     private fun runWorkerLoop() {
@@ -365,17 +356,18 @@ class H2cDispatcher : Closeable {
                 "[H2cDispatcher] Dispatch attempt started: route=${delivery.route}, url=${delivery.url}, " +
                     "messageId=${delivery.messageId}, attempt=$attemptLabel",
             )
-            runBlocking {
-                clientFor(delivery.url)
-                    .preparePost(delivery.url) {
-                        header(HEADER_CONTENT_TYPE, APPLICATION_JSON)
-                        setBody(body)
-                        header(HEADER_IRIS_TOKEN, Configurable.webhookToken)
-                        header(HEADER_IRIS_MESSAGE_ID, delivery.messageId)
-                        header(HEADER_IRIS_ROUTE, delivery.route)
-                    }.execute { response ->
-                        classifyResponse(delivery, attemptLabel, response.status.value)
-                    }
+            val request =
+                Request
+                    .Builder()
+                    .url(delivery.url)
+                    .post(body.toRequestBody(APPLICATION_JSON.toMediaType()))
+                    .header(HEADER_CONTENT_TYPE, APPLICATION_JSON)
+                    .header(HEADER_IRIS_TOKEN, Configurable.webhookToken)
+                    .header(HEADER_IRIS_MESSAGE_ID, delivery.messageId)
+                    .header(HEADER_IRIS_ROUTE, delivery.route)
+                    .build()
+            clientFor(delivery.url).newCall(request).execute().use { response ->
+                classifyResponse(delivery, attemptLabel, response.code)
             }
         } catch (e: Exception) {
             IrisLogger.error(
