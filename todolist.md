@@ -1,7 +1,13 @@
 # Iris 후속 작업 TODO
 
-> 2026-03-09 기준 운영 조치 및 최종 확인 완료.
-> 현재 TODO는 완료 상태이며, 아래 항목은 작업 기록 보존용입니다.
+> 2026-03-12 기준 최신 정리본입니다.
+> 현재 운영 반영 상태:
+> - `iris-kr` 기준 최신 소스/문서 반영 완료
+> - headless Redroid live 반영 완료
+> - 인증 포함 `/config`, `/query` 스모크 완료
+> - 보호 API fail-closed, durable admission journal, journal compaction 반영 완료
+>
+> 아래 항목은 완료 작업의 기록 보존용입니다.
 
 ## 1. 우선 처리
 
@@ -43,6 +49,7 @@
   - 수동 정리 기준
   - README Troubleshooting에 정리 반영
   - 2026-03-09 재배포 후 기존 hololive outbox 3건이 모두 성공 처리되어 디렉터리가 비워짐
+  - 2026-03-12 기준 신규 durable admission은 `queue.log` journal 기반이며, legacy `*.json`은 recovery 호환만 유지
 
 ## 3. E2E 검증
 
@@ -70,7 +77,10 @@
 
 - MQ/Redis 활성 경로는 제거됨
 - `openclaw` 및 관련 prefix/설정은 제거됨
-- 운영 `hololive` webhook은 `http://172.18.0.2:30001/webhook/iris` 기준으로 동작 확인
+- 운영 `hololive` webhook은 현재 `http://100.100.1.3:30001/webhook/iris` 기준
 - `twentyq`, `turtle-soup`는 현재 미사용이라 Redroid config에서 제거함
 - 재배포 후 기존 `ClosedByteChannelException` 증상은 재현되지 않았고, 동일 outbox 건들은 1회 시도에서 모두 `200` 성공
 - `iris-init.sh`, `iris-watchdog.sh`는 기본값으로 `twentyq`, `turtle-soup` webhook을 다시 활성화하지 않도록 정리함
+- 보호 API(`/config`, `/reply`, `/query`)는 `botToken` 미설정 시 fail-open 하지 않고 `503`으로 거부
+- 신규 durable admission은 per-message outbox 파일 대신 append-only journal(`queue.log`)에 기록
+- journal은 backlog 비율과 레코드 수 기준으로 자동 compact 됨
