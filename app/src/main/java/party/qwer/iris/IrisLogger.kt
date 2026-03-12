@@ -4,22 +4,14 @@ object IrisLogger {
     enum class Level(
         val priority: Int,
     ) {
+        NONE(4),
         ERROR(3),
         INFO(2),
         DEBUG(1),
     }
 
     @PublishedApi
-    internal val currentLevel: Level =
-        run {
-            val env = System.getenv("IRIS_LOG_LEVEL")?.uppercase() ?: "ERROR"
-            try {
-                Level.valueOf(env)
-            } catch (e: IllegalArgumentException) {
-                println("[IrisLogger] Invalid IRIS_LOG_LEVEL=$env, using ERROR")
-                Level.ERROR
-            }
-        }
+    internal val currentLevel: Level = parseIrisLogLevel(System.getenv("IRIS_LOG_LEVEL"))
 
     fun error(message: String) {
         if (currentLevel.priority <= Level.ERROR.priority) {
@@ -58,13 +50,13 @@ object IrisLogger {
             println(messageProvider())
         }
     }
+}
 
-    /**
-     * Lazy info 로깅.
-     */
-    inline fun infoLazy(messageProvider: () -> String) {
-        if (currentLevel.priority <= Level.INFO.priority) {
-            println(messageProvider())
-        }
+internal fun parseIrisLogLevel(rawValue: String?): IrisLogger.Level {
+    val normalized = rawValue?.trim()?.uppercase().orEmpty()
+    if (normalized.isEmpty()) {
+        return IrisLogger.Level.ERROR
     }
+
+    return IrisLogger.Level.entries.firstOrNull { it.name == normalized } ?: IrisLogger.Level.ERROR
 }

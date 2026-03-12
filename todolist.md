@@ -84,3 +84,10 @@
 - 보호 API(`/config`, `/reply`, `/query`)는 `botToken` 미설정 시 fail-open 하지 않고 `503`으로 거부
 - 신규 durable admission은 per-message outbox 파일 대신 append-only journal(`queue.log`)에 기록
 - journal은 backlog 비율과 레코드 수 기준으로 자동 compact 됨
+- config 저장 모델은 `webhooks.hololive` 대신 단일 `endpoint`를 사용하며, 구형 설정은 로드 시 자동 이관됨
+- image reply 파일 생성은 queue admission 이후 worker에서 수행되고, `IRIS_IMAGE_MEDIA_SCAN=0`으로 media scan을 끌 수 있음
+- image cleanup은 `IRIS_IMAGE_DELETE_INTERVAL_MS`, `IRIS_IMAGE_RETENTION_MS`로 운영 조정 가능하며 기본값은 1시간/1일
+- bot user_id 탐지 실패 시 기존 configured `botId`를 0으로 덮어쓰지 않고, 최근 `chat_logs.v` JSON fallback 탐지를 수행함
+- `IRIS_LOG_LEVEL=NONE`을 지원하며, 기본 로그 레벨은 계속 `ERROR` 유지
+- `iris_control`은 Linux host 전용으로 정리됐고 `install_redroid` 등 비핵심 Ubuntu 설치 분기는 제거됨
+- host-side control script는 `iris_control` 하나만 유지하고, `IRIS_LOG_LEVEL`을 실제 런타임으로 전달함

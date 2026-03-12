@@ -1,3 +1,5 @@
+import org.gradle.api.tasks.Copy
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.serialization)
@@ -53,22 +55,21 @@ kotlin {
 
 private fun registerAssembleOutputCopyTask(variantName: String) {
     val assembleTaskName = "assemble${variantName.replaceFirstChar { it.uppercase() }}"
-    tasks.matching { it.name == assembleTaskName }.configureEach {
-        doLast {
-            copy {
-                from(layout.buildDirectory.dir("outputs/apk/$variantName"))
-                include("*.apk")
-                into("${rootProject.rootDir.path}/output")
-                rename { "Iris-$variantName.apk" }
-            }
+    val copyTaskName = "sync${variantName.replaceFirstChar { it.uppercase() }}ApkToOutput"
+    val copyTask =
+        tasks.register<Copy>(copyTaskName) {
+            from(layout.buildDirectory.dir("outputs/apk/$variantName"))
+            include("*.apk")
+            into(rootProject.layout.projectDirectory.dir("output"))
+            rename { "Iris-$variantName.apk" }
         }
+    tasks.matching { it.name == assembleTaskName }.configureEach {
+        finalizedBy(copyTask)
     }
 }
 
-afterEvaluate {
-    registerAssembleOutputCopyTask("debug")
-    registerAssembleOutputCopyTask("release")
-}
+registerAssembleOutputCopyTask("debug")
+registerAssembleOutputCopyTask("release")
 
 // Detekt 설정
 detekt {
@@ -105,4 +106,6 @@ dependencies {
     implementation(libs.ktor.serialization.kotlinx.json)
     implementation(libs.okhttp)
     implementation(libs.slf4j.nop)
+
+    testImplementation(kotlin("test-junit"))
 }

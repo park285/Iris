@@ -9,6 +9,7 @@ import kotlin.concurrent.Volatile
 class ImageDeleter(
     private val imageDirPath: String,
     private val deletionInterval: Long,
+    private val retentionMillis: Long,
 ) {
     @Volatile
     private var running = true
@@ -39,7 +40,7 @@ class ImageDeleter(
 
     private fun deleteOldImages() {
         if (!running) {
-            IrisLogger.info("Image deletion task stopped.")
+            IrisLogger.debug("Image deletion task stopped.")
             scheduler.shutdown()
             return
         }
@@ -50,11 +51,11 @@ class ImageDeleter(
             return
         }
 
-        val oneDayAgo = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(1)
+        val expirationCutoff = System.currentTimeMillis() - retentionMillis
         val files = imageDir.listFiles()
         if (files != null) {
             for (file in files) {
-                if (file.isFile && file.lastModified() < oneDayAgo) {
+                if (file.isFile && file.lastModified() < expirationCutoff) {
                     if (file.delete()) {
                         IrisLogger.debug("Deleted old image file: " + file.name)
                     } else {

@@ -2,19 +2,26 @@ package party.qwer.iris
 
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import party.qwer.iris.model.ConfigResponse
+import party.qwer.iris.model.ConfigUpdateResponse
 import party.qwer.iris.model.ConfigValues
 import java.io.File
 import java.io.IOException
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 class Configurable {
     companion object {
-        private const val DEFAULT_WEBHOOK_ROUTE = "hololive"
         private val CONFIG_FILE_PATH: String by lazy {
             System.getenv("IRIS_CONFIG_PATH") ?: "/data/local/tmp/config.json"
         }
 
         @Volatile
-        private var configValues: ConfigValues = ConfigValues()
+        private var snapshotValues: ConfigValues = ConfigValues()
+
+        @Volatile
+        private var effectiveValues: ConfigValues = ConfigValues()
 
         @Volatile
         private var isDirty = false
@@ -46,43 +53,62 @@ class Configurable {
 
             try {
                 val jsonString = configFile.readText()
-                configValues = json.decodeFromString(ConfigValues.serializer(), jsonString)
+                val decodedConfig = decodeConfigValues(json, jsonString)
+                snapshotValues = decodedConfig.values
+                effectiveValues = decodedConfig.values.copy()
                 IrisLogger.debug(
                     "Loaded config from $CONFIG_FILE_PATH " +
-                        "(webhookTokenConfigured=${configValues.webhookToken.isNotBlank()}, " +
-                        "botTokenConfigured=${configValues.botToken.isNotBlank()})",
+                        "(webhookTokenConfigured=${snapshotValues.webhookToken.isNotBlank()}, " +
+                        "botTokenConfigured=${snapshotValues.botToken.isNotBlank()})",
                 )
+                if (decodedConfig.migratedLegacyEndpoint) {
+                    IrisLogger.info("Migrated legacy webhooks config to single endpoint model")
+                }
+                isDirty = decodedConfig.migratedLegacyEndpoint
             } catch (e: IOException) {
-                IrisLogger.error("Error reading config.json from $CONFIG_FILE_PATH, creating default config: ${e.message}")
-                saveConfig()
+                IrisLogger.error("Error reading config.json from $CONFIG_FILE_PATH, using in-memory defaults: ${e.message}")
+                backupBrokenConfig(configFile)
             } catch (e: SerializationException) {
-                IrisLogger.error("JSON parsing error in config.json from $CONFIG_FILE_PATH, creating default config: ${e.message}")
-                saveConfig()
+                IrisLogger.error("JSON parsing error in config.json from $CONFIG_FILE_PATH, using in-memory defaults: ${e.message}")
+                backupBrokenConfig(configFile)
             }
         }
 
-        private fun saveConfig() {
+        private fun saveConfig(): Boolean {
+            val configFile = File(CONFIG_FILE_PATH)
+            val parentDir = configFile.parentFile
+            if (parentDir != null && !parentDir.exists() && !parentDir.mkdirs()) {
+                IrisLogger.error("Failed to create config directory: ${parentDir.absolutePath}")
+                return false
+            }
+
+            val tempFile = File("${configFile.absolutePath}.tmp")
             try {
-                val jsonString = json.encodeToString(ConfigValues.serializer(), configValues)
+                val jsonString = json.encodeToString(ConfigValues.serializer(), snapshotValues)
                 IrisLogger.debug(
                     "Saving config to $CONFIG_FILE_PATH " +
-                        "(webhookTokenConfigured=${configValues.webhookToken.isNotBlank()}, " +
-                        "botTokenConfigured=${configValues.botToken.isNotBlank()})",
+                        "(webhookTokenConfigured=${snapshotValues.webhookToken.isNotBlank()}, " +
+                        "botTokenConfigured=${snapshotValues.botToken.isNotBlank()})",
                 )
 
-                File(CONFIG_FILE_PATH).writeText(jsonString)
+                tempFile.writeText(jsonString)
+                moveConfigAtomically(tempFile, configFile)
                 isDirty = false
+                return true
             } catch (e: IOException) {
                 IrisLogger.error("Error writing config to file $CONFIG_FILE_PATH: ${e.message}")
             } catch (e: SerializationException) {
                 IrisLogger.error("JSON error while saving config to $CONFIG_FILE_PATH: ${e.message}")
             }
+            tempFile.delete()
+            return false
         }
 
-        fun saveConfigNow() {
-            if (isDirty) {
-                saveConfig()
+        fun saveConfigNow(): Boolean {
+            if (!isDirty) {
+                return true
             }
+            return saveConfig()
         }
 
         private fun markDirty() {
@@ -90,82 +116,149 @@ class Configurable {
         }
 
         var botId: Long
-            get() = configValues.botId
+            get() = effectiveValues.botId
             set(value) {
-                if (configValues.botId == value) {
+                if (snapshotValues.botId == value && effectiveValues.botId == value) {
                     return
                 }
-                configValues.botId = value
+                snapshotValues.botId = value
+                effectiveValues.botId = value
                 markDirty()
                 IrisLogger.debug("Bot Id is updated to: $botId")
             }
 
         var botName: String
-            get() = configValues.botName
+            get() = effectiveValues.botName
             set(value) {
-                if (configValues.botName == value) {
+                if (snapshotValues.botName == value && effectiveValues.botName == value) {
                     return
                 }
-                configValues.botName = value
+                snapshotValues.botName = value
+                effectiveValues.botName = value
                 markDirty()
                 IrisLogger.debug("Bot name updated to: $botName")
             }
 
         var botSocketPort: Int
-            get() = configValues.botHttpPort
+            get() = effectiveValues.botHttpPort
             set(value) {
-                if (configValues.botHttpPort == value) {
+                if (snapshotValues.botHttpPort == value) {
                     return
                 }
-                configValues.botHttpPort = value
+                snapshotValues.botHttpPort = value
                 markDirty()
-                IrisLogger.debug("Bot port updated to: $botSocketPort")
+                IrisLogger.debug(
+                    "Bot port snapshot updated to: ${snapshotValues.botHttpPort} " +
+                        "(effective=${effectiveValues.botHttpPort})",
+                )
             }
 
         var defaultWebhookEndpoint: String
-            get() = configValues.webhooks[DEFAULT_WEBHOOK_ROUTE].orEmpty()
+            get() = effectiveValues.endpoint
             set(value) {
                 val normalized = value.trim()
                 if (defaultWebhookEndpoint == normalized) {
                     return
                 }
-                configValues.webhooks =
-                    if (normalized.isBlank()) {
-                        emptyMap()
-                    } else {
-                        mapOf(DEFAULT_WEBHOOK_ROUTE to normalized)
-                    }
+                snapshotValues.endpoint = normalized
+                effectiveValues.endpoint = normalized
                 markDirty()
-                IrisLogger.debug("Default webhook endpoint updated for route '$DEFAULT_WEBHOOK_ROUTE'")
+                IrisLogger.debug("Default webhook endpoint updated")
             }
 
         val webhookToken: String
-            get() = configValues.webhookToken.ifBlank { System.getenv("IRIS_WEBHOOK_TOKEN") ?: "" }
+            get() = snapshotValues.webhookToken.ifBlank { System.getenv("IRIS_WEBHOOK_TOKEN") ?: "" }
 
         val botToken: String
-            get() = configValues.botToken.ifBlank { System.getenv("IRIS_BOT_TOKEN") ?: "" }
+            get() = snapshotValues.botToken.ifBlank { System.getenv("IRIS_BOT_TOKEN") ?: "" }
 
         var dbPollingRate: Long
-            get() = configValues.dbPollingRate
+            get() = effectiveValues.dbPollingRate
             set(value) {
-                if (configValues.dbPollingRate == value) {
+                if (snapshotValues.dbPollingRate == value && effectiveValues.dbPollingRate == value) {
                     return
                 }
-                configValues.dbPollingRate = value
+                snapshotValues.dbPollingRate = value
+                effectiveValues.dbPollingRate = value
                 markDirty()
                 IrisLogger.debug("DbPollingRate updated to: $dbPollingRate")
             }
 
         var messageSendRate: Long
-            get() = configValues.messageSendRate
+            get() = effectiveValues.messageSendRate
             set(value) {
-                if (configValues.messageSendRate == value) {
+                if (snapshotValues.messageSendRate == value && effectiveValues.messageSendRate == value) {
                     return
                 }
-                configValues.messageSendRate = value
+                snapshotValues.messageSendRate = value
+                effectiveValues.messageSendRate = value
                 markDirty()
                 IrisLogger.debug("MessageSendRate updated to: $messageSendRate")
                 Replier.restartMessageSender()
             }
+
+        fun configResponse(): ConfigResponse =
+            synchronized(this) {
+                buildConfigResponse(snapshotValues.copy(), effectiveValues.copy())
+            }
+
+        fun configUpdateResponse(
+            name: String,
+            persisted: Boolean,
+            applied: Boolean,
+            requiresRestart: Boolean,
+        ): ConfigUpdateResponse =
+            synchronized(this) {
+                buildConfigUpdateResponse(
+                    status =
+                        ConfigUpdateStatus(
+                            name = name,
+                            persisted = persisted,
+                            applied = applied,
+                            requiresRestart = requiresRestart,
+                        ),
+                    snapshot = snapshotValues.copy(),
+                    effective = effectiveValues.copy(),
+                )
+            }
+
+        private fun backupBrokenConfig(configFile: File) {
+            if (!configFile.exists()) {
+                return
+            }
+
+            val backupFile = File("${configFile.absolutePath}.bak")
+            runCatching {
+                Files.move(
+                    configFile.toPath(),
+                    backupFile.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+                IrisLogger.info("Backed up unreadable config to ${backupFile.absolutePath}")
+            }.onFailure { error ->
+                IrisLogger.error("Failed to back up unreadable config: ${error.message}")
+            }
+        }
+
+        @Throws(IOException::class)
+        private fun moveConfigAtomically(
+            tempFile: File,
+            targetFile: File,
+        ) {
+            try {
+                Files.move(
+                    tempFile.toPath(),
+                    targetFile.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE,
+                )
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(
+                    tempFile.toPath(),
+                    targetFile.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            }
+        }
     }
 }

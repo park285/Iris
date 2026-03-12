@@ -1,313 +1,271 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# --- Configuration ---
-IRIS_PROCESS_NAME="qwer"
+set -euo pipefail
+
+IRIS_PROCESS_NAME="party.qwer.iris.Main"
 IRIS_PROCESS_KEYWORD="app_process"
-# IRIS_START_COMMAND no longer includes 'adb shell'. This is now handled by the ADB_CMD variable.
-IRIS_START_COMMAND="'su root sh -c \"IRIS_CONFIG_PATH=/data/local/tmp/config.json IRIS_WEBHOOK_TRANSPORT=${IRIS_WEBHOOK_TRANSPORT:-} IRIS_WEBHOOK_TOKEN=${IRIS_WEBHOOK_TOKEN:-} IRIS_BOT_TOKEN=${IRIS_BOT_TOKEN:-} CLASSPATH=/data/local/tmp/Iris.apk app_process / party.qwer.iris.Main > /dev/null 2>&1\"' &"
-IRIS_APK_URL="https://github.com/dolidolih/Iris/releases/latest/download/Iris.apk"
+IRIS_APK_URL="https://github.com/park285/Iris/releases/latest/download/Iris.apk"
 IRIS_APK_PATH="/data/local/tmp/Iris.apk"
 IRIS_APK_LOCAL_FILE="Iris.apk"
 IRIS_MD5_URL="${IRIS_APK_URL}.MD5"
-IRIS_CONFIG_PATH="/data/local/tmp/config.json"
+IRIS_CONFIG_PATH="${IRIS_CONFIG_PATH:-/data/local/tmp/config.json}"
+IRIS_WEBHOOK_TRANSPORT="${IRIS_WEBHOOK_TRANSPORT:-}"
+IRIS_WEBHOOK_TOKEN="${IRIS_WEBHOOK_TOKEN:-}"
+IRIS_BOT_TOKEN="${IRIS_BOT_TOKEN:-}"
+IRIS_LOG_LEVEL="${IRIS_LOG_LEVEL:-}"
 
-# --- Global Variables ---
-# This will be set by select_adb_device() to something like "adb -s emulator-5554"
 ADB_CMD=""
 
-# --- Functions ---
-
-check_adb_installed() {
-  if ! command -v adb &> /dev/null
-  then
-    echo "adb is not installed. Please install adb and add it to your PATH."
-    echo "You can usually install it with your system's package manager (e.g., apt install adb, brew install android-platform-tools)."
+check_linux_host() {
+  if [[ "$(uname -s)" != "Linux" ]]; then
+    echo "iris_control is supported on Linux hosts only."
     return 1
   fi
-  return 0
 }
 
-# New function to handle device selection
+check_adb_installed() {
+  if ! command -v adb >/dev/null 2>&1; then
+    echo "adb is not installed. Please install adb and add it to your PATH."
+    echo "For Debian/Ubuntu, try: sudo apt-get install adb"
+    return 1
+  fi
+}
+
 select_adb_device() {
-  # If a device has already been selected, do nothing.
-  if [ -n "$ADB_CMD" ]; then
+  if [[ -n "$ADB_CMD" ]]; then
     return 0
   fi
 
   echo "Searching for connected devices..."
-  # Get a list of devices in the 'device' state, excluding the header
-  # mapfile is a bash 4+ feature to read lines into an array
-  mapfile -t devices < <(adb devices | grep -w "device" | grep -v "List of devices" | awk '{print $1}')
+  mapfile -t devices < <(adb devices | awk '$2 == "device" {print $1}')
 
-  local num_devices=${#devices[@]}
-
-  if [ "$num_devices" -eq 0 ]; then
-    echo "Error: No adb devices found in 'device' state."
-    echo "Please connect a device via USB (with debugging enabled) or use 'adb connect <ip>:<port>'."
-    return 1
-  elif [ "$num_devices" -eq 1 ]; then
-    local device_id="${devices[0]}"
-    echo "Found 1 device. Using: $device_id"
-    ADB_CMD="adb -s $device_id"
-    return 0
-  else
-    echo "Multiple devices found. Please choose one to use:"
-    local i=1
-    for device in "${devices[@]}"; do
-      echo "  $i) $device"
-      i=$((i+1))
-    done
-
-    local choice
-    read -p "Enter number (1-$num_devices): " choice
-
-    # Validate input
-    if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "$num_devices" ]; then
-      echo "Error: Invalid selection."
+  case "${#devices[@]}" in
+    0)
+      echo "Error: No adb devices found in 'device' state."
+      echo "Connect a device or run: adb connect <ip>:<port>"
       return 1
-    fi
+      ;;
+    1)
+      ADB_CMD="adb -s ${devices[0]}"
+      echo "Using device: ${devices[0]}"
+      ;;
+    *)
+      echo "Multiple devices found. Choose one:"
+      local i=1
+      for device in "${devices[@]}"; do
+        echo "  $i) $device"
+        i=$((i + 1))
+      done
 
-    local device_id="${devices[$((choice-1))]}"
-    echo "Using device: $device_id"
-    ADB_CMD="adb -s $device_id"
-    return 0
-  fi
+      local choice
+      read -r -p "Enter number (1-${#devices[@]}): " choice
+      if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#devices[@]} )); then
+        echo "Error: Invalid selection."
+        return 1
+      fi
+
+      local device_id="${devices[$((choice - 1))]}"
+      ADB_CMD="adb -s $device_id"
+      echo "Using device: $device_id"
+      ;;
+  esac
 }
 
 get_iris_pid() {
-  # ADB_CMD already includes the -s flag if needed
-  pid=$($ADB_CMD shell ps -f | grep "$IRIS_PROCESS_NAME" | grep "$IRIS_PROCESS_KEYWORD" | grep -v 'sh -c' | awk '{print $2}')
-  echo "$pid"
+  "$ADB_CMD" shell ps -f |
+    grep "$IRIS_PROCESS_NAME" |
+    grep "$IRIS_PROCESS_KEYWORD" |
+    grep -v 'grep' |
+    grep -v 'sh -c' |
+    awk '{print $2}'
 }
 
 iris_status() {
-  pid=$(get_iris_pid)
-  if [ -n "$pid" ]; then
-    echo "Iris is working. PID: $pid"
+  local pid
+  pid="$(get_iris_pid || true)"
+  if [[ -n "$pid" ]]; then
+    echo "Iris is running. PID: $pid"
   else
     echo "Iris is not running."
   fi
 }
 
+build_remote_runtime_command() {
+  local redirect_suffix="${1:-}"
+  cat <<EOF
+IRIS_CONFIG_PATH="$IRIS_CONFIG_PATH" IRIS_WEBHOOK_TRANSPORT="$IRIS_WEBHOOK_TRANSPORT" IRIS_WEBHOOK_TOKEN="$IRIS_WEBHOOK_TOKEN" IRIS_BOT_TOKEN="$IRIS_BOT_TOKEN" IRIS_LOG_LEVEL="$IRIS_LOG_LEVEL" CLASSPATH="$IRIS_APK_PATH" app_process / party.qwer.iris.Main$redirect_suffix
+EOF
+}
+
 iris_start() {
-  pid=$(get_iris_pid)
-  if [ -n "$pid" ]; then
+  local pid
+  pid="$(get_iris_pid || true)"
+  if [[ -n "$pid" ]]; then
     echo "Iris is already running."
+    return 0
+  fi
+
+  echo "Starting Iris service in the background..."
+  local remote_command
+  remote_command="$(build_remote_runtime_command ' > /dev/null 2>&1 &')"
+  "$ADB_CMD" shell "su root sh -c '$remote_command'"
+  sleep 2
+
+  local new_pid
+  new_pid="$(get_iris_pid || true)"
+  if [[ -n "$new_pid" ]]; then
+    echo "Iris service started. PID: $new_pid"
   else
-    echo "Starting Iris service in the background..."
-    # The 'adb shell' part is now constructed dynamically with the correct device
-    eval "$ADB_CMD shell $IRIS_START_COMMAND"
-    sleep 2
-    new_pid=$(get_iris_pid)
-    if [ -n "$new_pid" ]; then
-      echo "Iris service started. PID: $new_pid"
-    else
-      echo "Failed to start Iris service."
-    fi
+    echo "Failed to start Iris service."
+    return 1
   fi
 }
 
 iris_start_foreground() {
-  pid=$(get_iris_pid)
-  if [ -n "$pid" ]; then
-    echo "Iris is already running (PID: $pid). Please stop it first with '$0 stop'."
+  local pid
+  pid="$(get_iris_pid || true)"
+  if [[ -n "$pid" ]]; then
+    echo "Iris is already running (PID: $pid). Stop it first with '$0 stop'."
     return 1
   fi
 
   echo "Starting Iris in foreground..."
-  echo "Logs will be displayed below. Press Ctrl+C to exit verbose mode.(You will need to run iris_control stop to stop the process."
-
-  # Execute the command without output redirection or backgrounding.
-  # This will block the script and show logs in the current terminal.
-  # Ctrl+C will terminate the adb process, which in turn stops the remote command.
-  $ADB_CMD shell "su root sh -c \"IRIS_CONFIG_PATH=${IRIS_CONFIG_PATH} IRIS_WEBHOOK_TRANSPORT=${IRIS_WEBHOOK_TRANSPORT:-} IRIS_WEBHOOK_TOKEN=${IRIS_WEBHOOK_TOKEN:-} IRIS_BOT_TOKEN=${IRIS_BOT_TOKEN:-} CLASSPATH=${IRIS_APK_PATH} app_process / party.qwer.iris.Main\""
-
+  echo "Press Ctrl+C to stop the foreground adb session."
+  local remote_command
+  remote_command="$(build_remote_runtime_command)"
+  "$ADB_CMD" shell "su root sh -c '$remote_command'"
 }
 
 iris_stop() {
-  pid=$(get_iris_pid)
-  if [ -n "$pid" ]; then
-    echo "Stopping Iris service..."
-    $ADB_CMD shell "su root sh -c 'kill -s SIGKILL $pid'"
-    sleep 1
-    stopped_pid=$(get_iris_pid)
-    if [ -z "$stopped_pid" ]; then
-      echo "Iris service stopped."
-    else
-      echo "Failed to stop Iris service (PID: $pid) may still be running."
-    fi
-  else
+  local pid
+  pid="$(get_iris_pid || true)"
+  if [[ -z "$pid" ]]; then
     echo "Iris is not running."
-  fi
-}
-
-iris_install() {
-  echo "Downloading Iris.apk and MD5 checksum..."
-  if curl -Lo "$IRIS_APK_LOCAL_FILE" "$IRIS_APK_URL"; then
-    echo "Iris.apk download completed."
-  elif wget -O "$IRIS_APK_LOCAL_FILE" "$IRIS_APK_URL"; then
-    echo "Iris.apk download completed."
-  else
-    echo "Failed to download Iris.apk. Please check the URL and your internet connection."
-    return 1
-  fi
-
-  if curl -Lo "$IRIS_APK_LOCAL_FILE.MD5" "$IRIS_MD5_URL"; then
-    echo "MD5 checksum download completed."
-  elif wget -O "$IRIS_APK_LOCAL_FILE.MD5" "$IRIS_MD5_URL"; then
-    echo "MD5 checksum download completed."
-  else
-    echo "Failed to download MD5 checksum. Skipping MD5 check."
-    echo "Pushing Iris.apk to device..."
-    $ADB_CMD push "$IRIS_APK_LOCAL_FILE" "$IRIS_APK_PATH"
-    if [ $? -ne 0 ]; then
-      echo "Failed to push Iris.apk to /data/local/tmp. Check adb connection and permissions."
-      return 1
-    fi
-
-    echo "Verifying installation..."
-    $ADB_CMD shell "ls $IRIS_APK_PATH" > /dev/null 2>&1
-    if [ $? -eq 0 ]; then
-      echo "Installation completed (without MD5 check)!"
-    else
-      echo "Installation verification failed. File might not be in /data/local/tmp."
-    fi
     return 0
   fi
 
-  downloaded_md5=$(cat "$IRIS_APK_LOCAL_FILE.MD5" | awk '{print $1}')
-  calculated_md5=$(md5sum "$IRIS_APK_LOCAL_FILE" | awk '{print $1}')
+  echo "Stopping Iris service..."
+  "$ADB_CMD" shell "su root sh -c 'kill -s SIGTERM $pid'"
+  for _ in 1 2 3 4 5; do
+    sleep 1
+    if [[ -z "$(get_iris_pid || true)" ]]; then
+      echo "Iris service stopped gracefully."
+      return 0
+    fi
+  done
 
-  downloaded_md5_lower=$(printf "%s" "$downloaded_md5" | tr '[:upper:]' '[:lower:]')
-  calculated_md5_lower=$(printf "%s" "$calculated_md5" | tr '[:upper:]' '[:lower:]')
+  echo "SIGTERM timed out; forcing SIGKILL..."
+  "$ADB_CMD" shell "su root sh -c 'kill -s SIGKILL $pid'"
+  sleep 1
+  if [[ -z "$(get_iris_pid || true)" ]]; then
+    echo "Iris service stopped after SIGKILL fallback."
+  else
+    echo "Failed to stop Iris service (PID: $pid may still be running)."
+    return 1
+  fi
+}
 
-  if [ "$downloaded_md5_lower" != "$calculated_md5_lower" ]; then
+download_file() {
+  local url="$1"
+  local output="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL -o "$output" "$url"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -O "$output" "$url"
+  else
+    echo "Error: curl or wget is required."
+    return 1
+  fi
+}
+
+verify_md5_if_available() {
+  local apk_file="$1"
+  local md5_file="$2"
+
+  if [[ ! -f "$md5_file" ]]; then
+    echo "Warning: MD5 file missing. Skipping checksum verification."
+    return 0
+  fi
+
+  if ! command -v md5sum >/dev/null 2>&1; then
+    echo "Warning: md5sum is not installed. Skipping checksum verification."
+    return 0
+  fi
+
+  local downloaded_md5
+  downloaded_md5="$(awk '{print $1}' "$md5_file")"
+  local calculated_md5
+  calculated_md5="$(md5sum "$apk_file" | awk '{print $1}')"
+
+  if [[ "${downloaded_md5,,}" != "${calculated_md5,,}" ]]; then
     echo "MD5 checksum mismatch! Downloaded file is corrupted."
-    rm "$IRIS_APK_LOCAL_FILE" "$IRIS_APK_LOCAL_FILE.MD5"
     return 1
   fi
-  echo "MD5 checksum verification passed."
 
-  echo "Pushing verified Iris.apk to device..."
-  $ADB_CMD push "$IRIS_APK_LOCAL_FILE" "$IRIS_APK_PATH"
-  if [ $? -ne 0 ]; then
-    echo "Failed to push Iris.apk to /data/local/tmp. Check adb connection and permissions."
-    return 1
+  echo "MD5 checksum verification passed."
+}
+
+iris_install() {
+  trap cleanup_install_artifacts RETURN
+
+  echo "Downloading Iris.apk..."
+  download_file "$IRIS_APK_URL" "$IRIS_APK_LOCAL_FILE"
+
+  echo "Downloading MD5 checksum..."
+  if ! download_file "$IRIS_MD5_URL" "$IRIS_APK_LOCAL_FILE.MD5"; then
+    echo "Warning: Failed to download MD5 checksum. Continuing without checksum verification."
   fi
+
+  verify_md5_if_available "$IRIS_APK_LOCAL_FILE" "$IRIS_APK_LOCAL_FILE.MD5"
+
+  echo "Pushing Iris.apk to device..."
+  "$ADB_CMD" push "$IRIS_APK_LOCAL_FILE" "$IRIS_APK_PATH"
 
   echo "Verifying installation..."
-  $ADB_CMD shell "ls $IRIS_APK_PATH" > /dev/null 2>&1
-  if [ $? -eq 0 ]; then
-    echo "Installation completed successfully!"
+  if "$ADB_CMD" shell "ls $IRIS_APK_PATH" >/dev/null 2>&1; then
+    echo "Installation completed successfully."
   else
-    echo "Installation verification failed. File might not be in /data/local/tmp."
-  fi
-
-  rm "$IRIS_APK_LOCAL_FILE" "$IRIS_APK_LOCAL_FILE.MD5"
-}
-
-iris_install_redroid() {
-  if ! command -v lsb_release &> /dev/null; then
-    echo "Warning: lsb-release is not installed. Version check may be inaccurate."
-    UBUNTU_VERSION="0"
-  else
-    UBUNTU_VERSION=$(lsb_release -rs | awk -F. '{print $1}')
-  fi
-
-  if [[ "$UBUNTU_VERSION" -lt 22 ]]; then
-    echo "This script only supports Ubuntu 22 or higher. Install manually."
+    echo "Installation verification failed. File might not be at $IRIS_APK_PATH."
     return 1
   fi
-
-  if command -v docker &> /dev/null
-  then
-      echo "Docker already installed. Skipping docker install."
-  else
-      echo "Installing Docker..."
-      sudo apt-get update
-      sudo apt-get install ca-certificates curl -y
-      sudo install -m 0755 -d /etc/apt/keyrings
-      sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-      sudo chmod a+r /etc/apt/keyrings/docker.asc
-
-      echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
-      $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
-      sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-      sudo apt-get update
-      sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin -y
-      echo "Docker installed successfully."
-  fi
-
-  echo "Setting up binder drivers."
-
-  cat <<EOF > binder.service
-[Unit]
-Description=Auto load binder
-After=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=/sbin/modprobe binder_linux devices="binder,hwbinder,vndbinder"
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-  sudo cp binder.service /etc/systemd/system/binder.service
-  rm binder.service
-
-  sudo systemctl enable binder.service
-  sudo systemctl start binder.service
-
-  echo "Creating redoid docker container... It will take a few minutes."
-  sudo docker run -itd --privileged --name redroid \
-      -v ~/data:/data \
-      -p 5555:5555 \
-      -p 3000:3000 \
-      redroid/redroid:11.0.0-latest \
-      ro.product.model=SM-T970 \
-      ro.product.brand=Samsung
-
-  # CPU 제한 해제
-  sudo docker update --memory 8g --memory-swap 8g --cpu-quota=-1 --cpu-period=0 --cpus=0 redroid
-
-  echo "Redroid installation finished."
 }
 
+cleanup_install_artifacts() {
+  rm -f "$IRIS_APK_LOCAL_FILE" "$IRIS_APK_LOCAL_FILE.MD5"
+}
 
-# --- Main Logic ---
+main() {
+  check_linux_host || exit 1
 
-# Check if the command requires an adb device. If so, run the prerequisite checks.
-if [[ "$1" == "status" || "$1" == "start" || "$1" == "stop" || "$1" == "install" ]]; then
-  check_adb_installed || exit 1
-  # select_adb_device will prompt user if needed and set the global ADB_CMD variable
-  select_adb_device || exit 1
-fi
+  case "${1:-}" in
+    status|start|stop|install)
+      check_adb_installed || exit 1
+      select_adb_device || exit 1
+      ;;
+  esac
 
-case "$1" in
-  status)
-    iris_status
-    ;;
-  start)
-    if [[ "$2" == "-v" || "$2" == "--verbose" ]]; then
-      iris_start_foreground
-    else
-      iris_start
-    fi
-    ;;
-  stop)
-    iris_stop
-    ;;
-  install)
-    iris_install
-    ;;
-  install_redroid)
-    iris_install_redroid
-    ;;
-  *)
-    echo "Usage: $0 {status|start [-v|--verbose]|stop|install|install_redroid}"
-    exit 1
-    ;;
-esac
+  case "${1:-}" in
+    status)
+      iris_status
+      ;;
+    start)
+      if [[ "${2:-}" == "-v" || "${2:-}" == "--verbose" ]]; then
+        iris_start_foreground
+      else
+        iris_start
+      fi
+      ;;
+    stop)
+      iris_stop
+      ;;
+    install)
+      iris_install
+      ;;
+    *)
+      echo "Usage: $0 {status|start [-v|--verbose]|stop|install}"
+      exit 1
+      ;;
+  esac
+}
 
-exit 0
+main "$@"

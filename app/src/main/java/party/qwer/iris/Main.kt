@@ -6,14 +6,18 @@ import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
-const val IMAGE_DIR_PATH: String = "/sdcard/Android/data/com.kakao.talk/files"
+const val IRIS_IMAGE_DIR_PATH: String = "/sdcard/Android/data/com.kakao.talk/files/iris-outbox-images"
 
 class Main {
     companion object {
+        private val defaultImageDeletionIntervalMs = TimeUnit.HOURS.toMillis(1)
+        private val defaultImageRetentionMs = TimeUnit.DAYS.toMillis(1)
+
         @JvmStatic
         fun main(args: Array<String>) {
             try {
                 val notificationReferer = readNotificationReferer()
+                val shutdownLatch = CountDownLatch(1)
 
                 Replier.startMessageSender()
                 IrisLogger.info("Message sender thread started")
@@ -25,15 +29,48 @@ class Main {
                 dbObserver.startPolling()
                 IrisLogger.info("DBObserver started")
 
-                val imageDeleter = ImageDeleter(IMAGE_DIR_PATH, TimeUnit.HOURS.toMillis(1))
+                val imageDeletionIntervalMs =
+                    readPositiveDurationMillis(
+                        "IRIS_IMAGE_DELETE_INTERVAL_MS",
+                        defaultImageDeletionIntervalMs,
+                    )
+                val imageRetentionMs =
+                    readPositiveDurationMillis(
+                        "IRIS_IMAGE_RETENTION_MS",
+                        defaultImageRetentionMs,
+                    )
+                val imageDeleter =
+                    ImageDeleter(
+                        IRIS_IMAGE_DIR_PATH,
+                        imageDeletionIntervalMs,
+                        imageRetentionMs,
+                    )
                 imageDeleter.startDeletion()
-                IrisLogger.info("ImageDeleter started, runs every 1 hour, deletes images older than 1 day.")
+                IrisLogger.info(
+                    "ImageDeleter started " +
+                        "(intervalMs=$imageDeletionIntervalMs, retentionMs=$imageRetentionMs).",
+                )
+
+                val disableHttp = System.getenv("IRIS_DISABLE_HTTP")?.equals("1", ignoreCase = true) == true
+                val irisServer =
+                    if (disableHttp) {
+                        IrisLogger.info("[Main] IRIS_DISABLE_HTTP=1; skipping Iris HTTP server startup")
+                        null
+                    } else {
+                        IrisServer(
+                            kakaoDb,
+                            notificationReferer,
+                        ).also {
+                            it.startServer()
+                            IrisLogger.info("Iris Server started")
+                        }
+                    }
 
                 // Graceful Shutdown Hook
-                val shutdownLatch = CountDownLatch(1)
                 Runtime.getRuntime().addShutdownHook(
                     Thread {
                         IrisLogger.info("[Main] Shutdown signal received, cleaning up...")
+                        irisServer?.stopServer()
                         dbObserver.stopPolling()
                         imageDeleter.stopDeletion()
                         observerHelper.close()
@@ -44,21 +81,8 @@ class Main {
                     },
                 )
 
-                val disableHttp = System.getenv("IRIS_DISABLE_HTTP")?.equals("1", ignoreCase = true) == true
-                if (disableHttp) {
-                    IrisLogger.info("[Main] IRIS_DISABLE_HTTP=1; skipping Iris HTTP server startup")
-                    // Keep process alive with proper shutdown support
-                    shutdownLatch.await()
-                } else {
-                    val irisServer =
-                        IrisServer(
-                            kakaoDb,
-                            notificationReferer,
-                        )
-                    irisServer.startServer()
-                    IrisLogger.info("Iris Server started")
-                    // Server runs until terminated
-                }
+                // Keep the process alive with proper shutdown support regardless of HTTP enablement.
+                shutdownLatch.await()
             } catch (e: Exception) {
                 IrisLogger.error("Iris Error: ${e.message}", e)
             }
@@ -99,5 +123,15 @@ class Main {
             )
             return fallback
         }
+
+        private fun readPositiveDurationMillis(
+            envName: String,
+            defaultValue: Long,
+        ): Long = positiveDurationMillisOrDefault(System.getenv(envName), defaultValue)
     }
 }
+
+internal fun positiveDurationMillisOrDefault(
+    rawValue: String?,
+    defaultValue: Long,
+): Long = rawValue?.trim()?.toLongOrNull()?.takeIf { it > 0L } ?: defaultValue

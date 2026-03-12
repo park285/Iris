@@ -7,8 +7,8 @@ import kotlinx.serialization.Serializable
 data class ConfigValues(
     var botName: String = "Iris",
     var botHttpPort: Int = 3000,
-    @SerialName("webhooks")
-    var webhooks: Map<String, String> = emptyMap(),
+    @SerialName("endpoint")
+    var endpoint: String = "",
     @SerialName("webhookToken")
     var webhookToken: String = "",
     @SerialName("botToken")

@@ -5,20 +5,18 @@ import party.qwer.iris.bridge.H2cDispatcher
 import party.qwer.iris.bridge.H2cDispatcher.RoutingCommand
 import party.qwer.iris.bridge.H2cDispatcher.RoutingResult
 import java.io.Closeable
-import java.util.LinkedList
 
 class ObserverHelper(
     private val db: KakaoDB,
 ) : Closeable {
     @Volatile
     private var lastLogId: Long = 0
-    private val lastDecryptedLogs = LinkedList<Map<String, String?>>()
     private var dispatcher: H2cDispatcher? = null
 
-    private val chatInfoCache =
-        object : LinkedHashMap<Pair<Long, Long>, Array<String?>>(64, 0.75f, true) {
+    private val senderNameCache =
+        object : LinkedHashMap<Long, String>(64, 0.75f, true) {
             override fun removeEldestEntry(
-                eldest: MutableMap.MutableEntry<Pair<Long, Long>, Array<String?>>?,
+                eldest: MutableMap.MutableEntry<Long, String>?,
             ): Boolean = size > 64
         }
     private val recentCommandFingerprints =
@@ -59,10 +57,6 @@ class ObserverHelper(
         }
     }
 
-    val lastChatLogs: List<Map<String, String?>>
-        @Synchronized
-        get() = lastDecryptedLogs.map { HashMap(it) }
-
     private fun initBridge() {
         try {
             dispatcher = H2cDispatcher()
@@ -88,10 +82,10 @@ class ObserverHelper(
     private fun processLogEntry(logEntry: KakaoDB.ChatLogEntry): Boolean {
         val metadata = parseMetadata(logEntry) ?: return true
         val decryptedMessage = decryptMessage(logEntry.message, metadata.enc, logEntry.userId)
-        val isCommand = looksLikeCommand(decryptedMessage)
+        val parsedCommand = CommandParser.parse(decryptedMessage)
 
-        logObservedEntry(logEntry, metadata.origin, decryptedMessage, isCommand)
-        if (shouldSkipOrigin(metadata.origin, isCommand)) {
+        logObservedEntry(logEntry, metadata.origin, parsedCommand)
+        if (shouldSkipOrigin(metadata.origin, parsedCommand)) {
             IrisLogger.debug(
                 "[ObserverHelper] Skipping origin=${metadata.origin} for logId=${logEntry.id}, " +
                     "chatId=${logEntry.chatId}, userId=${logEntry.userId}",
@@ -99,12 +93,11 @@ class ObserverHelper(
             return advanceLastLogId(logEntry.id)
         }
 
-        storeDecryptedLog(logEntry, decryptedMessage)
-        if (!shouldRouteCommand(logEntry, decryptedMessage, isCommand, metadata.origin)) {
+        if (!shouldRouteCommand(logEntry, parsedCommand, metadata.origin)) {
             return advanceLastLogId(logEntry.id)
         }
 
-        return routeCommand(logEntry, decryptedMessage)
+        return routeCommand(logEntry, parsedCommand)
     }
 
     private fun parseMetadata(logEntry: KakaoDB.ChatLogEntry): ParsedLogMetadata? =
@@ -141,22 +134,20 @@ class ObserverHelper(
     private fun logObservedEntry(
         logEntry: KakaoDB.ChatLogEntry,
         origin: String,
-        decryptedMessage: String,
-        isCommand: Boolean,
+        parsedCommand: ParsedCommand,
     ) {
         IrisLogger.debugLazy {
             "[ObserverHelper] _id=${logEntry.id}, origin=$origin, userId=${logEntry.userId}, " +
-                "message='${decryptedMessage.take(50)}', isCommand=$isCommand"
+                "message='${parsedCommand.normalizedText.take(50)}', kind=${parsedCommand.kind}"
         }
     }
 
     private fun shouldRouteCommand(
         logEntry: KakaoDB.ChatLogEntry,
-        decryptedMessage: String,
-        isCommand: Boolean,
+        parsedCommand: ParsedCommand,
         origin: String,
     ): Boolean {
-        if (!isCommand) {
+        if (parsedCommand.kind != CommandKind.WEBHOOK) {
             return false
         }
 
@@ -167,7 +158,7 @@ class ObserverHelper(
             return false
         }
 
-        if (isDuplicateCommand(logEntry, decryptedMessage)) {
+        if (isDuplicateCommand(logEntry, parsedCommand.normalizedText)) {
             IrisLogger.debug(
                 "[ObserverHelper] Skipping duplicate command logId=${logEntry.id}, " +
                     "chatId=${logEntry.chatId}, origin=$origin",
@@ -180,13 +171,13 @@ class ObserverHelper(
 
     private fun routeCommand(
         logEntry: KakaoDB.ChatLogEntry,
-        decryptedMessage: String,
+        parsedCommand: ParsedCommand,
     ): Boolean {
         val routingCommand =
             RoutingCommand(
-                text = decryptedMessage,
+                text = parsedCommand.normalizedText,
                 room = logEntry.chatId.toString(),
-                sender = resolveSenderName(logEntry.chatId, logEntry.userId),
+                sender = resolveSenderName(logEntry.userId),
                 userId = logEntry.userId.toString(),
                 sourceLogId = logEntry.id,
             )
@@ -195,7 +186,7 @@ class ObserverHelper(
             RoutingResult.ACCEPTED,
             RoutingResult.SKIPPED,
             -> {
-                rememberCommandFingerprint(logEntry, decryptedMessage)
+                rememberCommandFingerprint(logEntry, parsedCommand.normalizedText)
                 advanceLastLogId(logEntry.id)
             }
             RoutingResult.RETRY_LATER -> {
@@ -208,31 +199,22 @@ class ObserverHelper(
         }
     }
 
-    private fun resolveSenderName(
-        chatId: Long,
-        userId: Long,
-    ): String =
+    private fun resolveSenderName(userId: Long): String =
         try {
-            val cacheKey = Pair(chatId, userId)
-            val chatInfo =
-                chatInfoCache.getOrPut(cacheKey) {
-                    db.getChatInfo(chatId, userId)
+            synchronized(senderNameCache) {
+                senderNameCache.getOrPut(userId) {
+                    db.resolveSenderName(userId)
                 }
-            chatInfo[1]
-                ?.trim()
-                ?.takeUnless { it.isEmpty() || it.equals("Unknown", ignoreCase = true) }
-                ?: userId.toString()
+            }
         } catch (e: Exception) {
-            IrisLogger.debugLazy { "[ObserverHelper] getChatInfo failed: ${e.message}, using userId fallback" }
+            IrisLogger.debugLazy { "[ObserverHelper] resolveSenderName failed: ${e.message}, using userId fallback" }
             userId.toString()
         }
 
-    private fun looksLikeCommand(message: String): Boolean = message.trimStart().let { it.startsWith("!") || it.startsWith("/") }
-
     private fun shouldSkipOrigin(
         origin: String,
-        isCommand: Boolean,
-    ): Boolean = (origin == "SYNCMSG" || origin == "MCHATLOGS") && !isCommand
+        parsedCommand: ParsedCommand,
+    ): Boolean = (origin == "SYNCMSG" || origin == "MCHATLOGS") && parsedCommand.kind == CommandKind.NONE
 
     private fun isOwnBotMessage(userId: Long): Boolean = Configurable.botId != 0L && userId == Configurable.botId
 
@@ -269,26 +251,7 @@ class ObserverHelper(
         return true
     }
 
-    @Synchronized
-    private fun storeDecryptedLog(
-        logEntry: KakaoDB.ChatLogEntry,
-        decryptedMessage: String,
-    ) {
-        val storedLog: MutableMap<String, String?> = HashMap(5)
-        storedLog["_id"] = logEntry.id.toString()
-        storedLog["chat_id"] = logEntry.chatId.toString()
-        storedLog["user_id"] = logEntry.userId.toString()
-        storedLog["message"] = decryptedMessage
-        storedLog["created_at"] = logEntry.createdAt
-
-        lastDecryptedLogs.addFirst(storedLog)
-        if (lastDecryptedLogs.size > MAX_LOGS_STORED) {
-            lastDecryptedLogs.removeLast()
-        }
-    }
-
     companion object {
-        private const val MAX_LOGS_STORED = 50
         private const val MAX_COMMAND_FINGERPRINTS = 256
     }
 

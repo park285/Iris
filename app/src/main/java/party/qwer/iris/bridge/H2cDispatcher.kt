@@ -11,15 +11,19 @@ import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import party.qwer.iris.CommandKind
+import party.qwer.iris.CommandParser
 import party.qwer.iris.Configurable
 import party.qwer.iris.IrisLogger
 import java.io.Closeable
 import java.io.File
 import java.io.FileOutputStream
-import java.util.concurrent.ExecutorService
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.Executors
-import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ThreadFactory
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.random.Random
@@ -88,43 +92,50 @@ class H2cDispatcher : Closeable {
     private val queuedAdmissionKeys =
         java.util.concurrent.ConcurrentHashMap
             .newKeySet<String>()
-    private val deliveryQueue = LinkedBlockingQueue<StoredDelivery>()
     private val workerCounter = AtomicInteger(0)
-    private val workerPool: ExecutorService =
-        Executors.newFixedThreadPool(
-            1,
+    private val schedulerCounter = AtomicInteger(0)
+    private val dispatchExecutor: ThreadPoolExecutor =
+        ThreadPoolExecutor(
+            DISPATCH_WORKER_COUNT,
+            DISPATCH_WORKER_COUNT,
+            0L,
+            TimeUnit.MILLISECONDS,
+            ArrayBlockingQueue<Runnable>(DISPATCH_QUEUE_CAPACITY),
             ThreadFactory { runnable ->
                 Thread(runnable, "Iris-H2cDispatcher-${workerCounter.incrementAndGet()}").apply {
                     isDaemon = true
                 }
             },
         )
+    private val retryScheduler: ScheduledExecutorService =
+        Executors.newSingleThreadScheduledExecutor(
+            ThreadFactory { runnable ->
+                Thread(runnable, "Iris-H2cDispatcher-Scheduler-${schedulerCounter.incrementAndGet()}").apply {
+                    isDaemon = true
+                }
+            },
+        )
 
     init {
+        started = true
         admissionStore.recoverPending().forEach { storedDelivery ->
-            if (queuedAdmissionKeys.add(storedDelivery.handle.key)) {
-                deliveryQueue.put(storedDelivery)
-            }
-        }
-
-        if (!started) {
-            synchronized(this) {
-                if (!started) {
-                    started = true
-                    workerPool.submit {
-                        runWorkerLoop()
-                    }
-                }
+            if (!registerDelivery(storedDelivery)) {
+                IrisLogger.error(
+                    "[H2cDispatcher] Failed to re-register recovered delivery: " +
+                        "route=${storedDelivery.delivery.route}, messageId=${storedDelivery.delivery.messageId}",
+                )
             }
         }
     }
 
     fun route(command: RoutingCommand): RoutingResult {
+        val parsedCommand = CommandParser.parse(command.text)
         val targetRoute =
-            when {
-                command.text.startsWith(PREFIX_COMMENT) -> null
-                command.text.startsWith(PREFIX_GENERIC) -> ROUTE_HOLOLIVE
-                else -> null
+            when (parsedCommand.kind) {
+                CommandKind.WEBHOOK -> ROUTE_HOLOLIVE
+                CommandKind.NONE,
+                CommandKind.COMMENT,
+                -> null
             } ?: return RoutingResult.SKIPPED
         val webhookUrl = Configurable.defaultWebhookEndpoint.takeIf { it.isNotBlank() }
         if (webhookUrl.isNullOrBlank()) {
@@ -132,11 +143,15 @@ class H2cDispatcher : Closeable {
             return RoutingResult.SKIPPED
         }
 
-        val delivery = buildQueuedDelivery(command, webhookUrl, targetRoute)
+        val delivery = buildQueuedDelivery(command.copy(text = parsedCommand.normalizedText), webhookUrl, targetRoute)
         try {
             val storedDelivery = admissionStore.admit(delivery)
-            if (queuedAdmissionKeys.add(storedDelivery.handle.key)) {
-                deliveryQueue.put(storedDelivery)
+            if (!registerDelivery(storedDelivery)) {
+                IrisLogger.error(
+                    "[H2cDispatcher] Failed to schedule admitted delivery: route=$targetRoute, " +
+                        "messageId=${delivery.messageId}",
+                )
+                return RoutingResult.RETRY_LATER
             }
             return RoutingResult.ACCEPTED
         } catch (e: Exception) {
@@ -145,17 +160,15 @@ class H2cDispatcher : Closeable {
                     "messageId=${delivery.messageId}: ${e.message}",
             )
             return RoutingResult.RETRY_LATER
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
-            return RoutingResult.RETRY_LATER
         }
     }
 
     override fun close() {
         started = false
-        workerPool.shutdown()
+        retryScheduler.shutdownNow()
+        dispatchExecutor.shutdown()
         runCatching {
-            if (!workerPool.awaitTermination(WORKER_SHUTDOWN_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+            if (!dispatchExecutor.awaitTermination(WORKER_SHUTDOWN_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
                 IrisLogger.error(
                     "[H2cDispatcher] Worker shutdown timed out; pending outbox files will be recovered on next start.",
                 )
@@ -167,49 +180,103 @@ class H2cDispatcher : Closeable {
         http1Client.connectionPool.evictAll()
     }
 
-    private fun runWorkerLoop() {
-        while (started || deliveryQueue.isNotEmpty()) {
-            try {
-                val item = deliveryQueue.poll(QUEUE_POLL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                if (item != null) {
-                    handleQueuedItem(item)
-                }
-            } catch (_: InterruptedException) {
-                Thread.currentThread().interrupt()
-                return
-            } catch (e: Exception) {
-                IrisLogger.error("[H2cDispatcher] Worker loop error: ${e.message}")
-                try {
-                    Thread.sleep(WORKER_RETRY_DELAY_MS)
-                } catch (_: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                    return
-                }
+    private fun registerDelivery(storedDelivery: StoredDelivery): Boolean {
+        if (!queuedAdmissionKeys.add(storedDelivery.handle.key)) {
+            return true
+        }
+
+        if (submitDispatchAttempt(DispatchAttempt(storedDelivery))) {
+            return true
+        }
+
+        queuedAdmissionKeys.remove(storedDelivery.handle.key)
+        return false
+    }
+
+    private fun submitDispatchAttempt(attempt: DispatchAttempt): Boolean {
+        if (!started) {
+            return false
+        }
+        if (!admissionStore.isRecoverable(attempt.item.handle)) {
+            queuedAdmissionKeys.remove(attempt.item.handle.key)
+            return true
+        }
+
+        return try {
+            dispatchExecutor.execute {
+                processDispatchAttempt(attempt)
             }
+            true
+        } catch (_: RejectedExecutionException) {
+            IrisLogger.error(
+                "[H2cDispatcher] Dispatch queue saturated, scheduling retry: " +
+                    "route=${attempt.item.delivery.route}, messageId=${attempt.item.delivery.messageId}, " +
+                    "attempt=${attempt.attempt + 1}/$MAX_DELIVERY_ATTEMPTS",
+            )
+            scheduleDispatchAttempt(attempt, QUEUE_FULL_RETRY_DELAY_MS)
         }
     }
 
-    @Throws(InterruptedException::class)
-    private fun handleQueuedItem(item: StoredDelivery) {
-        val outcome =
-            try {
-                dispatchWithRetry(item.delivery)
-            } finally {
-                queuedAdmissionKeys.remove(item.handle.key)
-            }
+    private fun scheduleDispatchAttempt(
+        attempt: DispatchAttempt,
+        delayMs: Long,
+    ): Boolean {
+        if (!started) {
+            return false
+        }
 
-        handleDeliveryOutcome(item, outcome)
+        return runCatching {
+            retryScheduler.schedule(
+                {
+                    if (!started || !admissionStore.isRecoverable(attempt.item.handle)) {
+                        return@schedule
+                    }
+
+                    if (!submitDispatchAttempt(attempt) && started) {
+                        IrisLogger.error(
+                            "[H2cDispatcher] Failed to submit scheduled delivery: " +
+                                "route=${attempt.item.delivery.route}, " +
+                                "messageId=${attempt.item.delivery.messageId}, attempt=${attempt.attempt + 1}",
+                        )
+                    }
+                },
+                delayMs,
+                TimeUnit.MILLISECONDS,
+            )
+            true
+        }.getOrElse { error ->
+            IrisLogger.error(
+                "[H2cDispatcher] Failed to schedule delivery attempt: " +
+                    "route=${attempt.item.delivery.route}, " +
+                    "messageId=${attempt.item.delivery.messageId}, delayMs=$delayMs: ${error.message}",
+            )
+            false
+        }
     }
 
-    @Throws(InterruptedException::class)
-    private fun handleDeliveryOutcome(
-        item: StoredDelivery,
-        outcome: DeliveryOutcome,
-    ) {
+    private fun processDispatchAttempt(attempt: DispatchAttempt) {
+        val item = attempt.item
+        val outcome =
+            try {
+                dispatchAttempt(item.delivery, attempt.attempt)
+            } catch (e: Exception) {
+                IrisLogger.error(
+                    "[H2cDispatcher] Dispatch worker error: route=${item.delivery.route}, " +
+                        "messageId=${item.delivery.messageId}, attempt=${attempt.attempt + 1}: ${e.message}",
+                )
+                DeliveryOutcome.RETRY_LATER
+            }
+
         when (outcome) {
-            DeliveryOutcome.SUCCESS -> handleSuccessfulDelivery(item)
-            DeliveryOutcome.DROP -> handleDroppedDelivery(item)
-            DeliveryOutcome.RETRY_LATER -> handleRetryLaterDelivery(item)
+            DeliveryOutcome.SUCCESS -> {
+                queuedAdmissionKeys.remove(item.handle.key)
+                handleSuccessfulDelivery(item)
+            }
+            DeliveryOutcome.DROP -> {
+                queuedAdmissionKeys.remove(item.handle.key)
+                handleDroppedDelivery(item)
+            }
+            DeliveryOutcome.RETRY_LATER -> handleRetryLaterDelivery(attempt)
         }
     }
 
@@ -237,47 +304,53 @@ class H2cDispatcher : Closeable {
         )
     }
 
-    @Throws(InterruptedException::class)
-    private fun handleRetryLaterDelivery(item: StoredDelivery) {
-        IrisLogger.error(
-            "[H2cDispatcher] Delivery deferred for retry: route=${item.delivery.route}, " +
-                "messageId=${item.delivery.messageId}",
-        )
+    private fun handleRetryLaterDelivery(attempt: DispatchAttempt) {
+        when (val retrySchedule = nextDeliveryRetrySchedule(attempt.attempt)) {
+            is DeliveryRetrySchedule.RetryAttempt -> {
+                IrisLogger.error(
+                    "[H2cDispatcher] Delivery retry scheduled: route=${attempt.item.delivery.route}, " +
+                        "messageId=${attempt.item.delivery.messageId}, " +
+                        "nextAttempt=${retrySchedule.nextAttempt + 1}/$MAX_DELIVERY_ATTEMPTS, " +
+                        "delayMs=${retrySchedule.delayMs}",
+                )
+                if (!scheduleDispatchAttempt(attempt.copy(attempt = retrySchedule.nextAttempt), retrySchedule.delayMs)) {
+                    queuedAdmissionKeys.remove(attempt.item.handle.key)
+                    IrisLogger.error(
+                        "[H2cDispatcher] Failed to schedule retry attempt: " +
+                            "route=${attempt.item.delivery.route}, " +
+                            "messageId=${attempt.item.delivery.messageId}",
+                    )
+                }
+            }
 
-        if (started || admissionStore.isRecoverable(item.handle)) {
-            Thread.sleep(RETRY_LATER_REQUEUE_DELAY_MS)
-            if (queuedAdmissionKeys.add(item.handle.key)) {
-                deliveryQueue.put(item)
+            is DeliveryRetrySchedule.RestartPass -> {
+                IrisLogger.error(
+                    "[H2cDispatcher] Exhausted retries: route=${attempt.item.delivery.route}, " +
+                        "messageId=${attempt.item.delivery.messageId}",
+                )
+                IrisLogger.error(
+                    "[H2cDispatcher] Delivery deferred for retry: route=${attempt.item.delivery.route}, " +
+                        "messageId=${attempt.item.delivery.messageId}, delayMs=${retrySchedule.delayMs}",
+                )
+                if (!scheduleDispatchAttempt(attempt.copy(attempt = 0), retrySchedule.delayMs)) {
+                    queuedAdmissionKeys.remove(attempt.item.handle.key)
+                    IrisLogger.error(
+                        "[H2cDispatcher] Failed to reschedule deferred delivery: " +
+                            "route=${attempt.item.delivery.route}, " +
+                            "messageId=${attempt.item.delivery.messageId}",
+                    )
+                }
             }
         }
     }
 
-    private fun dispatchWithRetry(delivery: QueuedDelivery): DeliveryOutcome {
+    private fun dispatchAttempt(
+        delivery: QueuedDelivery,
+        attempt: Int,
+    ): DeliveryOutcome {
         val body = buildRequestBody(delivery)
-
-        for (attempt in 0 until MAX_DELIVERY_ATTEMPTS) {
-            val attemptLabel = "${attempt + 1}/$MAX_DELIVERY_ATTEMPTS"
-            val immediateOutcome = attemptDispatch(delivery, body, attemptLabel)
-            if (immediateOutcome != null) {
-                return immediateOutcome
-            }
-
-            if (attempt == MAX_DELIVERY_ATTEMPTS - 1) {
-                break
-            }
-
-            try {
-                Thread.sleep(nextBackoffDelayMs(attempt))
-            } catch (_: InterruptedException) {
-                Thread.currentThread().interrupt()
-                return DeliveryOutcome.RETRY_LATER
-            }
-        }
-
-        IrisLogger.error(
-            "[H2cDispatcher] Exhausted retries: route=${delivery.route}, messageId=${delivery.messageId}",
-        )
-        return DeliveryOutcome.RETRY_LATER
+        val attemptLabel = "${attempt + 1}/$MAX_DELIVERY_ATTEMPTS"
+        return attemptDispatch(delivery, body, attemptLabel)
     }
 
     private fun buildRequestBody(delivery: QueuedDelivery): String =
@@ -289,14 +362,16 @@ class H2cDispatcher : Closeable {
             put("room", delivery.room)
             put("sender", delivery.sender)
             put("userId", delivery.userId)
-            put("threadId", delivery.threadId ?: "")
+            if (!delivery.threadId.isNullOrBlank()) {
+                put("threadId", delivery.threadId)
+            }
         }.toString()
 
     private fun attemptDispatch(
         delivery: QueuedDelivery,
         body: String,
         attemptLabel: String,
-    ): DeliveryOutcome? =
+    ): DeliveryOutcome =
         try {
             IrisLogger.debug(
                 "[H2cDispatcher] Dispatch attempt started: route=${delivery.route}, url=${delivery.url}, " +
@@ -308,10 +383,14 @@ class H2cDispatcher : Closeable {
                     .url(delivery.url)
                     .post(body.toRequestBody(APPLICATION_JSON.toMediaType()))
                     .header(HEADER_CONTENT_TYPE, APPLICATION_JSON)
-                    .header(HEADER_IRIS_TOKEN, Configurable.webhookToken)
                     .header(HEADER_IRIS_MESSAGE_ID, delivery.messageId)
                     .header(HEADER_IRIS_ROUTE, delivery.route)
-                    .build()
+                    .apply {
+                        val webhookToken = Configurable.webhookToken
+                        if (webhookToken.isNotBlank()) {
+                            header(HEADER_IRIS_TOKEN, webhookToken)
+                        }
+                    }.build()
             clientFor(delivery.url).newCall(request).execute().use { response ->
                 classifyResponse(delivery, attemptLabel, response.code)
             }
@@ -322,14 +401,14 @@ class H2cDispatcher : Closeable {
                     "exceptionClass=${e.javaClass.name}, message=${e.message ?: NONE}, " +
                     "causeClass=${e.cause?.javaClass?.name ?: NONE}, causeMessage=${e.cause?.message ?: NONE}",
             )
-            null
+            DeliveryOutcome.RETRY_LATER
         }
 
     private fun classifyResponse(
         delivery: QueuedDelivery,
         attemptLabel: String,
         statusCode: Int,
-    ): DeliveryOutcome? {
+    ): DeliveryOutcome {
         IrisLogger.debug(
             "[H2cDispatcher] Response received: route=${delivery.route}, url=${delivery.url}, " +
                 "messageId=${delivery.messageId}, attempt=$attemptLabel, status=$statusCode",
@@ -355,7 +434,7 @@ class H2cDispatcher : Closeable {
             "[H2cDispatcher] Retriable status $statusCode for route=${delivery.route}, " +
                 "url=${delivery.url}, messageId=${delivery.messageId}, attempt=$attemptLabel",
         )
-        return null
+        return DeliveryOutcome.RETRY_LATER
     }
 
     private fun buildQueuedDelivery(
@@ -398,25 +477,29 @@ class H2cDispatcher : Closeable {
         RETRY_LATER,
     }
 
+    private data class DispatchAttempt(
+        val item: StoredDelivery,
+        val attempt: Int = 0,
+    )
+
     private enum class WebhookTransport {
         H2C,
         HTTP1,
     }
 
     companion object {
-        private const val QUEUE_POLL_TIMEOUT_MS = 1_000L
-        private const val WORKER_RETRY_DELAY_MS = 1_000L
         private const val WORKER_SHUTDOWN_TIMEOUT_MS = 10_000L
-        private const val RETRY_LATER_REQUEUE_DELAY_MS = 5_000L
+        internal const val RETRY_LATER_REQUEUE_DELAY_MS = 5_000L
+        private const val QUEUE_FULL_RETRY_DELAY_MS = 250L
+        private const val DISPATCH_WORKER_COUNT = 1
+        private const val DISPATCH_QUEUE_CAPACITY = 64
         private const val MAX_CONCURRENT_REQUESTS = 8
         private const val MAX_CONCURRENT_REQUESTS_PER_HOST = 4
         private const val MAX_IDLE_CONNECTIONS = 4
         private const val KEEP_ALIVE_DURATION_MS = 30_000L
-        private const val MAX_DELIVERY_ATTEMPTS = 6
+        internal const val MAX_DELIVERY_ATTEMPTS = 6
 
         private const val ROUTE_HOLOLIVE = "hololive"
-        private const val PREFIX_COMMENT = "//"
-        private const val PREFIX_GENERIC = "!"
 
         private const val HEADER_IRIS_TOKEN = "X-Iris-Token"
         private const val HEADER_IRIS_MESSAGE_ID = "X-Iris-Message-Id"
@@ -442,6 +525,32 @@ private fun nextBackoffDelayMs(attempt: Int): Long {
     val jitter = Random.nextLong(0, 500L + 1)
     return boundedDelay + jitter
 }
+
+internal sealed interface DeliveryRetrySchedule {
+    data class RetryAttempt(
+        val nextAttempt: Int,
+        val delayMs: Long,
+    ) : DeliveryRetrySchedule
+
+    data class RestartPass(
+        val delayMs: Long,
+    ) : DeliveryRetrySchedule
+}
+
+internal fun nextDeliveryRetrySchedule(
+    attempt: Int,
+    maxDeliveryAttempts: Int = H2cDispatcher.MAX_DELIVERY_ATTEMPTS,
+    retryLaterDelayMs: Long = H2cDispatcher.RETRY_LATER_REQUEUE_DELAY_MS,
+    backoffDelayProvider: (Int) -> Long = ::nextBackoffDelayMs,
+): DeliveryRetrySchedule =
+    if (attempt < maxDeliveryAttempts - 1) {
+        DeliveryRetrySchedule.RetryAttempt(
+            nextAttempt = attempt + 1,
+            delayMs = backoffDelayProvider(attempt),
+        )
+    } else {
+        DeliveryRetrySchedule.RestartPass(delayMs = retryLaterDelayMs)
+    }
 
 @Serializable
 private data class QueuedDelivery(

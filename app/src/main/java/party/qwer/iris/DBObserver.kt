@@ -1,56 +1,53 @@
 package party.qwer.iris
 
-import java.util.concurrent.Executors
-import java.util.concurrent.ScheduledExecutorService
-import java.util.concurrent.ScheduledFuture
-import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 class DBObserver(
     private val observerHelper: ObserverHelper,
 ) {
-    private var scheduler: ScheduledExecutorService? = null
-    private var scheduledFuture: ScheduledFuture<*>? = null
+    private val coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     @Volatile
-    private var isObserving: Boolean = false
+    private var pollingJob: Job? = null
 
+    @Synchronized
     fun startPolling() {
-        if (scheduler == null || scheduler!!.isShutdown) {
-            scheduler =
-                Executors.newSingleThreadScheduledExecutor { runnable ->
-                    Thread(runnable, "DB-Polling-Thread")
-                }
+        if (pollingJob?.isActive == true) {
+            IrisLogger.debug("DB Polling thread is already running.")
+            return
         }
 
-        if (scheduledFuture == null || scheduledFuture!!.isCancelled || scheduledFuture!!.isDone) {
-            scheduledFuture =
-                scheduler?.scheduleWithFixedDelay({
+        pollingJob =
+            coroutineScope.launch {
+                IrisLogger.info("DB Polling thread started.")
+                while (isActive) {
                     try {
                         observerHelper.checkChange()
                     } catch (e: Exception) {
-                        IrisLogger.error("Error during DB polling: $e")
+                        IrisLogger.error("Error during DB polling: ${e.message}", e)
                     }
-                }, 0, Configurable.dbPollingRate.takeIf { it > 0 } ?: 1000, TimeUnit.MILLISECONDS)
-            isObserving = true
-            IrisLogger.info("DB Polling thread started.")
-        } else {
-            IrisLogger.debug("DB Polling thread is already running.")
-        }
+
+                    delay(Configurable.dbPollingRate.takeIf { it > 0 } ?: 1000)
+                }
+            }
     }
 
+    @Synchronized
     fun stopPolling() {
-        if (scheduledFuture != null && !scheduledFuture!!.isCancelled && !scheduledFuture!!.isDone) {
-            scheduledFuture?.cancel(true)
-            scheduledFuture = null
-            isObserving = false
-            IrisLogger.info("DB Polling thread stopped.")
-        }
-        if (scheduler != null && !scheduler!!.isShutdown) {
-            scheduler?.shutdown()
-            scheduler = null
-        }
-    }
+        val job = pollingJob ?: return
+        pollingJob = null
 
-    val isPollingThreadAlive: Boolean
-        get() = scheduledFuture != null && !scheduledFuture!!.isCancelled && !scheduledFuture!!.isDone
+        runBlocking {
+            job.cancelAndJoin()
+        }
+        IrisLogger.info("DB Polling thread stopped.")
+    }
 }

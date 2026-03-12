@@ -2,9 +2,6 @@ package party.qwer.iris
 
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteException
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.jsonPrimitive
 import org.json.JSONException
 import org.json.JSONObject
 
@@ -23,42 +20,99 @@ class KakaoDB {
             openedConnection.execSQL("ATTACH DATABASE '$DB_PATH/KakaoTalk2.db' AS db2")
             openedConnection.execSQL("ATTACH DATABASE '$DB_PATH/multi_profile_database.db' AS db3")
             connection = openedConnection
-            Configurable.botId = botUserId
+            when (val resolution = resolveBotUserId(detectBotUserId(), Configurable.botId)) {
+                is BotUserIdResolution.Detected -> {
+                    IrisLogger.info("Bot user_id is detected from chat_logs: ${resolution.botId}")
+                    Configurable.botId = resolution.botId
+                }
+
+                is BotUserIdResolution.ConfigFallback -> {
+                    IrisLogger.info("Using configured bot user_id fallback: ${resolution.botId}")
+                }
+
+                BotUserIdResolution.Missing -> {
+                    IrisLogger.error(
+                        "Warning: Bot user_id not found in chat_logs and no configured fallback exists. " +
+                            "Decryption might not work correctly.",
+                    )
+                }
+            }
         } catch (e: SQLiteException) {
             IrisLogger.error("SQLiteException: ${e.message}", e)
             throw IllegalStateException("You don't have a permission to access KakaoTalk Database.", e)
         }
     }
 
-    val botUserId: Long
-        get() =
-            withPrimaryConnection { db ->
-                db
-                    .rawQuery(
-                        """
-                        SELECT user_id
-                        FROM chat_logs
-                        WHERE v LIKE '%"isMine":true%'
-                        ORDER BY _id DESC
-                        LIMIT 1
-                        """.trimIndent(),
-                        null,
-                    ).use { cursor ->
-                        if (cursor.moveToFirst()) {
-                            val detectedBotUserId = cursor.getLong(0)
-                            IrisLogger.info("Bot user_id is detected: $detectedBotUserId")
-                            detectedBotUserId
-                        } else {
-                            IrisLogger.error(
-                                "Warning: Bot user_id not found in chat_logs with isMine:true. " +
-                                    "Decryption might not work correctly.",
-                            )
-                            0L
+    private fun detectBotUserId(): Long = detectBotUserIdByStringMatch().takeIf { it > 0L } ?: detectBotUserIdByJsonFallback()
+
+    private fun detectBotUserIdByStringMatch(): Long =
+        withPrimaryConnection { db ->
+            db
+                .rawQuery(
+                    """
+                    SELECT user_id
+                    FROM chat_logs
+                    WHERE user_id > 0
+                      AND v LIKE '%"isMine":true%'
+                    ORDER BY _id DESC
+                    LIMIT 1
+                    """.trimIndent(),
+                    null,
+                ).use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        cursor.getLong(0)
+                    } else {
+                        0L
+                    }
+                }
+        }
+
+    private fun detectBotUserIdByJsonFallback(): Long =
+        withPrimaryConnection { db ->
+            db
+                .rawQuery(
+                    """
+                    SELECT user_id, v
+                    FROM chat_logs
+                    WHERE user_id > 0
+                      AND v IS NOT NULL
+                      AND v != ''
+                      AND v LIKE '%"isMine"%'
+                    ORDER BY _id DESC
+                    LIMIT $BOT_USER_ID_FALLBACK_SCAN_LIMIT
+                    """.trimIndent(),
+                    null,
+                ).use { cursor ->
+                    while (cursor.moveToNext()) {
+                        val userId = cursor.getLong(0)
+                        val metadata = cursor.getString(1).orEmpty()
+                        if (!metadata.contains("\"isMine\"")) {
+                            continue
+                        }
+                        val isMine =
+                            runCatching {
+                                JSONObject(metadata).optBoolean("isMine", false)
+                            }.getOrDefault(false)
+                        if (isMine) {
+                            return@use userId
                         }
                     }
-            }
+                    0L
+                }
+        }
 
-    fun getNameOfUserId(userId: Long): String? {
+    fun resolveSenderName(userId: Long): String {
+        if (userId == Configurable.botId) {
+            return Configurable.botName
+        }
+
+        return getNameOfUserId(userId)
+            ?.trim()
+            ?.takeUnless { it.isEmpty() || it.equals("Unknown", ignoreCase = true) }
+            ?: userId.toString()
+    }
+
+    private fun getNameOfUserId(userId: Long): String? {
         val bindArgs = arrayOf(userId.toString())
         val sql =
             if (hasOpenChatMember) {
@@ -77,71 +131,30 @@ class KakaoDB {
         return withPrimaryConnection { db ->
             db.rawQuery(sql, bindArgs).use { cursor ->
                 if (!cursor.moveToNext()) {
-                    IrisLogger.error("[getNameOfUserId] No user found for userId=$userId")
+                    IrisLogger.debugLazy { "[getNameOfUserId] No user found for userId=$userId" }
                     return@use "Unknown"
                 }
 
                 val encryptedName = cursor.getString(cursor.getColumnIndexOrThrow("name"))
                 val enc = cursor.getInt(cursor.getColumnIndexOrThrow("enc"))
                 if (encryptedName == null) {
-                    IrisLogger.error("[getNameOfUserId] name column is null for userId=$userId")
+                    IrisLogger.debugLazy { "[getNameOfUserId] name column is null for userId=$userId" }
                     return@use "Unknown"
                 }
 
+                val botId = Configurable.botId
+                if (botId <= 0L) {
+                    return@use encryptedName
+                }
+
                 try {
-                    KakaoDecrypt.decrypt(enc, encryptedName, Configurable.botId)
+                    KakaoDecrypt.decrypt(enc, encryptedName, botId)
                 } catch (e: Exception) {
-                    IrisLogger.error("Decryption error in getNameOfUserId: $e")
+                    IrisLogger.debugLazy { "Decryption error in getNameOfUserId: $e" }
                     encryptedName
                 }
             }
         }
-    }
-
-    fun getChatInfo(
-        chatId: Long,
-        userId: Long,
-    ): Array<String?> {
-        val sender =
-            if (userId == Configurable.botId) {
-                Configurable.botName
-            } else {
-                getNameOfUserId(userId)
-            }
-
-        withPrimaryConnection { db ->
-            db
-                .rawQuery(
-                    "SELECT private_meta FROM chat_rooms WHERE id = ?",
-                    arrayOf(chatId.toString()),
-                ).use { cursor ->
-                    if (cursor.moveToNext()) {
-                        val value = cursor.getString(0)
-                        if (!value.isNullOrEmpty()) {
-                            try {
-                                val meta = Json.decodeFromString<Map<String, JsonElement>>(value)
-                                val name = meta["name"]?.jsonPrimitive?.content
-                                if (!name.isNullOrBlank()) {
-                                    return arrayOf(name, sender)
-                                }
-                            } catch (_: Exception) {
-                            }
-                        }
-                    }
-                }
-
-            db
-                .rawQuery(
-                    "SELECT name FROM db2.open_link WHERE id = (SELECT link_id FROM chat_rooms WHERE id = ?)",
-                    arrayOf(chatId.toString()),
-                ).use { cursor ->
-                    if (cursor.moveToNext()) {
-                        return arrayOf(cursor.getString(0), sender)
-                    }
-                }
-        }
-
-        return arrayOf(sender, sender)
     }
 
     fun latestLogId(): Long =
@@ -164,7 +177,7 @@ class KakaoDB {
             db
                 .rawQuery(
                     """
-                    SELECT _id, chat_id, user_id, message, attachment, type, v, created_at
+                    SELECT _id, chat_id, user_id, message, v, created_at
                     FROM chat_logs
                     WHERE _id > ?
                     ORDER BY _id ASC
@@ -180,10 +193,8 @@ class KakaoDB {
                                 chatId = cursor.getLong(1),
                                 userId = cursor.getLong(2),
                                 message = cursor.getString(3).orEmpty(),
-                                attachment = cursor.getString(4),
-                                type = cursor.getString(5),
-                                metadata = cursor.getString(6).orEmpty(),
-                                createdAt = cursor.getString(7),
+                                metadata = cursor.getString(4).orEmpty(),
+                                createdAt = cursor.getString(5),
                             ),
                         )
                     }
@@ -273,8 +284,6 @@ class KakaoDB {
         val chatId: Long,
         val userId: Long,
         val message: String,
-        val attachment: String?,
-        val type: String?,
         val metadata: String,
         val createdAt: String?,
     )
@@ -283,6 +292,7 @@ class KakaoDB {
         private val DB_PATH = "${PathUtils.getAppPath()}databases"
         const val DEFAULT_QUERY_RESULT_LIMIT = 500
         const val DEFAULT_POLL_BATCH_SIZE = 100
+        private const val BOT_USER_ID_FALLBACK_SCAN_LIMIT = 200
 
         fun decryptRow(row: Map<String, String?>): Map<String, String?> {
             @Suppress("NAME_SHADOWING")
@@ -297,7 +307,9 @@ class KakaoDB {
                             val enc = vJson.optInt("enc", 0)
                             val userId = row["user_id"]?.toLongOrNull() ?: Configurable.botId
                             val keysToDecrypt = arrayOf("message", "attachment")
-                            row = decryptRowValues(row, enc, userId, keysToDecrypt)
+                            if (userId > 0L) {
+                                row = decryptRowValues(row, enc, userId, keysToDecrypt)
+                            }
                         } catch (e: JSONException) {
                             IrisLogger.error("Error parsing 'v' for decryption: $e")
                         }
@@ -319,21 +331,23 @@ class KakaoDB {
 
                 if (row.contains("enc") && keywords.any { row.contains(it) }) {
                     val botId = Configurable.botId
-                    val enc = row["enc"]?.toIntOrNull() ?: 0
-                    val keysToDecrypt =
-                        arrayOf(
-                            "nick_name",
-                            "name",
-                            "nickname",
-                            "profile_image_url",
-                            "full_profile_image_url",
-                            "original_profile_image_url",
-                            "status_message",
-                            "contact_name",
-                            "v",
-                            "board_v",
-                        )
-                    row = decryptRowValues(row, enc, botId, keysToDecrypt)
+                    if (botId > 0L) {
+                        val enc = row["enc"]?.toIntOrNull() ?: 0
+                        val keysToDecrypt =
+                            arrayOf(
+                                "nick_name",
+                                "name",
+                                "nickname",
+                                "profile_image_url",
+                                "full_profile_image_url",
+                                "original_profile_image_url",
+                                "status_message",
+                                "contact_name",
+                                "v",
+                                "board_v",
+                            )
+                        row = decryptRowValues(row, enc, botId, keysToDecrypt)
+                    }
                 }
             } catch (e: Exception) {
                 IrisLogger.error("JSON processing error during decryption: $e")
@@ -366,3 +380,29 @@ class KakaoDB {
         }
     }
 }
+
+internal sealed interface BotUserIdResolution {
+    val botId: Long
+
+    data class Detected(
+        override val botId: Long,
+    ) : BotUserIdResolution
+
+    data class ConfigFallback(
+        override val botId: Long,
+    ) : BotUserIdResolution
+
+    data object Missing : BotUserIdResolution {
+        override val botId: Long = 0L
+    }
+}
+
+internal fun resolveBotUserId(
+    detectedBotId: Long,
+    configuredBotId: Long,
+): BotUserIdResolution =
+    when {
+        detectedBotId > 0L -> BotUserIdResolution.Detected(detectedBotId)
+        configuredBotId > 0L -> BotUserIdResolution.ConfigFallback(configuredBotId)
+        else -> BotUserIdResolution.Missing
+    }

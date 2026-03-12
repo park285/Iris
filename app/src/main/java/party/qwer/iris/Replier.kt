@@ -6,18 +6,20 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.text.SpannableStringBuilder
-import android.util.Base64
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.runBlocking
 import party.qwer.iris.Replier.Companion.SendMessageRequest
 import java.io.File
+import java.util.Base64
+import java.util.UUID
 
 // SendMsg : ye-seola/go-kdb
 
@@ -26,59 +28,74 @@ class Replier {
         private const val MESSAGE_CHANNEL_CAPACITY = 64
         private const val LOG_MESSAGE_PREVIEW_LENGTH = 30
         private val messageChannel = Channel<SendMessageRequest>(capacity = MESSAGE_CHANNEL_CAPACITY)
-        private val coroutineScope = CoroutineScope(Dispatchers.IO)
+        private val coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         private var messageSenderJob: Job? = null
-        private val mutex = Mutex()
-        private val imageDir = File(IMAGE_DIR_PATH)
+        private val imageDir = File(IRIS_IMAGE_DIR_PATH)
+        private val imageMediaScanEnabled =
+            System
+                .getenv("IRIS_IMAGE_MEDIA_SCAN")
+                ?.trim()
+                ?.lowercase()
+                ?.let { raw -> raw != "0" && raw != "false" && raw != "off" }
+                ?: true
 
-        init {
-            startMessageSender()
-        }
-
+        @OptIn(DelicateCoroutinesApi::class)
+        @Synchronized
         fun startMessageSender() {
-            coroutineScope.launch {
-                IrisLogger.debug("[Replier] startMessageSender called")
-                if (messageSenderJob?.isActive == true) {
-                    IrisLogger.debug("[Replier] Cancelling existing messageSenderJob")
-                    messageSenderJob?.cancelAndJoin()
-                }
-                messageSenderJob =
-                    launch {
-                        IrisLogger.debug("[Replier] messageSenderJob started, waiting for messages...")
-                        for (request in messageChannel) {
-                            try {
-                                IrisLogger.debug("[Replier] Processing message from channel")
-                                mutex.withLock {
-                                    IrisLogger.debug("[Replier] Sending message...")
-                                    request.send()
-                                    IrisLogger.debug("[Replier] Message sent successfully")
-                                    delay(Configurable.messageSendRate)
-                                }
-                            } catch (e: Exception) {
-                                IrisLogger.error("[Replier] Error sending message from channel: ${e.message}", e)
-                            }
-                        }
-                        IrisLogger.debug("[Replier] messageSenderJob terminated (channel closed)")
-                    }
-                IrisLogger.debug("[Replier] messageSenderJob launched")
+            if (messageChannel.isClosedForSend) {
+                IrisLogger.error("[Replier] Cannot start message sender after shutdown")
+                return
             }
+            if (messageSenderJob?.isActive == true) {
+                IrisLogger.debug("[Replier] messageSenderJob is already running")
+                return
+            }
+
+            messageSenderJob =
+                coroutineScope.launch {
+                    IrisLogger.debug("[Replier] messageSenderJob started, waiting for messages...")
+                    for (request in messageChannel) {
+                        try {
+                            IrisLogger.debug("[Replier] Processing message from channel")
+                            request.send()
+                            IrisLogger.debug("[Replier] Message sent successfully")
+                            delay(Configurable.messageSendRate)
+                        } catch (e: Exception) {
+                            IrisLogger.error("[Replier] Error sending message from channel: ${e.message}", e)
+                        }
+                    }
+                    IrisLogger.debug("[Replier] messageSenderJob terminated (channel closed)")
+                }
+            IrisLogger.debug("[Replier] messageSenderJob launched")
         }
 
+        @OptIn(DelicateCoroutinesApi::class)
+        @Synchronized
         fun restartMessageSender() {
+            if (messageChannel.isClosedForSend) {
+                IrisLogger.error("[Replier] Cannot restart message sender after shutdown")
+                return
+            }
+            runBlocking {
+                messageSenderJob?.cancelAndJoin()
+            }
+            messageSenderJob = null
             startMessageSender()
         }
 
         /**
          * 종료 시 채널을 닫고 대기 중인 메시지 처리를 기다림.
          */
+        @Synchronized
         fun shutdown() {
             IrisLogger.info("[Replier] Shutting down message channel...")
             messageChannel.close()
             messageSenderJob?.let { job ->
-                kotlinx.coroutines.runBlocking {
+                runBlocking {
                     job.join()
                 }
             }
+            messageSenderJob = null
             IrisLogger.info("[Replier] Message channel closed")
         }
 
@@ -162,70 +179,115 @@ class Replier {
             chatId: Long,
             msg: String,
             threadId: Long?,
-        ) {
-            coroutineScope.launch {
-                IrisLogger.debugLazy { "[Replier] sendMessage called: chatId=$chatId, msg='${msg.take(LOG_MESSAGE_PREVIEW_LENGTH)}...'" }
-                messageChannel.send(
-                    SendMessageRequest {
-                        IrisLogger.debugLazy { "[Replier] sendMessageInternal executing for chatId=$chatId" }
-                        sendMessageInternal(
-                            referer,
-                            chatId,
-                            msg,
-                            threadId,
-                        )
-                        IrisLogger.debugLazy { "[Replier] sendMessageInternal completed for chatId=$chatId" }
-                    },
-                )
-                IrisLogger.debug("[Replier] Message queued to channel successfully")
-            }
+        ): ReplyAdmissionResult {
+            IrisLogger.debugLazy { "[Replier] sendMessage called: chatId=$chatId, msg='${msg.take(LOG_MESSAGE_PREVIEW_LENGTH)}...'" }
+            return enqueueRequest(
+                SendMessageRequest {
+                    IrisLogger.debugLazy { "[Replier] sendMessageInternal executing for chatId=$chatId" }
+                    sendMessageInternal(
+                        referer,
+                        chatId,
+                        msg,
+                        threadId,
+                    )
+                    IrisLogger.debugLazy { "[Replier] sendMessageInternal completed for chatId=$chatId" }
+                },
+            )
         }
 
         fun sendPhoto(
             room: Long,
             base64ImageDataString: String,
-        ) {
-            coroutineScope.launch {
-                val preparedImages =
-                    prepareImages(
-                        room = room,
-                        base64ImageDataStrings = listOf(base64ImageDataString),
-                    ) ?: return@launch
-                messageChannel.send(
-                    SendMessageRequest {
-                        sendPreparedImages(preparedImages)
-                    },
+        ): ReplyAdmissionResult {
+            val imagePayloads = listOf(base64ImageDataString)
+            if (!isValidBase64ImagePayloads(imagePayloads)) {
+                return ReplyAdmissionResult(
+                    ReplyAdmissionStatus.INVALID_PAYLOAD,
+                    "image replies require valid base64 payload",
                 )
             }
+            return enqueueRequest(
+                SendMessageRequest {
+                    sendImages(
+                        room = room,
+                        base64ImageDataStrings = imagePayloads,
+                    )
+                },
+            )
         }
 
         fun sendMultiplePhotos(
             room: Long,
             base64ImageDataStrings: List<String>,
-        ) {
-            coroutineScope.launch {
-                val preparedImages =
-                    prepareImages(
-                        room = room,
-                        base64ImageDataStrings = base64ImageDataStrings,
-                    ) ?: return@launch
-                messageChannel.send(
-                    SendMessageRequest {
-                        sendPreparedImages(preparedImages)
-                    },
+        ): ReplyAdmissionResult {
+            if (!isValidBase64ImagePayloads(base64ImageDataStrings)) {
+                return ReplyAdmissionResult(
+                    ReplyAdmissionStatus.INVALID_PAYLOAD,
+                    "image_multiple replies require at least one valid base64 payload",
                 )
             }
+            return enqueueRequest(
+                SendMessageRequest {
+                    sendImages(
+                        room = room,
+                        base64ImageDataStrings = base64ImageDataStrings,
+                    )
+                },
+            )
+        }
+
+        @Synchronized
+        private fun enqueueRequest(request: SendMessageRequest): ReplyAdmissionResult {
+            if (messageSenderJob?.isActive != true) {
+                IrisLogger.error("[Replier] Rejecting enqueue because sender is unavailable")
+                return ReplyAdmissionResult(
+                    ReplyAdmissionStatus.SHUTDOWN,
+                    "reply sender unavailable",
+                )
+            }
+
+            val sendResult = messageChannel.trySend(request)
+            return when {
+                sendResult.isSuccess -> {
+                    IrisLogger.debug("[Replier] Message queued to channel successfully")
+                    ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
+                }
+                sendResult.isClosed -> {
+                    IrisLogger.error("[Replier] Rejecting enqueue because channel is closed")
+                    ReplyAdmissionResult(
+                        ReplyAdmissionStatus.SHUTDOWN,
+                        "reply sender unavailable",
+                    )
+                }
+                else -> {
+                    IrisLogger.error("[Replier] Rejecting enqueue because queue is full")
+                    ReplyAdmissionResult(
+                        ReplyAdmissionStatus.QUEUE_FULL,
+                        "reply queue is full",
+                    )
+                }
+            }
+        }
+
+        private fun sendImages(
+            room: Long,
+            base64ImageDataStrings: List<String>,
+        ) {
+            val preparedImages = prepareImages(room, base64ImageDataStrings)
+            sendPreparedImages(preparedImages)
         }
 
         private fun prepareImages(
             room: Long,
             base64ImageDataStrings: List<String>,
-        ): PreparedImages? =
+        ): PreparedImages =
             try {
                 prepareImagesInternal(room, base64ImageDataStrings)
+            } catch (e: IllegalArgumentException) {
+                throw IllegalArgumentException("invalid image payload for room=$room: ${e.message}", e)
             } catch (e: Exception) {
                 IrisLogger.error("Error preparing images for room=$room: ${e.message}", e)
-                null
+                throw e
             }
 
         private fun prepareImagesInternal(
@@ -233,29 +295,41 @@ class Replier {
             base64ImageDataStrings: List<String>,
         ): PreparedImages {
             require(base64ImageDataStrings.isNotEmpty()) { "no image data provided" }
-            if (!imageDir.exists()) {
-                check(imageDir.mkdirs() || imageDir.exists()) {
-                    "Failed to create image directory: ${imageDir.absolutePath}"
-                }
-            }
+            ensureImageDir(imageDir)
 
-            val timestamp = System.currentTimeMillis().toString()
             val uris = ArrayList<Uri>(base64ImageDataStrings.size)
-            base64ImageDataStrings.forEachIndexed { idx, base64ImageDataString ->
-                val decodedImage = Base64.decode(base64ImageDataString, Base64.DEFAULT)
-                val imageFile =
-                    File(imageDir, "${timestamp}_$idx.png").apply {
-                        writeBytes(decodedImage)
+            val createdFiles = ArrayList<File>(base64ImageDataStrings.size)
+            try {
+                base64ImageDataStrings.forEach { base64ImageDataString ->
+                    val decodedImage = decodeBase64Image(base64ImageDataString)
+                    val extension = detectImageFileExtension(decodedImage)
+                    val imageFile =
+                        File(imageDir, "${UUID.randomUUID()}.$extension").apply {
+                            writeBytes(decodedImage)
+                        }
+
+                    createdFiles.add(imageFile)
+                    val imageUri = Uri.fromFile(imageFile)
+                    if (imageMediaScanEnabled) {
+                        mediaScan(imageUri)
                     }
+                    uris.add(imageUri)
+                }
 
-                val imageUri = Uri.fromFile(imageFile)
-                mediaScan(imageUri)
-                uris.add(imageUri)
+                require(uris.isNotEmpty()) { "no image URIs created" }
+                return PreparedImages(
+                    room = room,
+                    uris = uris,
+                    files = createdFiles,
+                )
+            } catch (e: Exception) {
+                createdFiles.forEach { file ->
+                    if (file.exists() && !file.delete()) {
+                        IrisLogger.error("Failed to delete partially prepared image file: ${file.absolutePath}")
+                    }
+                }
+                throw e
             }
-
-            require(uris.isNotEmpty()) { "no image URIs created" }
-
-            return PreparedImages(room = room, uris = ArrayList(uris))
         }
 
         private fun sendPreparedImages(preparedImages: PreparedImages) {
@@ -274,6 +348,7 @@ class Replier {
                 AndroidHiddenApi.startActivity(intent)
             } catch (e: Exception) {
                 IrisLogger.error("Error starting activity for sending multiple photos: $e")
+                cleanupPreparedImages(preparedImages)
                 throw e
             }
         }
@@ -281,11 +356,6 @@ class Replier {
         internal fun interface SendMessageRequest {
             suspend fun send()
         }
-
-        private data class PreparedImages(
-            val room: Long,
-            val uris: ArrayList<Uri>,
-        )
 
         // Android Q+ deprecated ACTION_MEDIA_SCANNER_SCAN_FILE
         // Context 없는 환경이므로 MediaScannerConnection 사용 불가
@@ -300,3 +370,90 @@ class Replier {
         }
     }
 }
+
+private data class PreparedImages(
+    val room: Long,
+    val uris: ArrayList<Uri>,
+    val files: ArrayList<File>,
+)
+
+private fun ensureImageDir(imageDir: File) {
+    if (imageDir.exists()) {
+        return
+    }
+    check(imageDir.mkdirs() || imageDir.exists()) {
+        "Failed to create image directory: ${imageDir.absolutePath}"
+    }
+}
+
+private fun cleanupPreparedImages(preparedImages: PreparedImages) {
+    preparedImages.files.forEach { file ->
+        if (file.exists() && !file.delete()) {
+            IrisLogger.error("Failed to delete prepared image file: ${file.absolutePath}")
+        }
+    }
+}
+
+private val base64MimeDecoder = Base64.getMimeDecoder()
+
+internal fun isValidBase64ImagePayloads(base64ImageDataStrings: List<String>): Boolean =
+    try {
+        require(base64ImageDataStrings.isNotEmpty())
+        base64ImageDataStrings.forEach { decodeBase64Image(it) }
+        true
+    } catch (_: IllegalArgumentException) {
+        false
+    }
+
+private fun decodeBase64Image(base64ImageDataString: String): ByteArray = base64MimeDecoder.decode(base64ImageDataString)
+
+internal fun detectImageFileExtension(imageBytes: ByteArray): String {
+    if (isPngSignature(imageBytes)) {
+        return "png"
+    }
+
+    if (isJpegSignature(imageBytes)) {
+        return "jpg"
+    }
+
+    if (isWebpSignature(imageBytes)) {
+        return "webp"
+    }
+
+    if (isGifSignature(imageBytes)) {
+        return "gif"
+    }
+
+    return "img"
+}
+
+private fun isPngSignature(imageBytes: ByteArray): Boolean =
+    imageBytes.size >= 8 &&
+        imageBytes[0] == 0x89.toByte() &&
+        imageBytes[1] == 0x50.toByte() &&
+        imageBytes[2] == 0x4E.toByte() &&
+        imageBytes[3] == 0x47.toByte()
+
+private fun isJpegSignature(imageBytes: ByteArray): Boolean =
+    imageBytes.size >= 3 &&
+        imageBytes[0] == 0xFF.toByte() &&
+        imageBytes[1] == 0xD8.toByte() &&
+        imageBytes[2] == 0xFF.toByte()
+
+private fun isWebpSignature(imageBytes: ByteArray): Boolean =
+    imageBytes.size >= 12 &&
+        imageBytes[0] == 0x52.toByte() &&
+        imageBytes[1] == 0x49.toByte() &&
+        imageBytes[2] == 0x46.toByte() &&
+        imageBytes[3] == 0x46.toByte() &&
+        imageBytes[8] == 0x57.toByte() &&
+        imageBytes[9] == 0x45.toByte() &&
+        imageBytes[10] == 0x42.toByte() &&
+        imageBytes[11] == 0x50.toByte()
+
+private fun isGifSignature(imageBytes: ByteArray): Boolean =
+    imageBytes.size >= 4 &&
+        imageBytes[0] == 0x47.toByte() &&
+        imageBytes[1] == 0x49.toByte() &&
+        imageBytes[2] == 0x46.toByte() &&
+        imageBytes[3] == 0x38.toByte()
