@@ -8,7 +8,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import party.qwer.iris.model.ConfigValues
 
 private const val LEGACY_WEBHOOKS_KEY = "webhooks"
-private const val LEGACY_DEFAULT_WEBHOOK_ROUTE = "hololive"
+internal const val DEFAULT_WEBHOOK_ROUTE = "hololive"
 
 internal data class DecodedConfigValues(
     val values: ConfigValues,
@@ -21,30 +21,108 @@ internal fun decodeConfigValues(
 ): DecodedConfigValues {
     val rawRoot = json.parseToJsonElement(jsonString).jsonObject
     val decodedValues = json.decodeFromJsonElement(ConfigValues.serializer(), rawRoot)
-    if (decodedValues.endpoint.isNotBlank()) {
-        return DecodedConfigValues(values = decodedValues, migratedLegacyEndpoint = false)
+    val legacyEndpoint =
+        decodedValues.endpoint
+            .trim()
+            .takeIf { it.isNotEmpty() }
+            ?: extractLegacyEndpoint(rawRoot)
+    val migratedLegacyEndpoint = decodedValues.endpoint.isBlank() && !legacyEndpoint.isNullOrBlank()
+    val normalizedValues =
+        normalizeWebhookConfig(
+            if (migratedLegacyEndpoint) {
+                decodedValues.copy(endpoint = legacyEndpoint.orEmpty())
+            } else {
+                decodedValues
+            },
+        )
+
+    return DecodedConfigValues(
+        values = normalizedValues,
+        migratedLegacyEndpoint = migratedLegacyEndpoint,
+    )
+}
+
+internal fun configuredWebhookEndpoint(
+    values: ConfigValues,
+    route: String,
+): String {
+    val normalizedRoute = route.trim()
+    if (normalizedRoute.isEmpty()) {
+        return ""
     }
 
-    val legacyEndpoint = extractLegacyEndpoint(rawRoot) ?: return DecodedConfigValues(decodedValues, false)
-    return DecodedConfigValues(
-        values = decodedValues.copy(endpoint = legacyEndpoint),
-        migratedLegacyEndpoint = true,
+    val routeEndpoint = values.webhooks[normalizedRoute]?.trim().orEmpty()
+    if (routeEndpoint.isNotEmpty()) {
+        return routeEndpoint
+    }
+
+    return values.endpoint.trim()
+}
+
+internal fun normalizeWebhookConfig(values: ConfigValues): ConfigValues {
+    val normalizedEndpoint = values.endpoint.trim()
+    val normalizedWebhooks =
+        values.webhooks.entries
+            .asSequence()
+            .mapNotNull { entry ->
+                val route = entry.key.trim()
+                val endpoint = entry.value.trim()
+                if (route.isEmpty() || endpoint.isEmpty()) {
+                    null
+                } else {
+                    route to endpoint
+                }
+            }.toMap(linkedMapOf())
+    val defaultEndpoint = normalizedWebhooks[DEFAULT_WEBHOOK_ROUTE].orEmpty().ifBlank { normalizedEndpoint }
+    val syncedWebhooks =
+        if (defaultEndpoint.isBlank()) {
+            normalizedWebhooks
+        } else {
+            normalizedWebhooks + (DEFAULT_WEBHOOK_ROUTE to defaultEndpoint)
+        }
+
+    return values.copy(
+        endpoint = defaultEndpoint,
+        webhooks = syncedWebhooks,
     )
+}
+
+internal fun updateWebhookConfig(
+    values: ConfigValues,
+    route: String,
+    endpoint: String,
+): ConfigValues {
+    val normalizedRoute = route.trim()
+    val normalizedEndpoint = endpoint.trim()
+    val updatedWebhooks = values.webhooks.toMutableMap()
+
+    if (normalizedEndpoint.isBlank()) {
+        updatedWebhooks.remove(normalizedRoute)
+    } else {
+        updatedWebhooks[normalizedRoute] = normalizedEndpoint
+    }
+
+    val updatedValues =
+        if (normalizedRoute == DEFAULT_WEBHOOK_ROUTE) {
+            values.copy(
+                endpoint = normalizedEndpoint,
+                webhooks = updatedWebhooks,
+            )
+        } else {
+            values.copy(webhooks = updatedWebhooks)
+        }
+
+    return normalizeWebhookConfig(updatedValues)
 }
 
 internal fun extractLegacyEndpoint(root: JsonObject): String? {
     val legacyWebhooks = root[LEGACY_WEBHOOKS_KEY]?.jsonObject ?: return null
-    legacyWebhooks[LEGACY_DEFAULT_WEBHOOK_ROUTE]
+    legacyWebhooks[DEFAULT_WEBHOOK_ROUTE]
         ?.jsonPrimitive
         ?.contentOrNull
         ?.trim()
         ?.takeIf { it.isNotEmpty() }
         ?.let { return it }
 
-    return legacyWebhooks.values
-        .firstNotNullOfOrNull { entry ->
-            entry.jsonPrimitive.contentOrNull
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() }
-        }
+    return null
 }

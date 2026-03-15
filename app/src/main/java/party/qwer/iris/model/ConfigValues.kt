@@ -9,6 +9,8 @@ data class ConfigValues(
     var botHttpPort: Int = 3000,
     @SerialName("endpoint")
     var endpoint: String = "",
+    @SerialName("webhooks")
+    var webhooks: Map<String, String> = emptyMap(),
     @SerialName("webhookToken")
     var webhookToken: String = "",
     @SerialName("botToken")

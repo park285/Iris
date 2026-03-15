@@ -48,6 +48,29 @@ class ConfigSerializationTest {
             )
 
         assertEquals("http://legacy", decoded.values.endpoint)
+        assertEquals("http://legacy", decoded.values.webhooks["hololive"])
+        assertTrue(decoded.migratedLegacyEndpoint)
+    }
+
+    @Test
+    fun `preserves multiple webhook routes while deriving default endpoint from hololive`() {
+        val decoded =
+            decodeConfigValues(
+                json,
+                """
+                {
+                  "botName": "Iris",
+                  "webhooks": {
+                    "hololive": "http://hololive",
+                    "chatbotgo": "http://chatbotgo"
+                  }
+                }
+                """.trimIndent(),
+            )
+
+        assertEquals("http://hololive", decoded.values.endpoint)
+        assertEquals("http://hololive", decoded.values.webhooks["hololive"])
+        assertEquals("http://chatbotgo", decoded.values.webhooks["chatbotgo"])
         assertTrue(decoded.migratedLegacyEndpoint)
     }
 
