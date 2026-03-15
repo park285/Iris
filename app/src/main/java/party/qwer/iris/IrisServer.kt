@@ -5,9 +5,12 @@ import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.install
-import io.ktor.server.cio.CIO
+import io.ktor.server.application.serverConfig
+import io.ktor.server.engine.applicationEnvironment
+import io.ktor.server.engine.connector
 import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
+import io.ktor.server.netty.Netty
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.request.receive
@@ -66,14 +69,29 @@ class IrisServer(
     }
 
     private fun createServer(): EmbeddedServer<*, *> =
-        embeddedServer(
-            CIO,
-            port = Configurable.botSocketPort,
-            host = "0.0.0.0",
-        ) {
-            configureContentNegotiation()
-            configureStatusPages()
-            configureRouting()
+        when (irisServerEngine()) {
+            IrisServerEngine.NETTY -> {
+                val transport = irisServerTransportConfig()
+                val environment = applicationEnvironment { }
+                val config =
+                    serverConfig(environment) {
+                        module {
+                            with(this@IrisServer) {
+                                configureContentNegotiation()
+                                configureStatusPages()
+                                configureRouting()
+                            }
+                        }
+                    }
+                embeddedServer(Netty, config) {
+                    connector {
+                        port = Configurable.botSocketPort
+                        host = "0.0.0.0"
+                    }
+                    enableHttp2 = transport.enableHttp2
+                    enableH2c = transport.enableH2c
+                }
+            }
         }
 
     private fun Application.configureContentNegotiation() {
@@ -213,17 +231,34 @@ class IrisServer(
         name: String,
         request: ConfigRequest,
     ): ConfigUpdateOutcome {
+        val route = resolveEndpointRoute(request.route)
         val value = request.endpoint?.trim() ?: throw ApiRequestException("missing endpoint value")
         if (value.isNotEmpty() && !value.startsWith("http://") && !value.startsWith("https://")) {
             throw ApiRequestException("endpoint must start with http:// or https://")
         }
 
-        Configurable.defaultWebhookEndpoint = value
+        Configurable.setWebhookEndpoint(route, value)
         return ConfigUpdateOutcome(
-            name = name,
+            name =
+                if (route == DEFAULT_WEBHOOK_ROUTE) {
+                    name
+                } else {
+                    "$name.$route"
+                },
             applied = true,
             requiresRestart = false,
         )
+    }
+
+    private fun resolveEndpointRoute(rawRoute: String?): String {
+        val normalized = rawRoute?.trim().orEmpty()
+        if (normalized.isEmpty()) {
+            return DEFAULT_WEBHOOK_ROUTE
+        }
+        if (!normalized.all { it.isLetterOrDigit() || it == '-' || it == '_' }) {
+            throw ApiRequestException("route must contain only letters, digits, '-' or '_'")
+        }
+        return normalized
     }
 
     private fun updateDbRateConfig(
@@ -382,6 +417,23 @@ private data class ConfigUpdateOutcome(
     val applied: Boolean,
     val requiresRestart: Boolean,
 )
+
+internal enum class IrisServerEngine {
+    NETTY,
+}
+
+internal fun irisServerEngine(): IrisServerEngine = IrisServerEngine.NETTY
+
+internal data class IrisServerTransportConfig(
+    val enableHttp2: Boolean,
+    val enableH2c: Boolean,
+)
+
+internal fun irisServerTransportConfig(): IrisServerTransportConfig =
+    IrisServerTransportConfig(
+        enableHttp2 = true,
+        enableH2c = true,
+    )
 
 private fun invalidRequest(message: String): Nothing = throw ApiRequestException(message)
 
