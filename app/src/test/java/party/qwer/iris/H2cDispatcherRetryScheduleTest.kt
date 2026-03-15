@@ -12,7 +12,6 @@ class H2cDispatcherRetryScheduleTest {
             nextDeliveryRetrySchedule(
                 attempt = 2,
                 maxDeliveryAttempts = 6,
-                retryLaterDelayMs = 5_000L,
                 backoffDelayProvider = { 1_500L + it },
             )
 
@@ -26,17 +25,16 @@ class H2cDispatcherRetryScheduleTest {
     }
 
     @Test
-    fun `resets to deferred retry after the last attempt in a pass`() {
+    fun `marks delivery exhausted after the last attempt in a pass`() {
         val schedule =
             nextDeliveryRetrySchedule(
                 attempt = 5,
                 maxDeliveryAttempts = 6,
-                retryLaterDelayMs = 5_000L,
                 backoffDelayProvider = { error("backoff should not be used after the last attempt") },
             )
 
         assertEquals(
-            DeliveryRetrySchedule.RestartPass(delayMs = 5_000L),
+            DeliveryRetrySchedule.Exhausted,
             schedule,
         )
     }
