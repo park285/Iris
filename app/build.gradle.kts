@@ -39,6 +39,8 @@ android {
         resources {
             excludes +=
                 setOf(
+                    "META-INF/INDEX.LIST",
+                    "META-INF/io.netty.versions.properties",
                     "META-INF/LICENSE*",
                     "META-INF/NOTICE*",
                     "META-INF/*.md",
@@ -101,6 +103,7 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
 
     implementation(libs.ktor.server.cio)
+    implementation(libs.ktor.server.netty)
     implementation(libs.ktor.server.status.pages)
     implementation(libs.ktor.server.content.negotiation)
     implementation(libs.ktor.serialization.kotlinx.json)
