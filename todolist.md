@@ -5,7 +5,7 @@
 > - `iris-kr` 기준 최신 소스/문서 반영 완료
 > - headless Redroid live 반영 완료
 > - 인증 포함 `/config`, `/query` 스모크 완료
-> - 보호 API fail-closed, durable admission journal, journal compaction 반영 완료
+> - 보호 API fail-closed, in-memory best-effort webhook queue 반영 완료
 >
 > 아래 항목은 완료 작업의 기록 보존용입니다.
 
@@ -28,10 +28,10 @@
   - 응답 수신 성공
   - 응답 판독 실패
   - 실제 연결 실패
-- [x] 동일 `messageId` 재시도 시 outbox 잔류 조건 재점검
-  - 동일 `messageId`는 같은 outbox 파일을 재사용
-  - `RETRY_LATER`면 파일이 남고 5초 뒤 재큐됨
-  - delete 실패 시 `SUCCESS`/`DROP` 이후에도 재시작 시 재처리될 수 있음
+- [x] 동일 `messageId` 재시도 조건 재점검
+  - 동일 `messageId`는 메모리 내 `queuedMessageIds` 기준으로 중복 enqueue를 막음
+  - 재시도는 bounded backoff로 최대 6회까지만 수행
+  - 프로세스 재시작 시 pending delivery는 복구되지 않음
 
 ## 2. 운영 경로 점검
 
@@ -43,13 +43,11 @@
   - 현재 device config: `http://172.18.0.12:30082/webhook/iris`
   - Redroid 내부 `nc -w 3 172.18.0.12 30082` 실패
   - 2026-03-09 현재 사용하지 않아 device config에서 비활성화
-- [x] 운영 반영 후 outbox 디렉터리 잔류 파일 모니터링 기준 정리
-  - 정상 시 기대 상태
-  - 재시도 허용 시간
-  - 수동 정리 기준
+- [x] 운영 반영 후 webhook queue 동작 기준 정리
+  - in-memory bounded queue
+  - bounded retry/drop 기준
+  - restart recovery 없음
   - README Troubleshooting에 정리 반영
-  - 2026-03-09 재배포 후 기존 hololive outbox 3건이 모두 성공 처리되어 디렉터리가 비워짐
-  - 2026-03-12 기준 신규 durable admission은 `queue.log` journal 기반이며, legacy `*.json`은 recovery 호환만 유지
 
 ## 3. E2E 검증
 
@@ -61,7 +59,7 @@
   - 현재 비활성 라우트이므로 운영 범위에서 제외된 상태로 정리
 - [x] 봇 로그와 Iris 로그에서 동일 `messageId` 기준 상호 대조
   - 사용자 최종 확인 기준으로 종료 처리
-  - 참고: 2026-03-09 재배포 직후 기존 `hololive` outbox 3건은 `HTTP 200`으로 처리되었고, Iris `Replier` 로그상 카카오톡 reply 전송까지 수행됨
+  - 참고: 2026-03-09 재배포 직후 기존 `hololive` pending delivery 3건은 `HTTP 200`으로 처리되었고, Iris `Replier` 로그상 카카오톡 reply 전송까지 수행됨
 
 ## 4. 문서 정리
 
@@ -79,11 +77,11 @@
 - `openclaw` 및 관련 prefix/설정은 제거됨
 - 운영 `hololive` webhook은 현재 `http://100.100.1.3:30001/webhook/iris` 기준
 - `twentyq`, `turtle-soup`는 현재 미사용이라 Redroid config에서 제거함
-- 재배포 후 기존 `ClosedByteChannelException` 증상은 재현되지 않았고, 동일 outbox 건들은 1회 시도에서 모두 `200` 성공
+- 재배포 후 기존 `ClosedByteChannelException` 증상은 재현되지 않았고, 동일 pending delivery 건들은 1회 시도에서 모두 `200` 성공
 - `iris-init.sh`, `iris-watchdog.sh`는 기본값으로 `twentyq`, `turtle-soup` webhook을 다시 활성화하지 않도록 정리함
 - 보호 API(`/config`, `/reply`, `/query`)는 `botToken` 미설정 시 fail-open 하지 않고 `503`으로 거부
-- 신규 durable admission은 per-message outbox 파일 대신 append-only journal(`queue.log`)에 기록
-- journal은 backlog 비율과 레코드 수 기준으로 자동 compact 됨
+- 신규 webhook admission은 disk journal 없이 in-memory bounded queue만 사용
+- 재시도는 bounded backoff 후 drop 되며 restart recovery는 제공하지 않음
 - config 저장 모델은 `webhooks.hololive` 대신 단일 `endpoint`를 사용하며, 구형 설정은 로드 시 자동 이관됨
 - image reply 파일 생성은 queue admission 이후 worker에서 수행되고, `IRIS_IMAGE_MEDIA_SCAN=0`으로 media scan을 끌 수 있음
 - image cleanup은 `IRIS_IMAGE_DELETE_INTERVAL_MS`, `IRIS_IMAGE_RETENTION_MS`로 운영 조정 가능하며 기본값은 1시간/1일
