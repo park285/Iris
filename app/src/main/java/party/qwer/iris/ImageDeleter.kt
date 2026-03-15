@@ -1,50 +1,64 @@
 package party.qwer.iris
 
-import java.io.File
-import java.util.concurrent.Executors
-import java.util.concurrent.ScheduledExecutorService
-import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlin.concurrent.Volatile
+import java.io.File
 
 class ImageDeleter(
     private val imageDirPath: String,
     private val deletionInterval: Long,
     private val retentionMillis: Long,
 ) {
+    private val scopeJob = SupervisorJob()
+    private val coroutineScope = CoroutineScope(scopeJob + Dispatchers.IO)
+
     @Volatile
     private var running = true
-    private val scheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
 
+    @Volatile
+    private var deletionJob: Job? = null
+
+    @Synchronized
     fun startDeletion() {
-        scheduler.scheduleWithFixedDelay(
-            { this.deleteOldImages() },
-            0,
-            deletionInterval,
-            TimeUnit.MILLISECONDS,
-        )
-    }
-
-    fun stopDeletion() {
-        running = false
-        scheduler.shutdown()
-        try {
-            if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
-                scheduler.shutdownNow()
-            }
-        } catch (e: InterruptedException) {
-            scheduler.shutdownNow()
-            Thread.currentThread().interrupt()
-            IrisLogger.error("Error shutting down image deletion scheduler: $e")
-        }
-    }
-
-    private fun deleteOldImages() {
         if (!running) {
-            IrisLogger.debug("Image deletion task stopped.")
-            scheduler.shutdown()
+            IrisLogger.debug("Image deletion already stopped; refusing restart.")
+            return
+        }
+        if (deletionJob?.isActive == true) {
             return
         }
 
+        deletionJob =
+            coroutineScope.launch {
+                while (isActive && running) {
+                    deleteOldImages()
+                    delay(deletionInterval)
+                }
+            }
+    }
+
+    @Synchronized
+    fun stopDeletion() {
+        if (!running) {
+            return
+        }
+        running = false
+        runBlocking {
+            deletionJob?.cancelAndJoin()
+            scopeJob.cancelAndJoin()
+        }
+        deletionJob = null
+    }
+
+    private fun deleteOldImages() {
         val imageDir = File(imageDirPath)
         if (!imageDir.exists() || !imageDir.isDirectory) {
             IrisLogger.debug("Image directory does not exist: $imageDirPath")
