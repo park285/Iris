@@ -14,7 +14,7 @@ IRIS_WEBHOOK_TOKEN="${IRIS_WEBHOOK_TOKEN:-}"
 IRIS_BOT_TOKEN="${IRIS_BOT_TOKEN:-}"
 IRIS_LOG_LEVEL="${IRIS_LOG_LEVEL:-}"
 
-ADB_CMD=""
+declare -a ADB_CMD=()
 
 check_linux_host() {
   if [[ "$(uname -s)" != "Linux" ]]; then
@@ -32,7 +32,7 @@ check_adb_installed() {
 }
 
 select_adb_device() {
-  if [[ -n "$ADB_CMD" ]]; then
+  if (( ${#ADB_CMD[@]} > 0 )); then
     return 0
   fi
 
@@ -46,7 +46,7 @@ select_adb_device() {
       return 1
       ;;
     1)
-      ADB_CMD="adb -s ${devices[0]}"
+      ADB_CMD=(adb -s "${devices[0]}")
       echo "Using device: ${devices[0]}"
       ;;
     *)
@@ -65,14 +65,14 @@ select_adb_device() {
       fi
 
       local device_id="${devices[$((choice - 1))]}"
-      ADB_CMD="adb -s $device_id"
+      ADB_CMD=(adb -s "$device_id")
       echo "Using device: $device_id"
       ;;
   esac
 }
 
 get_iris_pid() {
-  "$ADB_CMD" shell ps -f |
+  "${ADB_CMD[@]}" shell ps -f |
     grep "$IRIS_PROCESS_NAME" |
     grep "$IRIS_PROCESS_KEYWORD" |
     grep -v 'grep' |
@@ -108,7 +108,7 @@ iris_start() {
   echo "Starting Iris service in the background..."
   local remote_command
   remote_command="$(build_remote_runtime_command ' > /dev/null 2>&1 &')"
-  "$ADB_CMD" shell "su root sh -c '$remote_command'"
+  "${ADB_CMD[@]}" shell "su root sh -c '$remote_command'"
   sleep 2
 
   local new_pid
@@ -133,7 +133,7 @@ iris_start_foreground() {
   echo "Press Ctrl+C to stop the foreground adb session."
   local remote_command
   remote_command="$(build_remote_runtime_command)"
-  "$ADB_CMD" shell "su root sh -c '$remote_command'"
+  "${ADB_CMD[@]}" shell "su root sh -c '$remote_command'"
 }
 
 iris_stop() {
@@ -145,7 +145,7 @@ iris_stop() {
   fi
 
   echo "Stopping Iris service..."
-  "$ADB_CMD" shell "su root sh -c 'kill -s SIGTERM $pid'"
+  "${ADB_CMD[@]}" shell "su root sh -c 'kill -s SIGTERM $pid'"
   for _ in 1 2 3 4 5; do
     sleep 1
     if [[ -z "$(get_iris_pid || true)" ]]; then
@@ -155,7 +155,7 @@ iris_stop() {
   done
 
   echo "SIGTERM timed out; forcing SIGKILL..."
-  "$ADB_CMD" shell "su root sh -c 'kill -s SIGKILL $pid'"
+  "${ADB_CMD[@]}" shell "su root sh -c 'kill -s SIGKILL $pid'"
   sleep 1
   if [[ -z "$(get_iris_pid || true)" ]]; then
     echo "Iris service stopped after SIGKILL fallback."
@@ -219,10 +219,10 @@ iris_install() {
   verify_md5_if_available "$IRIS_APK_LOCAL_FILE" "$IRIS_APK_LOCAL_FILE.MD5"
 
   echo "Pushing Iris.apk to device..."
-  "$ADB_CMD" push "$IRIS_APK_LOCAL_FILE" "$IRIS_APK_PATH"
+  "${ADB_CMD[@]}" push "$IRIS_APK_LOCAL_FILE" "$IRIS_APK_PATH"
 
   echo "Verifying installation..."
-  if "$ADB_CMD" shell "ls $IRIS_APK_PATH" >/dev/null 2>&1; then
+  if "${ADB_CMD[@]}" shell "ls $IRIS_APK_PATH" >/dev/null 2>&1; then
     echo "Installation completed successfully."
   else
     echo "Installation verification failed. File might not be at $IRIS_APK_PATH."
