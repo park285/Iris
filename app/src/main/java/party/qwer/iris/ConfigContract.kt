@@ -80,6 +80,7 @@ private fun ConfigValues.toConfigState(): ConfigState =
     ConfigState(
         botName = botName,
         webEndpoint = endpoint,
+        webhooks = webhooks,
         botHttpPort = botHttpPort,
         dbPollingRate = dbPollingRate,
         messageSendRate = messageSendRate,

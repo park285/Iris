@@ -9,6 +9,8 @@ data class ConfigState(
     val botName: String,
     @SerialName("web_endpoint")
     val webEndpoint: String,
+    @SerialName("webhooks")
+    val webhooks: Map<String, String>,
     @SerialName("bot_http_port")
     val botHttpPort: Int,
     @SerialName("db_polling_rate")
@@ -35,6 +37,8 @@ data class ConfigResponse(
     val botName: String = effective.botName,
     @SerialName("web_endpoint")
     val webEndpoint: String = effective.webEndpoint,
+    @SerialName("webhooks")
+    val webhooks: Map<String, String> = effective.webhooks,
     @SerialName("bot_http_port")
     val botHttpPort: Int = effective.botHttpPort,
     @SerialName("db_polling_rate")

@@ -62,7 +62,7 @@ class Configurable {
                         "botTokenConfigured=${snapshotValues.botToken.isNotBlank()})",
                 )
                 if (decodedConfig.migratedLegacyEndpoint) {
-                    IrisLogger.info("Migrated legacy webhooks config to single endpoint model")
+                    IrisLogger.info("Migrated legacy webhook config to route-aware model")
                 }
                 isDirty = decodedConfig.migratedLegacyEndpoint
             } catch (e: IOException) {
@@ -160,11 +160,36 @@ class Configurable {
                 if (defaultWebhookEndpoint == normalized) {
                     return
                 }
-                snapshotValues.endpoint = normalized
-                effectiveValues.endpoint = normalized
-                markDirty()
-                IrisLogger.debug("Default webhook endpoint updated")
+                setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, normalized)
             }
+
+        fun setWebhookEndpoint(
+            route: String,
+            endpoint: String,
+        ) {
+            val normalizedRoute = route.trim()
+            val normalizedEndpoint = endpoint.trim()
+            if (normalizedRoute.isEmpty()) {
+                return
+            }
+
+            val updatedSnapshot = updateWebhookConfig(snapshotValues, normalizedRoute, normalizedEndpoint)
+            val updatedEffective = updateWebhookConfig(effectiveValues, normalizedRoute, normalizedEndpoint)
+            if (snapshotValues == updatedSnapshot && effectiveValues == updatedEffective) {
+                return
+            }
+
+            snapshotValues = updatedSnapshot
+            effectiveValues = updatedEffective
+            markDirty()
+            if (normalizedRoute == DEFAULT_WEBHOOK_ROUTE) {
+                IrisLogger.debug("Default webhook endpoint updated")
+            } else {
+                IrisLogger.debug("Webhook endpoint updated for route=$normalizedRoute")
+            }
+        }
+
+        fun webhookEndpointFor(route: String): String = configuredWebhookEndpoint(effectiveValues, route)
 
         val webhookToken: String
             get() = snapshotValues.webhookToken.ifBlank { System.getenv("IRIS_WEBHOOK_TOKEN") ?: "" }
