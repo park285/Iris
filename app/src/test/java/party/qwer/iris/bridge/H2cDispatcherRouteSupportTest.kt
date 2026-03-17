@@ -14,6 +14,13 @@ class H2cDispatcherRouteSupportTest {
     }
 
     @Test
+    fun `routes settlement commands to settlement`() {
+        assertEquals("settlement", resolveWebhookRoute("!정산"))
+        assertEquals("settlement", resolveWebhookRoute("!정산완료"))
+        assertEquals("settlement", resolveWebhookRoute("!정산 완료"))
+    }
+
+    @Test
     fun `keeps other webhook commands on hololive`() {
         assertEquals("hololive", resolveWebhookRoute("!ping"))
         assertEquals("hololive", resolveWebhookRoute("/ping"))
