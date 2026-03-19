@@ -32,6 +32,8 @@ class Configurable {
                 ignoreUnknownKeys = true
             }
 
+        var onMessageSendRateChanged: (() -> Unit)? = null
+
         init {
             loadConfig()
             Runtime.getRuntime().addShutdownHook(
@@ -118,74 +120,84 @@ class Configurable {
         var botId: Long
             get() = effectiveValues.botId
             set(value) {
-                if (snapshotValues.botId == value && effectiveValues.botId == value) {
-                    return
+                synchronized(this) {
+                    if (snapshotValues.botId == value && effectiveValues.botId == value) {
+                        return
+                    }
+                    snapshotValues = snapshotValues.copy(botId = value)
+                    effectiveValues = effectiveValues.copy(botId = value)
+                    markDirty()
+                    IrisLogger.debug("Bot Id is updated to: $botId")
                 }
-                snapshotValues.botId = value
-                effectiveValues.botId = value
-                markDirty()
-                IrisLogger.debug("Bot Id is updated to: $botId")
             }
 
         var botName: String
             get() = effectiveValues.botName
             set(value) {
-                if (snapshotValues.botName == value && effectiveValues.botName == value) {
-                    return
+                synchronized(this) {
+                    if (snapshotValues.botName == value && effectiveValues.botName == value) {
+                        return
+                    }
+                    snapshotValues = snapshotValues.copy(botName = value)
+                    effectiveValues = effectiveValues.copy(botName = value)
+                    markDirty()
+                    IrisLogger.debug("Bot name updated to: $botName")
                 }
-                snapshotValues.botName = value
-                effectiveValues.botName = value
-                markDirty()
-                IrisLogger.debug("Bot name updated to: $botName")
             }
 
         var botSocketPort: Int
             get() = effectiveValues.botHttpPort
             set(value) {
-                if (snapshotValues.botHttpPort == value) {
-                    return
+                synchronized(this) {
+                    if (snapshotValues.botHttpPort == value) {
+                        return
+                    }
+                    snapshotValues = snapshotValues.copy(botHttpPort = value)
+                    markDirty()
+                    IrisLogger.debug(
+                        "Bot port snapshot updated to: ${snapshotValues.botHttpPort} " +
+                            "(effective=${effectiveValues.botHttpPort})",
+                    )
                 }
-                snapshotValues.botHttpPort = value
-                markDirty()
-                IrisLogger.debug(
-                    "Bot port snapshot updated to: ${snapshotValues.botHttpPort} " +
-                        "(effective=${effectiveValues.botHttpPort})",
-                )
             }
 
         var defaultWebhookEndpoint: String
             get() = effectiveValues.endpoint
             set(value) {
                 val normalized = value.trim()
-                if (defaultWebhookEndpoint == normalized) {
-                    return
+                synchronized(this) {
+                    if (defaultWebhookEndpoint == normalized) {
+                        return
+                    }
+                    setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, normalized)
                 }
-                setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, normalized)
             }
 
         fun setWebhookEndpoint(
             route: String,
             endpoint: String,
         ) {
-            val normalizedRoute = route.trim()
-            val normalizedEndpoint = endpoint.trim()
-            if (normalizedRoute.isEmpty()) {
-                return
-            }
+            synchronized(this) {
+                val normalizedRoute = route.trim()
+                val normalizedEndpoint = endpoint.trim()
+                if (normalizedRoute.isEmpty()) {
+                    return
+                }
 
-            val updatedSnapshot = updateWebhookConfig(snapshotValues, normalizedRoute, normalizedEndpoint)
-            val updatedEffective = updateWebhookConfig(effectiveValues, normalizedRoute, normalizedEndpoint)
-            if (snapshotValues == updatedSnapshot && effectiveValues == updatedEffective) {
-                return
-            }
+                val updatedSnapshot = updateWebhookConfig(snapshotValues, normalizedRoute, normalizedEndpoint)
+                val updatedEffective = updateWebhookConfig(effectiveValues, normalizedRoute, normalizedEndpoint)
+                if (snapshotValues == updatedSnapshot && effectiveValues == updatedEffective) {
+                    return
+                }
 
-            snapshotValues = updatedSnapshot
-            effectiveValues = updatedEffective
-            markDirty()
-            if (normalizedRoute == DEFAULT_WEBHOOK_ROUTE) {
-                IrisLogger.debug("Default webhook endpoint updated")
-            } else {
-                IrisLogger.debug("Webhook endpoint updated for route=$normalizedRoute")
+                snapshotValues = updatedSnapshot
+                effectiveValues = updatedEffective
+                markDirty()
+                if (normalizedRoute == DEFAULT_WEBHOOK_ROUTE) {
+                    IrisLogger.debug("Default webhook endpoint updated")
+                } else {
+                    IrisLogger.debug("Webhook endpoint updated for route=$normalizedRoute")
+                }
             }
         }
 
@@ -200,26 +212,32 @@ class Configurable {
         var dbPollingRate: Long
             get() = effectiveValues.dbPollingRate
             set(value) {
-                if (snapshotValues.dbPollingRate == value && effectiveValues.dbPollingRate == value) {
-                    return
+                synchronized(this) {
+                    if (snapshotValues.dbPollingRate == value && effectiveValues.dbPollingRate == value) {
+                        return
+                    }
+                    snapshotValues = snapshotValues.copy(dbPollingRate = value)
+                    effectiveValues = effectiveValues.copy(dbPollingRate = value)
+                    markDirty()
+                    IrisLogger.debug("DbPollingRate updated to: $dbPollingRate")
                 }
-                snapshotValues.dbPollingRate = value
-                effectiveValues.dbPollingRate = value
-                markDirty()
-                IrisLogger.debug("DbPollingRate updated to: $dbPollingRate")
             }
 
         var messageSendRate: Long
             get() = effectiveValues.messageSendRate
             set(value) {
-                if (snapshotValues.messageSendRate == value && effectiveValues.messageSendRate == value) {
-                    return
-                }
-                snapshotValues.messageSendRate = value
-                effectiveValues.messageSendRate = value
-                markDirty()
-                IrisLogger.debug("MessageSendRate updated to: $messageSendRate")
-                Replier.restartMessageSender()
+                val callback =
+                    synchronized(this) {
+                        if (snapshotValues.messageSendRate == value && effectiveValues.messageSendRate == value) {
+                            return
+                        }
+                        snapshotValues = snapshotValues.copy(messageSendRate = value)
+                        effectiveValues = effectiveValues.copy(messageSendRate = value)
+                        markDirty()
+                        IrisLogger.debug("MessageSendRate updated to: $messageSendRate")
+                        onMessageSendRateChanged
+                    }
+                callback?.invoke()
             }
 
         fun configResponse(): ConfigResponse =

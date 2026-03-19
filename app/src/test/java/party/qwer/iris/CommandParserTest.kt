@@ -35,4 +35,31 @@ class CommandParserTest {
         assertEquals(CommandKind.WEBHOOK, parsed.kind)
         assertEquals("/ping", parsed.normalizedText)
     }
+
+    @Test
+    fun `treats mention as none without bot mention support`() {
+        val parsed = CommandParser.parse("@kapu봇 정산")
+
+        assertEquals(CommandKind.NONE, parsed.kind)
+    }
+
+    @Test
+    fun `handles edge case prefixes and blank input`() {
+        val cases =
+            listOf(
+                Triple("", CommandKind.NONE, ""),
+                Triple("   ", CommandKind.NONE, ""),
+                Triple("!//", CommandKind.WEBHOOK, "!//"),
+                Triple("!\nhello", CommandKind.WEBHOOK, "!\nhello"),
+                Triple("!", CommandKind.WEBHOOK, "!"),
+                Triple("/", CommandKind.WEBHOOK, "/"),
+            )
+
+        cases.forEach { (message, expectedKind, expectedNormalizedText) ->
+            val parsed = CommandParser.parse(message)
+
+            assertEquals(expectedKind, parsed.kind)
+            assertEquals(expectedNormalizedText, parsed.normalizedText)
+        }
+    }
 }

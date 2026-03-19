@@ -19,6 +19,7 @@ class Main {
                 val notificationReferer = readNotificationReferer()
                 val shutdownLatch = CountDownLatch(1)
 
+                Configurable.onMessageSendRateChanged = { Replier.restartMessageSender() }
                 Replier.startMessageSender()
                 IrisLogger.info("Message sender thread started")
 
@@ -29,27 +30,14 @@ class Main {
                 dbObserver.startPolling()
                 IrisLogger.info("DBObserver started")
 
-                val imageDeletionIntervalMs =
-                    readPositiveDurationMillis(
-                        "IRIS_IMAGE_DELETE_INTERVAL_MS",
-                        defaultImageDeletionIntervalMs,
+                val kakaoProfileIndexer =
+                    KakaoProfileIndexer(
+                        profileStore = KakaoDbNotificationIdentityStore(kakaoDb),
                     )
-                val imageRetentionMs =
-                    readPositiveDurationMillis(
-                        "IRIS_IMAGE_RETENTION_MS",
-                        defaultImageRetentionMs,
-                    )
-                val imageDeleter =
-                    ImageDeleter(
-                        IRIS_IMAGE_DIR_PATH,
-                        imageDeletionIntervalMs,
-                        imageRetentionMs,
-                    )
-                imageDeleter.startDeletion()
-                IrisLogger.info(
-                    "ImageDeleter started " +
-                        "(intervalMs=$imageDeletionIntervalMs, retentionMs=$imageRetentionMs).",
-                )
+                kakaoProfileIndexer.launch()
+                IrisLogger.info("Kakao profile indexer started")
+
+                val imageDeleter = startImageDeleter()
 
                 val disableHttp = System.getenv("IRIS_DISABLE_HTTP")?.equals("1", ignoreCase = true) == true
                 val irisServer =
@@ -69,15 +57,19 @@ class Main {
                 // Graceful Shutdown Hook
                 Runtime.getRuntime().addShutdownHook(
                     Thread {
-                        IrisLogger.info("[Main] Shutdown signal received, cleaning up...")
-                        irisServer?.stopServer()
-                        dbObserver.stopPolling()
-                        imageDeleter.stopDeletion()
-                        observerHelper.close()
-                        Replier.shutdown()
-                        kakaoDb.closeConnection()
-                        IrisLogger.info("[Main] Cleanup completed")
-                        shutdownLatch.countDown()
+                        try {
+                            IrisLogger.info("[Main] Shutdown signal received, cleaning up...")
+                            irisServer?.stopServer()
+                            dbObserver.stopPolling()
+                            kakaoProfileIndexer.stop()
+                            imageDeleter.stopDeletion()
+                            observerHelper.close()
+                            Replier.shutdown()
+                            kakaoDb.closeConnection()
+                            IrisLogger.info("[Main] Cleanup completed")
+                        } finally {
+                            shutdownLatch.countDown()
+                        }
                     },
                 )
 
@@ -122,6 +114,17 @@ class Main {
                 "NotificationReferer not found in prefs; using fallback '$fallback'. Set IRIS_NOTIFICATION_REFERER to override.",
             )
             return fallback
+        }
+
+        private fun startImageDeleter(): ImageDeleter {
+            val intervalMs =
+                readPositiveDurationMillis("IRIS_IMAGE_DELETE_INTERVAL_MS", defaultImageDeletionIntervalMs)
+            val retentionMs =
+                readPositiveDurationMillis("IRIS_IMAGE_RETENTION_MS", defaultImageRetentionMs)
+            return ImageDeleter(IRIS_IMAGE_DIR_PATH, intervalMs, retentionMs).also {
+                it.startDeletion()
+                IrisLogger.info("ImageDeleter started (intervalMs=$intervalMs, retentionMs=$retentionMs).")
+            }
         }
 
         private fun readPositiveDurationMillis(

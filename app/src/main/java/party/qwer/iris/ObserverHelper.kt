@@ -2,8 +2,8 @@ package party.qwer.iris
 
 import org.json.JSONObject
 import party.qwer.iris.bridge.H2cDispatcher
-import party.qwer.iris.bridge.H2cDispatcher.RoutingCommand
-import party.qwer.iris.bridge.H2cDispatcher.RoutingResult
+import party.qwer.iris.bridge.RoutingCommand
+import party.qwer.iris.bridge.RoutingResult
 import java.io.Closeable
 
 class ObserverHelper(
@@ -11,12 +11,20 @@ class ObserverHelper(
 ) : Closeable {
     @Volatile
     private var lastLogId: Long = 0
+
+    @Volatile
     private var dispatcher: H2cDispatcher? = null
 
     private val senderNameCache =
         object : LinkedHashMap<Long, String>(64, 0.75f, true) {
             override fun removeEldestEntry(
                 eldest: MutableMap.MutableEntry<Long, String>?,
+            ): Boolean = size > 64
+        }
+    private val roomMetadataCache =
+        object : LinkedHashMap<Long, KakaoDB.RoomMetadata>(64, 0.75f, true) {
+            override fun removeEldestEntry(
+                eldest: MutableMap.MutableEntry<Long, KakaoDB.RoomMetadata>?,
             ): Boolean = size > 64
         }
     private val recentCommandFingerprints =
@@ -97,7 +105,7 @@ class ObserverHelper(
             return advanceLastLogId(logEntry.id)
         }
 
-        return routeCommand(logEntry, parsedCommand)
+        return routeCommand(logEntry, parsedCommand, metadata.enc)
     }
 
     private fun parseMetadata(logEntry: KakaoDB.ChatLogEntry): ParsedLogMetadata? =
@@ -172,7 +180,10 @@ class ObserverHelper(
     private fun routeCommand(
         logEntry: KakaoDB.ChatLogEntry,
         parsedCommand: ParsedCommand,
+        enc: Int,
     ): Boolean {
+        val threadMetadata = resolveObservedThreadMetadata(logEntry, enc)
+        val roomMetadata = resolveRoomMetadata(logEntry.chatId)
         val routingCommand =
             RoutingCommand(
                 text = parsedCommand.normalizedText,
@@ -180,6 +191,11 @@ class ObserverHelper(
                 sender = resolveSenderName(logEntry.userId),
                 userId = logEntry.userId.toString(),
                 sourceLogId = logEntry.id,
+                chatLogId = logEntry.chatLogId?.trim()?.takeIf { it.isNotEmpty() },
+                roomType = roomMetadata.type.takeIf { it.isNotEmpty() },
+                roomLinkId = roomMetadata.linkId.takeIf { it.isNotEmpty() },
+                threadId = threadMetadata?.threadId,
+                threadScope = threadMetadata?.threadScope,
             )
 
         return when (ensureDispatcher()?.route(routingCommand) ?: RoutingResult.RETRY_LATER) {
@@ -211,12 +227,17 @@ class ObserverHelper(
             userId.toString()
         }
 
-    private fun shouldSkipOrigin(
-        origin: String,
-        parsedCommand: ParsedCommand,
-    ): Boolean = (origin == "SYNCMSG" || origin == "MCHATLOGS") && parsedCommand.kind == CommandKind.NONE
-
-    private fun isOwnBotMessage(userId: Long): Boolean = Configurable.botId != 0L && userId == Configurable.botId
+    private fun resolveRoomMetadata(chatId: Long): KakaoDB.RoomMetadata =
+        try {
+            synchronized(roomMetadataCache) {
+                roomMetadataCache.getOrPut(chatId) {
+                    db.resolveRoomMetadata(chatId)
+                }
+            }
+        } catch (e: Exception) {
+            IrisLogger.debugLazy { "[ObserverHelper] resolveRoomMetadata failed: ${e.message}, using empty fallback" }
+            KakaoDB.RoomMetadata()
+        }
 
     private fun isDuplicateCommand(
         logEntry: KakaoDB.ChatLogEntry,
@@ -255,7 +276,7 @@ class ObserverHelper(
         private const val MAX_COMMAND_FINGERPRINTS = 256
     }
 
-    private data class CommandFingerprint(
+    internal data class CommandFingerprint(
         val chatId: Long,
         val userId: Long,
         val createdAt: String,
@@ -267,3 +288,10 @@ class ObserverHelper(
         val origin: String,
     )
 }
+
+internal fun shouldSkipOrigin(
+    origin: String?,
+    parsedCommand: ParsedCommand,
+): Boolean = (origin == "SYNCMSG" || origin == "MCHATLOGS") && parsedCommand.kind == CommandKind.NONE
+
+internal fun isOwnBotMessage(userId: Long): Boolean = Configurable.botId != 0L && userId == Configurable.botId

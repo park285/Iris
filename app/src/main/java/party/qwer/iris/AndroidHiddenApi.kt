@@ -2,6 +2,7 @@ package party.qwer.iris
 
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
 
@@ -16,24 +17,54 @@ class AndroidHiddenApi {
             System.getenv("IRIS_RUNNER") ?: "com.android.shell"
         }
 
-        private fun getStartServiceMethod(): (Intent) -> Unit {
-            val IActivityManagerStub = Class.forName("android.app.IActivityManager\$Stub")
-            val IActivityManager = Class.forName("android.app.IActivityManager")
-            val IApplicationThread = Class.forName("android.app.IApplicationThread")
+        private val iActivityManagerClass: Class<*> by lazy {
+            Class.forName("android.app.IActivityManager")
+        }
 
-            val activityManager =
-                IActivityManagerStub.getMethod("asInterface", IBinder::class.java).invoke(
-                    null,
-                    getService("activity"),
-                )
+        private val iApplicationThreadClass: Class<*> by lazy {
+            Class.forName("android.app.IApplicationThread")
+        }
+
+        private val activityManager by lazy {
+            val activityManagerStub = Class.forName("android.app.IActivityManager\$Stub")
+            val binder = getService("activity")
+            activityManagerStub.getMethod("asInterface", IBinder::class.java).invoke(null, binder)
+        }
+
+        private fun buildMethodResolutionError(
+            methodName: String,
+            clazz: Class<*>,
+        ): Nothing {
+            val methods =
+                clazz.methods
+                    .map {
+                        it.toString().trim()
+                    }.filter {
+                        it.contains(methodName)
+                    }.joinToString("\n")
+
+            val errorMsg =
+                """
+                failed to get $methodName Method. Please report
+                SDK: ${Build.VERSION.SDK_INT}
+                METHODS: $methods
+                """.trimIndent()
+
+            IrisLogger.error(errorMsg)
+            throw IllegalStateException(errorMsg)
+        }
+
+        private fun getStartServiceMethod(): (Intent) -> Unit {
+            val iActivityManager = iActivityManagerClass
+            val iApplicationThread = iApplicationThreadClass
 
             try {
                 // IApplicationThread caller, Intent service, String resolvedType,
                 // boolean requireForeground, String callingPackage, String callingFeatureId, int userId
                 val method =
-                    IActivityManager.getMethod(
+                    iActivityManager.getMethod(
                         "startService",
-                        IApplicationThread,
+                        iApplicationThread,
                         Intent::class.java,
                         String::class.java,
                         java.lang.Boolean.TYPE,
@@ -61,9 +92,9 @@ class AndroidHiddenApi {
                 // IApplicationThread caller, Intent service, String resolvedType,
                 // boolean requireForeground, in String callingPackage, int userId);
                 val method =
-                    IActivityManager.getMethod(
+                    iActivityManager.getMethod(
                         "startService",
-                        IApplicationThread,
+                        iApplicationThread,
                         Intent::class.java,
                         String::class.java,
                         java.lang.Boolean.TYPE,
@@ -85,46 +116,22 @@ class AndroidHiddenApi {
             } catch (_: Exception) {
             }
 
-            val sdk = android.os.Build.VERSION.SDK_INT
-            val methods =
-                IActivityManager.methods
-                    .map {
-                        it.toString().trim()
-                    }.filter {
-                        it.contains("startService")
-                    }.joinToString("\n")
-
-            val errorMsg =
-                """
-                failed to get startService Method. Please report
-                SDK: $sdk
-                METHODS: $methods
-                """.trimIndent()
-
-            IrisLogger.error(errorMsg)
-            throw IllegalStateException(errorMsg)
+            buildMethodResolutionError("startService", iActivityManager)
         }
 
         private fun getStartActivityMethod(): (Intent) -> Unit {
-            val IActivityManagerStub = Class.forName("android.app.IActivityManager\$Stub")
-            val IActivityManager = Class.forName("android.app.IActivityManager")
-            val IApplicationThread = Class.forName("android.app.IApplicationThread")
-
-            val activityManager =
-                IActivityManagerStub.getMethod("asInterface", IBinder::class.java).invoke(
-                    null,
-                    getService("activity"),
-                )
+            val iActivityManager = iActivityManagerClass
+            val iApplicationThread = iApplicationThreadClass
 
             try {
                 // IApplicationThread caller, String callingPackage, String callingFeatureId,
                 // Intent intent, String resolvedType, IBinder resultTo, String resultWho,
                 // int requestCode, int flags, ProfilerInfo profilerInfo, Bundle options, int userId
-                val ProfilerInfo = Class.forName("android.app.ProfilerInfo")
+                val profilerInfo = Class.forName("android.app.ProfilerInfo")
                 val method =
-                    IActivityManager.getMethod(
+                    iActivityManager.getMethod(
                         "startActivity",
-                        IApplicationThread,
+                        iApplicationThread,
                         String::class.java,
                         String::class.java,
                         Intent::class.java,
@@ -133,7 +140,7 @@ class AndroidHiddenApi {
                         String::class.java,
                         Integer.TYPE,
                         Integer.TYPE,
-                        ProfilerInfo,
+                        profilerInfo,
                         Bundle::class.java,
                         Integer.TYPE,
                     )
@@ -161,11 +168,11 @@ class AndroidHiddenApi {
             try {
                 // IApplicationThread, java.lang.String, android.content.Intent,
                 // java.lang.String, android.os.IBinder, java.lang.String, int, int, android.app.ProfilerInfo, android.os.Bundle, int
-                val ProfilerInfo = Class.forName("android.app.ProfilerInfo")
+                val profilerInfo = Class.forName("android.app.ProfilerInfo")
                 val method =
-                    IActivityManager.getMethod(
+                    iActivityManager.getMethod(
                         "startActivityAsUser",
-                        IApplicationThread,
+                        iApplicationThread,
                         String::class.java,
                         Intent::class.java,
                         String::class.java,
@@ -173,7 +180,7 @@ class AndroidHiddenApi {
                         String::class.java,
                         Integer.TYPE,
                         Integer.TYPE,
-                        ProfilerInfo,
+                        profilerInfo,
                         Bundle::class.java,
                         Integer.TYPE,
                     )
@@ -197,50 +204,26 @@ class AndroidHiddenApi {
             } catch (_: Exception) {
             }
 
-            val sdk = android.os.Build.VERSION.SDK_INT
-            val methods =
-                IActivityManager.methods
-                    .map {
-                        it.toString().trim()
-                    }.filter {
-                        it.contains("startActivity")
-                    }.joinToString("\n")
-
-            val errorMsg =
-                """
-                failed to get startActivity Method. Please report
-                SDK: $sdk
-                METHODS: $methods
-                """.trimIndent()
-
-            IrisLogger.error(errorMsg)
-            throw IllegalStateException(errorMsg)
+            buildMethodResolutionError("startActivity", iActivityManager)
         }
 
         private fun getBroadcastIntentMethod(): (Intent) -> Unit {
-            val IActivityManagerStub = Class.forName("android.app.IActivityManager\$Stub")
-            val IActivityManager = Class.forName("android.app.IActivityManager")
-            val IApplicationThread = Class.forName("android.app.IApplicationThread")
-
-            val activityManager =
-                IActivityManagerStub.getMethod("asInterface", IBinder::class.java).invoke(
-                    null,
-                    getService("activity"),
-                )
+            val iActivityManager = iActivityManagerClass
+            val iApplicationThread = iApplicationThreadClass
 
             try {
                 // IApplicationThread caller, Intent intent, String resolvedType,
                 // IIntentReceiver resultTo, int resultCode, String resultData,
                 // Bundle map, String[] requiredPermissions, int appOp, Bundle options,
                 // boolean serialized, boolean sticky, int userId
-                val IIntentReceiver = Class.forName("android.content.IIntentReceiver")
+                val iIntentReceiver = Class.forName("android.content.IIntentReceiver")
                 val method =
-                    IActivityManager.getMethod(
+                    iActivityManager.getMethod(
                         "broadcastIntent",
-                        IApplicationThread,
+                        iApplicationThread,
                         Intent::class.java,
                         String::class.java,
-                        IIntentReceiver,
+                        iIntentReceiver,
                         Integer.TYPE,
                         String::class.java,
                         Bundle::class.java,
@@ -273,24 +256,7 @@ class AndroidHiddenApi {
             } catch (_: Exception) {
             }
 
-            val sdk = android.os.Build.VERSION.SDK_INT
-            val methods =
-                IActivityManager.methods
-                    .map {
-                        it.toString().trim()
-                    }.filter {
-                        it.contains("broadcastIntent")
-                    }.joinToString("\n")
-
-            val errorMsg =
-                """
-                failed to get broadcastIntent Method. Please report
-                SDK: $sdk
-                METHODS: $methods
-                """.trimIndent()
-
-            IrisLogger.error(errorMsg)
-            throw IllegalStateException(errorMsg)
+            buildMethodResolutionError("broadcastIntent", iActivityManager)
         }
 
         private fun getService(name: String): IBinder {

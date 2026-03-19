@@ -17,8 +17,8 @@ class KakaoDB {
                     null,
                     SQLiteDatabase.OPEN_READWRITE,
                 )
-            openedConnection.execSQL("ATTACH DATABASE '$DB_PATH/KakaoTalk2.db' AS db2")
-            openedConnection.execSQL("ATTACH DATABASE '$DB_PATH/multi_profile_database.db' AS db3")
+            attachAuxiliaryDatabases(openedConnection)
+            ensureObservedProfileTable(openedConnection)
             connection = openedConnection
             when (val resolution = resolveBotUserId(detectBotUserId(), Configurable.botId)) {
                 is BotUserIdResolution.Detected -> {
@@ -157,6 +157,19 @@ class KakaoDB {
         }
     }
 
+    fun resolveRoomMetadata(chatId: Long): RoomMetadata =
+        withPrimaryConnection { db ->
+            db.rawQuery("SELECT type, link_id FROM chat_rooms WHERE id = ?", arrayOf(chatId.toString())).use { cursor ->
+                if (!cursor.moveToFirst()) {
+                    return@use RoomMetadata()
+                }
+                RoomMetadata(
+                    type = cursor.getString(0)?.trim().orEmpty(),
+                    linkId = cursor.getString(1)?.trim().orEmpty(),
+                )
+            }
+        }
+
     fun latestLogId(): Long =
         withPrimaryConnection { db ->
             db.rawQuery("SELECT _id FROM chat_logs ORDER BY _id DESC LIMIT 1", null).use { cursor ->
@@ -177,7 +190,7 @@ class KakaoDB {
             db
                 .rawQuery(
                     """
-                    SELECT _id, chat_id, user_id, message, v, created_at
+                    SELECT *
                     FROM chat_logs
                     WHERE _id > ?
                     ORDER BY _id ASC
@@ -186,15 +199,29 @@ class KakaoDB {
                     arrayOf(afterLogId.toString()),
                 ).use { cursor ->
                     val rows = ArrayList<ChatLogEntry>(effectiveLimit)
+                    val idIndex = cursor.getColumnIndexOrThrow("_id")
+                    val chatLogIdIndex = cursor.getColumnIndex("id")
+                    val chatIdIndex = cursor.getColumnIndexOrThrow("chat_id")
+                    val userIdIndex = cursor.getColumnIndexOrThrow("user_id")
+                    val messageIndex = cursor.getColumnIndexOrThrow("message")
+                    val metadataIndex = cursor.getColumnIndexOrThrow("v")
+                    val createdAtIndex = cursor.getColumnIndexOrThrow("created_at")
+                    val messageTypeIndex = cursor.getColumnIndex("type")
+                    val threadIdIndex = cursor.getColumnIndex("thread_id")
+                    val supplementIndex = cursor.getColumnIndex("supplement")
                     while (cursor.moveToNext()) {
                         rows.add(
                             ChatLogEntry(
-                                id = cursor.getLong(0),
-                                chatId = cursor.getLong(1),
-                                userId = cursor.getLong(2),
-                                message = cursor.getString(3).orEmpty(),
-                                metadata = cursor.getString(4).orEmpty(),
-                                createdAt = cursor.getString(5),
+                                id = cursor.getLong(idIndex),
+                                chatLogId = cursor.getOptionalString(chatLogIdIndex),
+                                chatId = cursor.getLong(chatIdIndex),
+                                userId = cursor.getLong(userIdIndex),
+                                message = cursor.getString(messageIndex).orEmpty(),
+                                metadata = cursor.getString(metadataIndex).orEmpty(),
+                                createdAt = cursor.getString(createdAtIndex),
+                                messageType = cursor.getOptionalString(messageTypeIndex),
+                                threadId = cursor.getOptionalString(threadIdIndex),
+                                supplement = cursor.getOptionalString(supplementIndex),
                             ),
                         )
                     }
@@ -209,6 +236,32 @@ class KakaoDB {
                 connection.close()
                 IrisLogger.info("Database connection closed.")
             }
+        }
+    }
+
+    fun upsertObservedProfile(identity: KakaoNotificationIdentity) {
+        val updatedAt = System.currentTimeMillis()
+        synchronized(dbLock) {
+            connection.execSQL(
+                """
+                INSERT OR REPLACE INTO db3.observed_profiles (
+                    stable_id,
+                    display_name,
+                    room_name,
+                    notification_key,
+                    posted_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """.trimIndent(),
+                arrayOf(
+                    identity.stableId,
+                    identity.displayName,
+                    identity.roomName,
+                    identity.notificationKey,
+                    identity.postedAt,
+                    updatedAt,
+                ),
+            )
         }
     }
 
@@ -243,6 +296,21 @@ class KakaoDB {
             block(connection)
         }
 
+    private fun ensureObservedProfileTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS db3.observed_profiles (
+                stable_id TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                room_name TEXT NOT NULL,
+                notification_key TEXT NOT NULL,
+                posted_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+    }
+
     private fun openDetachedReadConnection(): SQLiteDatabase {
         val queryConnection =
             SQLiteDatabase.openDatabase(
@@ -250,9 +318,13 @@ class KakaoDB {
                 null,
                 SQLiteDatabase.OPEN_READONLY,
             )
-        queryConnection.execSQL("ATTACH DATABASE '$DB_PATH/KakaoTalk2.db' AS db2")
-        queryConnection.execSQL("ATTACH DATABASE '$DB_PATH/multi_profile_database.db' AS db3")
+        attachAuxiliaryDatabases(queryConnection)
         return queryConnection
+    }
+
+    private fun attachAuxiliaryDatabases(db: SQLiteDatabase) {
+        db.execSQL("ATTACH DATABASE '$DB_PATH/KakaoTalk2.db' AS db2")
+        db.execSQL("ATTACH DATABASE '$DB_PATH/multi_profile_database.db' AS db3")
     }
 
     private fun readQueryRows(
@@ -281,11 +353,20 @@ class KakaoDB {
 
     data class ChatLogEntry(
         val id: Long,
+        val chatLogId: String? = null,
         val chatId: Long,
         val userId: Long,
         val message: String,
         val metadata: String,
         val createdAt: String?,
+        val messageType: String? = null,
+        val threadId: String? = null,
+        val supplement: String? = null,
+    )
+
+    data class RoomMetadata(
+        val type: String = "",
+        val linkId: String = "",
     )
 
     companion object {
@@ -293,67 +374,84 @@ class KakaoDB {
         const val DEFAULT_QUERY_RESULT_LIMIT = 500
         const val DEFAULT_POLL_BATCH_SIZE = 100
         private const val BOT_USER_ID_FALLBACK_SCAN_LIMIT = 200
+        private val MESSAGE_DECRYPT_KEYS = arrayOf("message", "attachment")
+        private val PROFILE_DECRYPT_KEYWORDS =
+            listOf(
+                "name",
+                "nick_name",
+                "nickname",
+                "profile_image_url",
+                "full_profile_image_url",
+                "original_profile_image_url",
+                "status_message",
+                "contact_name",
+                "board_v",
+            )
+        private val PROFILE_DECRYPT_KEYS =
+            arrayOf(
+                "nick_name",
+                "name",
+                "nickname",
+                "profile_image_url",
+                "full_profile_image_url",
+                "original_profile_image_url",
+                "status_message",
+                "contact_name",
+                "v",
+                "board_v",
+            )
 
         fun decryptRow(row: Map<String, String?>): Map<String, String?> {
             @Suppress("NAME_SHADOWING")
             var row = row.toMutableMap()
 
             try {
-                if (row.contains("message") || row.contains("attachment")) {
-                    val vStr = row.getOrDefault("v", "")
-                    if (vStr?.isNotEmpty() == true) {
-                        try {
-                            val vJson = JSONObject(vStr)
-                            val enc = vJson.optInt("enc", 0)
-                            val userId = row["user_id"]?.toLongOrNull() ?: Configurable.botId
-                            val keysToDecrypt = arrayOf("message", "attachment")
-                            if (userId > 0L) {
-                                row = decryptRowValues(row, enc, userId, keysToDecrypt)
-                            }
-                        } catch (e: JSONException) {
-                            IrisLogger.error("Error parsing 'v' for decryption: $e")
-                        }
-                    }
-                }
-
-                val keywords =
-                    listOf(
-                        "name",
-                        "nick_name",
-                        "nickname",
-                        "profile_image_url",
-                        "full_profile_image_url",
-                        "original_profile_image_url",
-                        "status_message",
-                        "contact_name",
-                        "board_v",
-                    )
-
-                if (row.contains("enc") && keywords.any { row.contains(it) }) {
-                    val botId = Configurable.botId
-                    if (botId > 0L) {
-                        val enc = row["enc"]?.toIntOrNull() ?: 0
-                        val keysToDecrypt =
-                            arrayOf(
-                                "nick_name",
-                                "name",
-                                "nickname",
-                                "profile_image_url",
-                                "full_profile_image_url",
-                                "original_profile_image_url",
-                                "status_message",
-                                "contact_name",
-                                "v",
-                                "board_v",
-                            )
-                        row = decryptRowValues(row, enc, botId, keysToDecrypt)
-                    }
-                }
+                row = decryptMessageFields(row)
+                row = decryptProfileFields(row)
             } catch (e: Exception) {
                 IrisLogger.error("JSON processing error during decryption: $e")
             }
 
             return row
+        }
+
+        private fun decryptMessageFields(row: MutableMap<String, String?>): MutableMap<String, String?> {
+            if (!row.contains("message") && !row.contains("attachment")) {
+                return row
+            }
+
+            val vStr = row.getOrDefault("v", "")
+            if (vStr?.isNotEmpty() != true) {
+                return row
+            }
+
+            return try {
+                val vJson = JSONObject(vStr)
+                val enc = vJson.optInt("enc", 0)
+                val userId = row["user_id"]?.toLongOrNull() ?: Configurable.botId
+                if (userId > 0L) {
+                    decryptRowValues(row, enc, userId, MESSAGE_DECRYPT_KEYS)
+                } else {
+                    row
+                }
+            } catch (e: JSONException) {
+                IrisLogger.error("Error parsing 'v' for decryption: $e")
+                row
+            }
+        }
+
+        private fun decryptProfileFields(row: MutableMap<String, String?>): MutableMap<String, String?> {
+            if (!row.contains("enc") || !PROFILE_DECRYPT_KEYWORDS.any { row.contains(it) }) {
+                return row
+            }
+
+            val botId = Configurable.botId
+            if (botId <= 0L) {
+                return row
+            }
+
+            val enc = row["enc"]?.toIntOrNull() ?: 0
+            return decryptRowValues(row, enc, botId, PROFILE_DECRYPT_KEYS)
         }
 
         private fun decryptRowValues(
@@ -380,6 +478,8 @@ class KakaoDB {
         }
     }
 }
+
+private fun android.database.Cursor.getOptionalString(index: Int): String? = index.takeIf { it >= 0 }?.let { getString(it) }
 
 internal sealed interface BotUserIdResolution {
     val botId: Long

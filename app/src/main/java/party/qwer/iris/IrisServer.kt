@@ -6,9 +6,9 @@ import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.install
 import io.ktor.server.application.serverConfig
+import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.applicationEnvironment
 import io.ktor.server.engine.connector
-import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
@@ -250,17 +250,6 @@ class IrisServer(
         )
     }
 
-    private fun resolveEndpointRoute(rawRoute: String?): String {
-        val normalized = rawRoute?.trim().orEmpty()
-        if (normalized.isEmpty()) {
-            return DEFAULT_WEBHOOK_ROUTE
-        }
-        if (!normalized.all { it.isLetterOrDigit() || it == '-' || it == '_' }) {
-            throw ApiRequestException("route must contain only letters, digits, '-' or '_'")
-        }
-        return normalized
-    }
-
     private fun updateDbRateConfig(
         name: String,
         request: ConfigRequest,
@@ -318,11 +307,17 @@ class IrisServer(
             replyRequest.threadId?.let {
                 it.toLongOrNull() ?: invalidRequest("threadId must be a numeric string")
             }
+        val threadScope =
+            try {
+                validateReplyThreadScope(replyRequest.type, threadId, replyRequest.threadScope)
+            } catch (e: IllegalArgumentException) {
+                invalidRequest(e.message ?: "invalid threadScope")
+            }
         if (threadId != null && !supportsThreadReply(replyRequest.type)) {
             invalidRequest("threadId is only supported for text replies")
         }
 
-        val admission = admitReply(replyRequest, roomId, threadId)
+        val admission = admitReply(replyRequest, roomId, threadId, threadScope)
         if (admission.status != ReplyAdmissionStatus.ACCEPTED) {
             requestRejected(
                 admission.message ?: "reply request rejected",
@@ -341,6 +336,7 @@ class IrisServer(
         replyRequest: ReplyRequest,
         roomId: Long,
         threadId: Long?,
+        threadScope: Int?,
     ): ReplyAdmissionResult =
         when (replyRequest.type) {
             ReplyType.TEXT ->
@@ -349,6 +345,7 @@ class IrisServer(
                     roomId,
                     extractTextPayload(replyRequest),
                     threadId,
+                    threadScope,
                 )
 
             ReplyType.IMAGE ->
@@ -435,9 +432,36 @@ internal fun irisServerTransportConfig(): IrisServerTransportConfig =
         enableH2c = true,
     )
 
+internal fun validateReplyThreadScope(
+    replyType: ReplyType,
+    threadId: Long?,
+    threadScope: Int?,
+): Int? {
+    val normalizedScope =
+        threadScope?.takeIf { it > 0 } ?: threadScope?.let {
+            throw IllegalArgumentException("threadScope must be a positive integer")
+        }
+            ?: return null
+
+    require(supportsThreadReply(replyType)) { "threadId is only supported for text replies" }
+    require(threadId != null || normalizedScope == 1) { "threadScope requires threadId unless scope is 1" }
+    return normalizedScope
+}
+
 private fun invalidRequest(message: String): Nothing = throw ApiRequestException(message)
 
 private fun internalServerFailure(message: String): Nothing = throw ApiRequestException(message, HttpStatusCode.InternalServerError)
+
+private fun resolveEndpointRoute(rawRoute: String?): String {
+    val normalized = rawRoute?.trim().orEmpty()
+    if (normalized.isEmpty()) {
+        return DEFAULT_WEBHOOK_ROUTE
+    }
+    if (!normalized.all { it.isLetterOrDigit() || it == '-' || it == '_' }) {
+        throw ApiRequestException("route must contain only letters, digits, '-' or '_'")
+    }
+    return normalized
+}
 
 private fun requestRejected(
     message: String,

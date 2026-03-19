@@ -23,18 +23,15 @@ import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
-import party.qwer.iris.CommandKind
 import party.qwer.iris.CommandParser
 import party.qwer.iris.Configurable
 import party.qwer.iris.IrisLogger
-import party.qwer.iris.ParsedCommand
 import java.io.Closeable
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
-import kotlin.random.Random
 
 class H2cDispatcher internal constructor(
     transportOverride: String? = null,
@@ -50,12 +47,13 @@ class H2cDispatcher internal constructor(
 
     private val webhookTransport: WebhookTransport =
         run {
-            val raw = transportOverride?.trim()?.lowercase()
-                ?: System
-                    .getenv("IRIS_WEBHOOK_TRANSPORT")
-                    ?.trim()
-                    ?.lowercase()
-                    .orEmpty()
+            val raw =
+                transportOverride?.trim()?.lowercase()
+                    ?: System
+                        .getenv("IRIS_WEBHOOK_TRANSPORT")
+                        ?.trim()
+                        ?.lowercase()
+                        .orEmpty()
             when (raw) {
                 "http1", "http1_1", "http", "https" -> WebhookTransport.HTTP1
                 "", "h2c" -> WebhookTransport.H2C
@@ -85,7 +83,7 @@ class H2cDispatcher internal constructor(
     private fun createBaseClient(): OkHttpClient =
         OkHttpClient
             .Builder()
-            .retryOnConnectionFailure(true)
+            .retryOnConnectionFailure(false)
             .dispatcher(sharedDispatcher)
             .connectionPool(sharedConnectionPool)
             .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
@@ -233,21 +231,13 @@ class H2cDispatcher internal constructor(
                 }
 
             when (outcome) {
-                DeliveryOutcome.SUCCESS -> {
+                DeliveryOutcome.SUCCESS,
+                DeliveryOutcome.DROP,
+                -> {
                     routeState.queuedMessageIds.remove(delivery.messageId)
-                    IrisLogger.debug(
-                        "[H2cDispatcher] Delivery completed: route=${delivery.route}, " +
-                            "messageId=${delivery.messageId}",
-                    )
-                    return
-                }
-
-                DeliveryOutcome.DROP -> {
-                    routeState.queuedMessageIds.remove(delivery.messageId)
-                    IrisLogger.error(
-                        "[H2cDispatcher] Delivery dropped: route=${delivery.route}, " +
-                            "messageId=${delivery.messageId}",
-                    )
+                    val tag = if (outcome == DeliveryOutcome.SUCCESS) "completed" else "dropped"
+                    val log = "[H2cDispatcher] Delivery $tag: route=${delivery.route}, messageId=${delivery.messageId}"
+                    if (outcome == DeliveryOutcome.SUCCESS) IrisLogger.debug(log) else IrisLogger.error(log)
                     return
                 }
 
@@ -307,7 +297,6 @@ class H2cDispatcher internal constructor(
                     .Builder()
                     .url(delivery.url)
                     .post(delivery.payloadJson.toRequestBody(APPLICATION_JSON.toMediaType()))
-                    .header(HEADER_CONTENT_TYPE, APPLICATION_JSON)
                     .header(HEADER_IRIS_MESSAGE_ID, delivery.messageId)
                     .header(HEADER_IRIS_ROUTE, delivery.route)
                     .apply {
@@ -405,13 +394,7 @@ class H2cDispatcher internal constructor(
     ): QueuedDelivery {
         val messageId = "kakao-log-${command.sourceLogId}-$route"
         return QueuedDelivery(
-            sourceLogId = command.sourceLogId,
             url = webhookUrl,
-            text = command.text,
-            room = command.room,
-            sender = command.sender,
-            userId = command.userId,
-            threadId = command.threadId,
             messageId = messageId,
             route = route,
             payloadJson =
@@ -423,26 +406,21 @@ class H2cDispatcher internal constructor(
                     put("room", command.room)
                     put("sender", command.sender)
                     put("userId", command.userId)
+                    if (!command.chatLogId.isNullOrBlank()) {
+                        put("chatLogId", command.chatLogId)
+                    }
+                    if (!command.roomType.isNullOrBlank()) {
+                        put("roomType", command.roomType)
+                    }
+                    if (!command.roomLinkId.isNullOrBlank()) {
+                        put("roomLinkId", command.roomLinkId)
+                    }
                     if (!command.threadId.isNullOrBlank()) {
                         put("threadId", command.threadId)
                     }
+                    command.threadScope?.let { put("threadScope", it) }
                 }.toString(),
         )
-    }
-
-    data class RoutingCommand(
-        val text: String,
-        val room: String,
-        val sender: String,
-        val userId: String,
-        val sourceLogId: Long,
-        val threadId: String? = null,
-    )
-
-    enum class RoutingResult {
-        ACCEPTED,
-        SKIPPED,
-        RETRY_LATER,
     }
 
     private enum class DeliveryOutcome {
@@ -468,7 +446,6 @@ class H2cDispatcher internal constructor(
         private const val HEADER_IRIS_TOKEN = "X-Iris-Token"
         private const val HEADER_IRIS_MESSAGE_ID = "X-Iris-Message-Id"
         private const val HEADER_IRIS_ROUTE = "X-Iris-Route"
-        private const val HEADER_CONTENT_TYPE = "Content-Type"
         private const val APPLICATION_JSON = "application/json"
         private const val NONE = "<none>"
 
@@ -477,9 +454,6 @@ class H2cDispatcher internal constructor(
         private const val SOCKET_TIMEOUT_MS = 30_000L
     }
 }
-
-internal const val ROUTE_HOLOLIVE = "hololive"
-internal const val ROUTE_CHATBOTGO = "chatbotgo"
 
 internal class RouteDispatchRegistry<T>(
     private val factory: (String) -> T,
@@ -498,80 +472,10 @@ private data class RouteDispatchState(
     val workerJob: Job,
 )
 
-internal fun resolveWebhookRoute(commandText: String): String? = resolveWebhookRoute(CommandParser.parse(commandText))
-
-private fun resolveWebhookRoute(parsedCommand: ParsedCommand): String? {
-    if (parsedCommand.kind != CommandKind.WEBHOOK) {
-        return null
-    }
-
-    return if (isChatbotgoCommand(parsedCommand.normalizedText)) {
-        ROUTE_CHATBOTGO
-    } else {
-        ROUTE_HOLOLIVE
-    }
-}
-
-private fun isChatbotgoCommand(normalizedText: String): Boolean =
-    matchesCommandPrefix(normalizedText, "!질문") ||
-        matchesCommandPrefix(normalizedText, "!리셋") ||
-        matchesCommandPrefix(normalizedText, "!관리자")
-
-private fun matchesCommandPrefix(
-    raw: String,
-    command: String,
-): Boolean {
-    if (!raw.startsWith(command)) {
-        return false
-    }
-    if (raw.length == command.length) {
-        return true
-    }
-
-    return raw[command.length].isWhitespace()
-}
-
-private fun shouldRetryStatus(statusCode: Int): Boolean = statusCode == 408 || statusCode == 429 || statusCode >= 500
-
-private fun nextBackoffDelayMs(attempt: Int): Long {
-    val cappedAttempt = attempt.coerceAtMost(5)
-    val baseDelay = 1_000L shl cappedAttempt
-    val boundedDelay = baseDelay.coerceAtMost(30_000L)
-    val jitter = Random.nextLong(0, 500L + 1)
-    return boundedDelay + jitter
-}
-
-internal sealed interface DeliveryRetrySchedule {
-    data class RetryAttempt(
-        val nextAttempt: Int,
-        val delayMs: Long,
-    ) : DeliveryRetrySchedule
-
-    data object Exhausted : DeliveryRetrySchedule
-}
-
-internal fun nextDeliveryRetrySchedule(
-    attempt: Int,
-    maxDeliveryAttempts: Int = H2cDispatcher.MAX_DELIVERY_ATTEMPTS,
-    backoffDelayProvider: (Int) -> Long = ::nextBackoffDelayMs,
-): DeliveryRetrySchedule =
-    if (attempt < maxDeliveryAttempts - 1) {
-        DeliveryRetrySchedule.RetryAttempt(
-            nextAttempt = attempt + 1,
-            delayMs = backoffDelayProvider(attempt),
-        )
-    } else {
-        DeliveryRetrySchedule.Exhausted
-    }
+internal fun shouldRetryStatus(statusCode: Int): Boolean = statusCode == 408 || statusCode == 429 || statusCode >= 500
 
 private data class QueuedDelivery(
-    val sourceLogId: Long,
     val url: String,
-    val text: String,
-    val room: String,
-    val sender: String,
-    val userId: String,
-    val threadId: String?,
     val messageId: String,
     val route: String,
     val payloadJson: String,

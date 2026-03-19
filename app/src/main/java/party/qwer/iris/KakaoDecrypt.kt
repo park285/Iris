@@ -8,8 +8,6 @@ import javax.crypto.BadPaddingException
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
-import kotlin.math.max
-import kotlin.math.min
 
 // Kakaodecrypt : jiru/kakaodecrypt
 
@@ -17,6 +15,44 @@ class KakaoDecrypt {
     companion object {
         // 스레드 안전한 키 캐시
         private val keyCache: MutableMap<String, ByteArray?> = java.util.concurrent.ConcurrentHashMap()
+        private val KEY_BYTES =
+            byteArrayOf(
+                0x16.toByte(),
+                0x08.toByte(),
+                0x09.toByte(),
+                0x6f.toByte(),
+                0x02.toByte(),
+                0x17.toByte(),
+                0x2b.toByte(),
+                0x08.toByte(),
+                0x21.toByte(),
+                0x21.toByte(),
+                0x0a.toByte(),
+                0x10.toByte(),
+                0x03.toByte(),
+                0x03.toByte(),
+                0x07.toByte(),
+                0x06.toByte(),
+            )
+        private val IV_BYTES =
+            byteArrayOf(
+                0x0f.toByte(),
+                0x08.toByte(),
+                0x01.toByte(),
+                0x00.toByte(),
+                0x19.toByte(),
+                0x47.toByte(),
+                0x25.toByte(),
+                0xdc.toByte(),
+                0x15.toByte(),
+                0xf5.toByte(),
+                0x17.toByte(),
+                0xe0.toByte(),
+                0xe1.toByte(),
+                0x15.toByte(),
+                0x0c.toByte(),
+                0x35.toByte(),
+            )
 
         private fun incept(n: Int): String {
             val dict1 =
@@ -187,11 +223,11 @@ class KakaoDecrypt {
             var saltStr: String
             try {
                 saltStr = prefixes[encType] + user_id
-                saltStr = saltStr.substring(0, min(saltStr.length.toDouble(), 16.0).toInt())
+                saltStr = saltStr.substring(0, minOf(saltStr.length, 16))
             } catch (e: ArrayIndexOutOfBoundsException) {
                 throw IllegalArgumentException("Unsupported encoding type $encType", e)
             }
-            saltStr += "\u0000".repeat(max(0.0, (16 - saltStr.length).toDouble()).toInt())
+            saltStr += "\u0000".repeat(maxOf(0, 16 - saltStr.length))
             return saltStr.toByteArray(StandardCharsets.UTF_8)
         }
 
@@ -220,7 +256,7 @@ class KakaoDecrypt {
             val password = String(passwordBytes, StandardCharsets.US_ASCII) + "\u0000"
             val passwordUTF16BE = password.toByteArray(StandardCharsets.UTF_16BE)
 
-            var hasher = MessageDigest.getInstance("SHA-1")
+            val hasher = MessageDigest.getInstance("SHA-1")
             val digestSize = hasher.digestLength
             val blockSize = 64
 
@@ -244,13 +280,13 @@ class KakaoDecrypt {
 
             val dKey = ByteArray(dkeySize)
             for (i in 1..c) {
-                hasher = MessageDigest.getInstance("SHA-1")
+                hasher.reset()
                 hasher.update(D)
                 hasher.update(I)
                 var A = hasher.digest()
 
                 for (j in 1 until iterations) {
-                    hasher = MessageDigest.getInstance("SHA-1")
+                    hasher.reset()
                     hasher.update(A)
                     A = hasher.digest()
                 }
@@ -280,57 +316,12 @@ class KakaoDecrypt {
             b64_ciphertext: String,
             user_id: Long,
         ): String {
-            val keyBytes =
-                byteArrayOf(
-                    0x16.toByte(),
-                    0x08.toByte(),
-                    0x09.toByte(),
-                    0x6f.toByte(),
-                    0x02.toByte(),
-                    0x17.toByte(),
-                    0x2b.toByte(),
-                    0x08.toByte(),
-                    0x21.toByte(),
-                    0x21.toByte(),
-                    0x0a.toByte(),
-                    0x10.toByte(),
-                    0x03.toByte(),
-                    0x03.toByte(),
-                    0x07.toByte(),
-                    0x06.toByte(),
-                )
-            val ivBytes =
-                byteArrayOf(
-                    0x0f.toByte(),
-                    0x08.toByte(),
-                    0x01.toByte(),
-                    0x00.toByte(),
-                    0x19.toByte(),
-                    0x47.toByte(),
-                    0x25.toByte(),
-                    0xdc.toByte(),
-                    0x15.toByte(),
-                    0xf5.toByte(),
-                    0x17.toByte(),
-                    0xe0.toByte(),
-                    0xe1.toByte(),
-                    0x15.toByte(),
-                    0x0c.toByte(),
-                    0x35.toByte(),
-                )
-
             val salt = genSalt(user_id, encType)
-            val key: ByteArray?
             val saltStr = String(salt, StandardCharsets.UTF_8)
-            if (keyCache.containsKey(saltStr)) {
-                key = keyCache[saltStr]
-            } else {
-                key = deriveKey(keyBytes, salt, 2, 32)
-                keyCache[saltStr] = key
-            }
+            val key = keyCache.getOrPut(saltStr) { deriveKey(KEY_BYTES, salt, 2, 32) }
 
             val secretKeySpec = SecretKeySpec(key, "AES")
-            val ivParameterSpec = IvParameterSpec(ivBytes)
+            val ivParameterSpec = IvParameterSpec(IV_BYTES)
             val cipher = Cipher.getInstance("AES/CBC/NoPadding")
 
             cipher.init(Cipher.DECRYPT_MODE, secretKeySpec, ivParameterSpec)

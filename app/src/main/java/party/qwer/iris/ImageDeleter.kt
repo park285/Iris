@@ -9,8 +9,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlin.concurrent.Volatile
 import java.io.File
+import kotlin.concurrent.Volatile
 
 class ImageDeleter(
     private val imageDirPath: String,

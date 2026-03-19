@@ -7,11 +7,11 @@ import party.qwer.iris.Configurable
 import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
 import java.net.InetSocketAddress
 import java.net.ServerSocket
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -26,9 +26,9 @@ class H2cDispatcherBestEffortTest {
 
         H2cDispatcher(transportOverride = "http1").use { dispatcher ->
             assertEquals(
-                H2cDispatcher.RoutingResult.ACCEPTED,
+                RoutingResult.ACCEPTED,
                 dispatcher.route(
-                    H2cDispatcher.RoutingCommand(
+                    RoutingCommand(
                         text = "!ping",
                         room = "1",
                         sender = "tester",
@@ -58,9 +58,9 @@ class H2cDispatcherBestEffortTest {
                 assertFalse(latch.await(200, TimeUnit.MILLISECONDS))
                 assertEquals(0, requestCount.get())
                 assertEquals(
-                    H2cDispatcher.RoutingResult.ACCEPTED,
+                    RoutingResult.ACCEPTED,
                     restarted.route(
-                        H2cDispatcher.RoutingCommand(
+                        RoutingCommand(
                             text = "!ping",
                             room = "1",
                             sender = "tester",
@@ -102,10 +102,10 @@ class H2cDispatcherBestEffortTest {
                 transportOverride = "http1",
                 queueCapacityOverride = 1,
             ).use { dispatcher ->
-                assertEquals(routeAccepted(dispatcher, 1L), H2cDispatcher.RoutingResult.ACCEPTED)
+                assertEquals(routeAccepted(dispatcher, 1L), RoutingResult.ACCEPTED)
                 assertTrue(firstRequestStarted.await(3, TimeUnit.SECONDS))
-                assertEquals(routeAccepted(dispatcher, 2L), H2cDispatcher.RoutingResult.ACCEPTED)
-                assertEquals(H2cDispatcher.RoutingResult.RETRY_LATER, routeAccepted(dispatcher, 3L))
+                assertEquals(routeAccepted(dispatcher, 2L), RoutingResult.ACCEPTED)
+                assertEquals(RoutingResult.RETRY_LATER, routeAccepted(dispatcher, 3L))
                 releaseFirstRequest.countDown()
             }
         } finally {
@@ -144,8 +144,8 @@ class H2cDispatcherBestEffortTest {
                 maxDeliveryAttemptsOverride = 3,
                 backoffDelayProviderOverride = { 10L },
             ).use { dispatcher ->
-                assertEquals(H2cDispatcher.RoutingResult.ACCEPTED, routeAccepted(dispatcher, 1L))
-                assertEquals(H2cDispatcher.RoutingResult.ACCEPTED, routeAccepted(dispatcher, 2L))
+                assertEquals(RoutingResult.ACCEPTED, routeAccepted(dispatcher, 1L))
+                assertEquals(RoutingResult.ACCEPTED, routeAccepted(dispatcher, 2L))
 
                 assertTrue(requestLatch.await(10, TimeUnit.SECONDS))
                 assertEquals(List(3) { firstMessageId } + secondMessageId, messageOrder)
@@ -159,9 +159,9 @@ class H2cDispatcherBestEffortTest {
     private fun routeAccepted(
         dispatcher: H2cDispatcher,
         sourceLogId: Long,
-    ): H2cDispatcher.RoutingResult =
+    ): RoutingResult =
         dispatcher.route(
-            H2cDispatcher.RoutingCommand(
+            RoutingCommand(
                 text = "!ping",
                 room = "1",
                 sender = "tester",

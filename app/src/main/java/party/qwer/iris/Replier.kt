@@ -134,9 +134,11 @@ class Replier {
             chatId: Long,
             msg: String,
             threadId: Long?,
+            threadScope: Int?,
         ) {
             IrisLogger.debugLazy { "[Replier] sendMessageInternal: preparing intent for chatId=$chatId" }
             val preparedMessage = preserveInvisiblePadding(msg)
+            val isThreadNotification = threadId != null || threadScope != null
 
             val intent =
                 Intent().apply {
@@ -148,9 +150,12 @@ class Replier {
                     putExtra("noti_referer", referer)
                     putExtra("chat_id", chatId)
 
-                    putExtra("is_chat_thread_notification", threadId != null)
+                    putExtra("is_chat_thread_notification", isThreadNotification)
                     if (threadId != null) {
                         putExtra("thread_id", threadId)
+                    }
+                    if (threadScope != null) {
+                        putExtra("scope", threadScope)
                     }
 
                     action = "com.kakao.talk.notification.REPLY_MESSAGE"
@@ -179,6 +184,7 @@ class Replier {
             chatId: Long,
             msg: String,
             threadId: Long?,
+            threadScope: Int?,
         ): ReplyAdmissionResult {
             IrisLogger.debugLazy { "[Replier] sendMessage called: chatId=$chatId, msg='${msg.take(LOG_MESSAGE_PREVIEW_LENGTH)}...'" }
             return enqueueRequest(
@@ -189,6 +195,7 @@ class Replier {
                         chatId,
                         msg,
                         threadId,
+                        threadScope,
                     )
                     IrisLogger.debugLazy { "[Replier] sendMessageInternal completed for chatId=$chatId" }
                 },
