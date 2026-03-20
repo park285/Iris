@@ -15,6 +15,10 @@
 local.properties
 /output
 
+# IDE / Build cache
+.kotlin/
+.vscode/
+
 # Claude Code / AI Assistant
 .claude/
 .codex/
