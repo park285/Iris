@@ -9,6 +9,7 @@ class H2cDispatcherRouteSupportTest {
     @Test
     fun `routes chatbotgo commands to chatbotgo`() {
         assertEquals("chatbotgo", resolveWebhookRoute("!질문 hello"))
+        assertEquals("chatbotgo", resolveWebhookRoute("!이미지 이 사진 뭐야"))
         assertEquals("chatbotgo", resolveWebhookRoute("!리셋"))
         assertEquals("chatbotgo", resolveWebhookRoute("!관리자 상태"))
         assertEquals("chatbotgo", resolveWebhookRoute("!한강"))
@@ -30,6 +31,20 @@ class H2cDispatcherRouteSupportTest {
     @Test
     fun `returns null for non webhook messages`() {
         assertNull(resolveWebhookRoute("hello"))
+    }
+
+    @Test
+    fun `routes image messages to chatbotgo`() {
+        assertEquals("chatbotgo", resolveImageRoute("2"))
+        assertEquals("chatbotgo", resolveImageRoute(" 2 "))
+    }
+
+    @Test
+    fun `returns null for non image message types`() {
+        assertNull(resolveImageRoute("1"))
+        assertNull(resolveImageRoute("26"))
+        assertNull(resolveImageRoute(null))
+        assertNull(resolveImageRoute(""))
     }
 
     @Test

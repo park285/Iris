@@ -127,7 +127,10 @@ class H2cDispatcher internal constructor(
         }
 
         val parsedCommand = CommandParser.parse(command.text)
-        val targetRoute = resolveWebhookRoute(parsedCommand) ?: return RoutingResult.SKIPPED
+        val targetRoute =
+            resolveWebhookRoute(parsedCommand)
+                ?: resolveImageRoute(command.messageType)
+                ?: return RoutingResult.SKIPPED
         val webhookUrl = Configurable.webhookEndpointFor(targetRoute).takeIf { it.isNotBlank() }
         if (webhookUrl.isNullOrBlank()) {
             IrisLogger.error("[H2cDispatcher] No webhook URL configured for route: $targetRoute")

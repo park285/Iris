@@ -11,6 +11,7 @@ internal const val ROUTE_SETTLEMENT = "settlement"
 private val CHATBOTGO_COMMAND_PREFIXES =
     setOf(
         "!질문",
+        "!이미지",
         "!리셋",
         "!관리자",
         "!한강",
@@ -46,6 +47,15 @@ private fun isChatbotgoCommand(normalizedText: String): Boolean =
     CHATBOTGO_COMMAND_PREFIXES.any { command ->
         matchesCommandPrefix(normalizedText, command)
     }
+
+private const val IMAGE_MESSAGE_TYPE = "2"
+
+internal fun resolveImageRoute(messageType: String?): String? {
+    if (messageType?.trim() == IMAGE_MESSAGE_TYPE) {
+        return ROUTE_CHATBOTGO
+    }
+    return null
+}
 
 private fun matchesCommandPrefix(
     raw: String,

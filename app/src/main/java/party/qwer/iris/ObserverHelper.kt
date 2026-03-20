@@ -155,7 +155,8 @@ class ObserverHelper(
         parsedCommand: ParsedCommand,
         origin: String,
     ): Boolean {
-        if (parsedCommand.kind != CommandKind.WEBHOOK) {
+        val isImageMessage = logEntry.messageType?.trim() == IMAGE_MESSAGE_TYPE
+        if (parsedCommand.kind != CommandKind.WEBHOOK && !isImageMessage) {
             return false
         }
 
@@ -276,6 +277,7 @@ class ObserverHelper(
 
     companion object {
         private const val MAX_COMMAND_FINGERPRINTS = 256
+        private const val IMAGE_MESSAGE_TYPE = "2"
     }
 
     internal data class CommandFingerprint(
