@@ -3,7 +3,7 @@ import org.gradle.api.tasks.Copy
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.serialization)
-    alias(libs.plugins.detekt)
+
     alias(libs.plugins.ktlint)
 }
 
@@ -12,8 +12,8 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        minSdk = 26
-        targetSdk = 34
+        minSdk = 35
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0"
     }
@@ -29,6 +29,15 @@ android {
                 "proguard-rules.pro",
             )
         }
+    }
+
+    lint {
+        abortOnError = true
+        warningsAsErrors = true
+        // 설계상 의도된 패턴
+        disable += setOf("PrivateApi", "SdCardPath")
+        // 버전 업데이트 알림 비활성화
+        disable += setOf("GradleDependency", "NewerVersionAvailable", "AndroidGradlePluginVersion", "OldTargetApi")
     }
 
     compileOptions {
@@ -73,20 +82,10 @@ private fun registerAssembleOutputCopyTask(variantName: String) {
 registerAssembleOutputCopyTask("debug")
 registerAssembleOutputCopyTask("release")
 
-// Detekt 설정
-detekt {
-    buildUponDefaultConfig = true
-    allRules = false
-    config.setFrom(files("${rootProject.rootDir}/config/detekt/detekt.yml"))
-    baseline = file("${rootProject.rootDir}/config/detekt/baseline.xml")
-}
-
-tasks.withType<io.gitlab.arturbosch.detekt.Detekt>().configureEach {
-    jvmTarget = "21"
-}
-
-tasks.withType<io.gitlab.arturbosch.detekt.DetektCreateBaselineTask>().configureEach {
-    jvmTarget = "21"
+// assemble 시 Android Lint + ktlint 강제 실행
+tasks.matching { it.name.startsWith("assemble") }.configureEach {
+    dependsOn("ktlintCheck")
+    dependsOn("lint")
 }
 
 // ktlint 설정
