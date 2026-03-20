@@ -419,6 +419,12 @@ class H2cDispatcher internal constructor(
                         put("threadId", command.threadId)
                     }
                     command.threadScope?.let { put("threadScope", it) }
+                    if (!command.messageType.isNullOrBlank()) {
+                        put("type", command.messageType)
+                    }
+                    if (!command.attachment.isNullOrBlank()) {
+                        put("attachment", command.attachment)
+                    }
                 }.toString(),
         )
     }

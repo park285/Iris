@@ -196,6 +196,8 @@ class ObserverHelper(
                 roomLinkId = roomMetadata.linkId.takeIf { it.isNotEmpty() },
                 threadId = threadMetadata?.threadId,
                 threadScope = threadMetadata?.threadScope,
+                messageType = logEntry.messageType?.trim()?.takeIf { it.isNotEmpty() },
+                attachment = logEntry.attachment?.takeIf { it.isNotBlank() },
             )
 
         return when (ensureDispatcher()?.route(routingCommand) ?: RoutingResult.RETRY_LATER) {
