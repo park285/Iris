@@ -209,6 +209,7 @@ class KakaoDB {
                     val messageTypeIndex = cursor.getColumnIndex("type")
                     val threadIdIndex = cursor.getColumnIndex("thread_id")
                     val supplementIndex = cursor.getColumnIndex("supplement")
+                    val attachmentIndex = cursor.getColumnIndex("attachment")
                     while (cursor.moveToNext()) {
                         rows.add(
                             ChatLogEntry(
@@ -222,6 +223,7 @@ class KakaoDB {
                                 messageType = cursor.getOptionalString(messageTypeIndex),
                                 threadId = cursor.getOptionalString(threadIdIndex),
                                 supplement = cursor.getOptionalString(supplementIndex),
+                                attachment = cursor.getOptionalString(attachmentIndex),
                             ),
                         )
                     }
@@ -362,6 +364,7 @@ class KakaoDB {
         val messageType: String? = null,
         val threadId: String? = null,
         val supplement: String? = null,
+        val attachment: String? = null,
     )
 
     data class RoomMetadata(
