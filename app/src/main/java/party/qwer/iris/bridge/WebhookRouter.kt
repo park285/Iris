@@ -13,6 +13,7 @@ private val CHATBOTGO_COMMAND_PREFIXES =
         "!질문",
         "!리셋",
         "!관리자",
+        "!한강",
     )
 
 private val SETTLEMENT_COMMAND_PREFIXES =

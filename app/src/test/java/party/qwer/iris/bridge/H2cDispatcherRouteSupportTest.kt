@@ -11,6 +11,7 @@ class H2cDispatcherRouteSupportTest {
         assertEquals("chatbotgo", resolveWebhookRoute("!질문 hello"))
         assertEquals("chatbotgo", resolveWebhookRoute("!리셋"))
         assertEquals("chatbotgo", resolveWebhookRoute("!관리자 상태"))
+        assertEquals("chatbotgo", resolveWebhookRoute("!한강"))
     }
 
     @Test
