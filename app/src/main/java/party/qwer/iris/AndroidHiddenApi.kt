@@ -9,9 +9,15 @@ import android.os.IBinder
 @SuppressLint("PrivateApi")
 class AndroidHiddenApi {
     companion object {
-        val startService = getStartServiceMethod()
-        val startActivity = getStartActivityMethod()
-        val broadcastIntent = getBroadcastIntentMethod()
+        val startService: (Intent) -> Unit by lazy {
+            getStartServiceMethod()
+        }
+        val startActivity: (Intent) -> Unit by lazy {
+            getStartActivityMethod()
+        }
+        val broadcastIntent: (Intent) -> Unit by lazy {
+            getBroadcastIntentMethod()
+        }
 
         private val callingPackageName: String by lazy {
             System.getenv("IRIS_RUNNER") ?: "com.android.shell"
