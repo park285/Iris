@@ -47,12 +47,16 @@ class H2cDispatcher internal constructor(
 
     private val sharedDispatcher =
         Dispatcher().apply {
-            maxRequests = MAX_CONCURRENT_REQUESTS
-            maxRequestsPerHost =
-                when (transport) {
-                    WebhookTransport.H2C -> DISPATCH_QUEUE_CAPACITY
-                    WebhookTransport.HTTP1 -> 4
+            when (transport) {
+                WebhookTransport.H2C -> {
+                    maxRequests = DISPATCH_QUEUE_CAPACITY
+                    maxRequestsPerHost = DISPATCH_QUEUE_CAPACITY
                 }
+                WebhookTransport.HTTP1 -> {
+                    maxRequests = MAX_CONCURRENT_REQUESTS
+                    maxRequestsPerHost = MAX_CONCURRENT_REQUESTS
+                }
+            }
         }
     private val sharedConnectionPool =
         ConnectionPool(

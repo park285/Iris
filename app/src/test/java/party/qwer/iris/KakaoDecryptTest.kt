@@ -126,6 +126,39 @@ class KakaoDecryptTest {
         assertEquals(first, second)
     }
 
+    @Test
+    fun `decrypt is thread-safe under concurrent access`() {
+        val threadCount = 8
+        val iterationsPerThread = 50
+        val plaintexts = (1..5).map { "concurrent-test-$it" }
+        val ciphertexts =
+            plaintexts.map { plaintext ->
+                plaintext to encrypt(encType = 3, plaintext = plaintext, userId = 77777L)
+            }
+
+        val errors = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val latch = java.util.concurrent.CountDownLatch(threadCount)
+        val threads =
+            (1..threadCount).map { threadIdx ->
+                Thread {
+                    try {
+                        repeat(iterationsPerThread) { i ->
+                            val (expected, ct) = ciphertexts[(threadIdx + i) % ciphertexts.size]
+                            val result = KakaoDecrypt.decrypt(encType = 3, b64_ciphertext = ct, user_id = 77777L)
+                            if (result != expected) {
+                                errors.add("thread=$threadIdx iter=$i: expected='$expected' got='$result'")
+                            }
+                        }
+                    } finally {
+                        latch.countDown()
+                    }
+                }
+            }
+        threads.forEach { it.start() }
+        latch.await(10, java.util.concurrent.TimeUnit.SECONDS)
+        assertEquals(emptyList(), errors.toList())
+    }
+
     private fun genSalt(
         userId: Long,
         encType: Int,
