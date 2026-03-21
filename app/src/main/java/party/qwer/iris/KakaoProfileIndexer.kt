@@ -46,16 +46,17 @@ class KakaoProfileIndexer(
             return
         }
 
-        workerJob = coroutineScope.launch {
-            while (isActive) {
-                try {
-                    refreshDirectory()
-                } catch (e: Exception) {
-                    IrisLogger.error("[KakaoProfileIndexer] refresh failed: ${e.message}", e)
+        workerJob =
+            coroutineScope.launch {
+                while (isActive) {
+                    try {
+                        refreshDirectory()
+                    } catch (e: Exception) {
+                        IrisLogger.error("[KakaoProfileIndexer] refresh failed: ${e.message}", e)
+                    }
+                    delay(scanIntervalMillis)
                 }
-                delay(scanIntervalMillis)
             }
-        }
     }
 
     @Synchronized

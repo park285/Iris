@@ -386,7 +386,7 @@ private fun cleanupPreparedImages(preparedImages: PreparedImages) {
 }
 
 private val base64MimeDecoder = Base64.getMimeDecoder()
-private const val MAX_IMAGE_PAYLOAD_BYTES = 20 * 1024 * 1024  // 20 MB
+private const val MAX_IMAGE_PAYLOAD_BYTES = 20 * 1024 * 1024 // 20 MB
 private const val MAX_BASE64_IMAGE_PAYLOAD_LENGTH = MAX_IMAGE_PAYLOAD_BYTES * 4 / 3 + 4
 
 internal fun isValidBase64ImagePayloads(base64ImageDataStrings: List<String>): Boolean =

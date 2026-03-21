@@ -155,28 +155,30 @@ class H2cDispatcher internal constructor(
         val routeStates = routeDispatchers.all().toList()
         routeStates.forEach { it.dispatchChannel.close() }
         runBlocking {
-            routeStates.map { routeState ->
-                async {
-                    val completed = runCatching {
-                        withTimeoutOrNull(WORKER_SHUTDOWN_TIMEOUT_MS) {
-                            routeState.workerJob.join()
-                            true
-                        } == true
-                    }.getOrElse {
-                        IrisLogger.error(
-                            "[H2cDispatcher] Failed waiting for route=${routeState.route} worker shutdown: ${it.message}",
-                        )
-                        false
+            routeStates
+                .map { routeState ->
+                    async {
+                        val completed =
+                            runCatching {
+                                withTimeoutOrNull(WORKER_SHUTDOWN_TIMEOUT_MS) {
+                                    routeState.workerJob.join()
+                                    true
+                                } == true
+                            }.getOrElse {
+                                IrisLogger.error(
+                                    "[H2cDispatcher] Failed waiting for route=${routeState.route} worker shutdown: ${it.message}",
+                                )
+                                false
+                            }
+                        if (!completed) {
+                            IrisLogger.error(
+                                "[H2cDispatcher] Worker shutdown timed out for route=${routeState.route}; " +
+                                    "remaining in-flight delivery will be cancelled.",
+                            )
+                            routeState.workerJob.cancelAndJoin()
+                        }
                     }
-                    if (!completed) {
-                        IrisLogger.error(
-                            "[H2cDispatcher] Worker shutdown timed out for route=${routeState.route}; " +
-                                "remaining in-flight delivery will be cancelled.",
-                        )
-                        routeState.workerJob.cancelAndJoin()
-                    }
-                }
-            }.awaitAll()
+                }.awaitAll()
             scopeJob.cancelAndJoin()
         }
         sharedDispatcher.executorService.shutdown()
@@ -242,12 +244,14 @@ class H2cDispatcher internal constructor(
                 -> {
                     routeState.queuedMessageIds.remove(delivery.messageId)
                     when (outcome) {
-                        DeliveryOutcome.SUCCESS -> IrisLogger.debug(
-                            "[H2cDispatcher] Delivery completed: route=${delivery.route}, messageId=${delivery.messageId}",
-                        )
-                        else -> IrisLogger.error(
-                            "[H2cDispatcher] Delivery dropped: route=${delivery.route}, messageId=${delivery.messageId}",
-                        )
+                        DeliveryOutcome.SUCCESS ->
+                            IrisLogger.debug(
+                                "[H2cDispatcher] Delivery completed: route=${delivery.route}, messageId=${delivery.messageId}",
+                            )
+                        else ->
+                            IrisLogger.error(
+                                "[H2cDispatcher] Delivery dropped: route=${delivery.route}, messageId=${delivery.messageId}",
+                            )
                     }
                     return
                 }

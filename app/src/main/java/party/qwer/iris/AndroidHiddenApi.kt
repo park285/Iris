@@ -94,9 +94,11 @@ class AndroidHiddenApi {
                             String::class.java,
                             java.lang.Integer.TYPE,
                         )
-                    ({ intent: Intent ->
-                        method.invoke(activityManager, null, intent, null, false, callingPackageName, null, -3)
-                    })
+                    (
+                        { intent: Intent ->
+                            method.invoke(activityManager, null, intent, null, false, callingPackageName, null, -3)
+                        }
+                    )
                 },
                 {
                     val method =
@@ -109,9 +111,11 @@ class AndroidHiddenApi {
                             String::class.java,
                             java.lang.Integer.TYPE,
                         )
-                    ({ intent: Intent ->
-                        method.invoke(activityManager, null, intent, null, false, callingPackageName, -3)
-                    })
+                    (
+                        { intent: Intent ->
+                            method.invoke(activityManager, null, intent, null, false, callingPackageName, -3)
+                        }
+                    )
                 },
             )
         }
@@ -141,23 +145,25 @@ class AndroidHiddenApi {
                             Bundle::class.java,
                             Integer.TYPE,
                         )
-                    ({ intent: Intent ->
-                        method.invoke(
-                            activityManager,
-                            null,
-                            callingPackageName,
-                            null,
-                            intent,
-                            intent.type,
-                            null,
-                            null,
-                            0,
-                            0,
-                            null,
-                            null,
-                            -3,
-                        )
-                    })
+                    (
+                        { intent: Intent ->
+                            method.invoke(
+                                activityManager,
+                                null,
+                                callingPackageName,
+                                null,
+                                intent,
+                                intent.type,
+                                null,
+                                null,
+                                0,
+                                0,
+                                null,
+                                null,
+                                -3,
+                            )
+                        }
+                    )
                 },
                 {
                     val profilerInfo = Class.forName("android.app.ProfilerInfo")
@@ -176,22 +182,24 @@ class AndroidHiddenApi {
                             Bundle::class.java,
                             Integer.TYPE,
                         )
-                    ({ intent: Intent ->
-                        method.invoke(
-                            activityManager,
-                            null,
-                            callingPackageName,
-                            intent,
-                            intent.type,
-                            null,
-                            null,
-                            0,
-                            0,
-                            null,
-                            null,
-                            -3,
-                        )
-                    })
+                    (
+                        { intent: Intent ->
+                            method.invoke(
+                                activityManager,
+                                null,
+                                callingPackageName,
+                                intent,
+                                intent.type,
+                                null,
+                                null,
+                                0,
+                                0,
+                                null,
+                                null,
+                                -3,
+                            )
+                        }
+                    )
                 },
             )
         }
@@ -222,24 +230,26 @@ class AndroidHiddenApi {
                             java.lang.Boolean.TYPE,
                             Integer.TYPE,
                         )
-                    ({ intent: Intent ->
-                        method.invoke(
-                            activityManager,
-                            null,
-                            intent,
-                            null,
-                            null,
-                            0,
-                            null,
-                            null,
-                            null,
-                            -1,
-                            null,
-                            false,
-                            false,
-                            -3,
-                        )
-                    })
+                    (
+                        { intent: Intent ->
+                            method.invoke(
+                                activityManager,
+                                null,
+                                intent,
+                                null,
+                                null,
+                                0,
+                                null,
+                                null,
+                                null,
+                                -1,
+                                null,
+                                false,
+                                false,
+                                -3,
+                            )
+                        }
+                    )
                 },
             )
         }

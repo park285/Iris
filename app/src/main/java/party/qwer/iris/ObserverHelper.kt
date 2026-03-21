@@ -210,20 +210,19 @@ class ObserverHelper(
         fetch: (K) -> V,
     ): V {
         synchronized(cache) { cache[key] }?.let { return it }
-        val resolved = try {
-            fetch(key)
-        } catch (e: Exception) {
-            IrisLogger.debugLazy { "[ObserverHelper] cachedResolve failed for key=$key: ${e.message}" }
-            return fallback
-        }
+        val resolved =
+            try {
+                fetch(key)
+            } catch (e: Exception) {
+                IrisLogger.debugLazy { "[ObserverHelper] cachedResolve failed for key=$key: ${e.message}" }
+                return fallback
+            }
         return synchronized(cache) { cache.getOrPut(key) { resolved } }
     }
 
-    private fun resolveSenderName(userId: Long): String =
-        cachedResolve(senderNameCache, userId, userId.toString()) { db.resolveSenderName(it) }
+    private fun resolveSenderName(userId: Long): String = cachedResolve(senderNameCache, userId, userId.toString()) { db.resolveSenderName(it) }
 
-    private fun resolveRoomMetadata(chatId: Long): KakaoDB.RoomMetadata =
-        cachedResolve(roomMetadataCache, chatId, KakaoDB.RoomMetadata()) { db.resolveRoomMetadata(it) }
+    private fun resolveRoomMetadata(chatId: Long): KakaoDB.RoomMetadata = cachedResolve(roomMetadataCache, chatId, KakaoDB.RoomMetadata()) { db.resolveRoomMetadata(it) }
 
     private fun isDuplicateCommand(
         logEntry: KakaoDB.ChatLogEntry,
