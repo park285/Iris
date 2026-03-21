@@ -15,24 +15,9 @@ class ObserverHelper(
     @Volatile
     private var dispatcher: H2cDispatcher? = null
 
-    private val senderNameCache =
-        object : LinkedHashMap<Long, String>(64, 0.75f, true) {
-            override fun removeEldestEntry(
-                eldest: MutableMap.MutableEntry<Long, String>?,
-            ): Boolean = size > 64
-        }
-    private val roomMetadataCache =
-        object : LinkedHashMap<Long, KakaoDB.RoomMetadata>(64, 0.75f, true) {
-            override fun removeEldestEntry(
-                eldest: MutableMap.MutableEntry<Long, KakaoDB.RoomMetadata>?,
-            ): Boolean = size > 64
-        }
-    private val recentCommandFingerprints =
-        object : LinkedHashMap<CommandFingerprint, Long>(128, 0.75f, true) {
-            override fun removeEldestEntry(
-                eldest: MutableMap.MutableEntry<CommandFingerprint, Long>?,
-            ): Boolean = size > MAX_COMMAND_FINGERPRINTS
-        }
+    private val senderNameCache = lruMap<Long, String>(64)
+    private val roomMetadataCache = lruMap<Long, KakaoDB.RoomMetadata>(64)
+    private val recentCommandFingerprints = lruMap<CommandFingerprint, Long>(MAX_COMMAND_FINGERPRINTS)
 
     init {
         initBridge()
@@ -218,29 +203,27 @@ class ObserverHelper(
         }
     }
 
-    private fun resolveSenderName(userId: Long): String =
-        try {
-            synchronized(senderNameCache) {
-                senderNameCache.getOrPut(userId) {
-                    db.resolveSenderName(userId)
-                }
-            }
+    private fun <K, V> cachedResolve(
+        cache: LinkedHashMap<K, V>,
+        key: K,
+        fallback: V,
+        fetch: (K) -> V,
+    ): V {
+        synchronized(cache) { cache[key] }?.let { return it }
+        val resolved = try {
+            fetch(key)
         } catch (e: Exception) {
-            IrisLogger.debugLazy { "[ObserverHelper] resolveSenderName failed: ${e.message}, using userId fallback" }
-            userId.toString()
+            IrisLogger.debugLazy { "[ObserverHelper] cachedResolve failed for key=$key: ${e.message}" }
+            return fallback
         }
+        return synchronized(cache) { cache.getOrPut(key) { resolved } }
+    }
+
+    private fun resolveSenderName(userId: Long): String =
+        cachedResolve(senderNameCache, userId, userId.toString()) { db.resolveSenderName(it) }
 
     private fun resolveRoomMetadata(chatId: Long): KakaoDB.RoomMetadata =
-        try {
-            synchronized(roomMetadataCache) {
-                roomMetadataCache.getOrPut(chatId) {
-                    db.resolveRoomMetadata(chatId)
-                }
-            }
-        } catch (e: Exception) {
-            IrisLogger.debugLazy { "[ObserverHelper] resolveRoomMetadata failed: ${e.message}, using empty fallback" }
-            KakaoDB.RoomMetadata()
-        }
+        cachedResolve(roomMetadataCache, chatId, KakaoDB.RoomMetadata()) { db.resolveRoomMetadata(it) }
 
     private fun isDuplicateCommand(
         logEntry: KakaoDB.ChatLogEntry,
@@ -299,3 +282,8 @@ internal fun shouldSkipOrigin(
 ): Boolean = (origin == "SYNCMSG" || origin == "MCHATLOGS") && parsedCommand.kind == CommandKind.NONE
 
 internal fun isOwnBotMessage(userId: Long): Boolean = Configurable.botId != 0L && userId == Configurable.botId
+
+private fun <K, V> lruMap(maxSize: Int): LinkedHashMap<K, V> =
+    object : LinkedHashMap<K, V>(maxSize, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, V>?): Boolean = size > maxSize
+    }
