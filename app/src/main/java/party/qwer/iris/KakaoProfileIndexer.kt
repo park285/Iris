@@ -59,12 +59,16 @@ class KakaoProfileIndexer(
             }
     }
 
-    @Synchronized
     fun stop() {
-        runBlocking {
-            workerJob?.cancelAndJoin()
+        val job = synchronized(this) {
+            val captured = workerJob ?: return
+            workerJob = null
+            captured
         }
-        workerJob = null
+
+        runBlocking {
+            job.cancelAndJoin()
+        }
     }
 
     internal fun indexParsedIdentities(identities: Iterable<KakaoNotificationIdentity>) {

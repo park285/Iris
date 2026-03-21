@@ -40,10 +40,12 @@ class DBObserver(
             }
     }
 
-    @Synchronized
     fun stopPolling() {
-        val job = pollingJob ?: return
-        pollingJob = null
+        val job = synchronized(this) {
+            val captured = pollingJob ?: return
+            pollingJob = null
+            captured
+        }
 
         runBlocking {
             job.cancelAndJoin()
