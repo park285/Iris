@@ -33,7 +33,7 @@ import java.security.MessageDigest
 import java.util.UUID
 
 class IrisServer(
-    private val kakaoDB: KakaoDB,
+    private val chatLogRepo: ChatLogRepository,
     private val configManager: ConfigManager,
     private val notificationReferer: String,
     private val messageSender: MessageSender,
@@ -273,7 +273,7 @@ class IrisServer(
 
     private fun executeQueryRequest(queryRequest: QueryRequest): QueryResponse {
         val rows =
-            kakaoDB.executeQuery(
+            chatLogRepo.executeQuery(
                 queryRequest.query,
                 (queryRequest.bind?.map { it.content } ?: listOf()).toTypedArray(),
                 MAX_QUERY_ROWS + 1,

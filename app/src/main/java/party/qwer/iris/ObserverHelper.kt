@@ -7,7 +7,7 @@ import party.qwer.iris.bridge.RoutingResult
 import java.io.Closeable
 
 class ObserverHelper(
-    private val db: KakaoDB,
+    private val db: ChatLogRepository,
     private val config: ConfigProvider,
 ) : Closeable {
     @Volatile

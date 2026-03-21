@@ -5,7 +5,8 @@ import android.database.sqlite.SQLiteException
 
 class KakaoDB(
     private val config: ConfigManager,
-) {
+) : ChatLogRepository,
+    ProfileRepository {
     private val connection: SQLiteDatabase
     private val dbLock = Any()
     private val readConnectionLock = Any()
@@ -47,7 +48,7 @@ class KakaoDB(
         }
     }
 
-    fun resolveSenderName(userId: Long): String {
+    override fun resolveSenderName(userId: Long): String {
         if (userId == config.botId) {
             return config.botName
         }
@@ -108,7 +109,7 @@ class KakaoDB(
         }
     }
 
-    fun resolveRoomMetadata(chatId: Long): RoomMetadata =
+    override fun resolveRoomMetadata(chatId: Long): RoomMetadata =
         withPrimaryConnection { db ->
             db.rawQuery("SELECT type, link_id FROM chat_rooms WHERE id = ?", arrayOf(chatId.toString())).use { cursor ->
                 if (!cursor.moveToFirst()) {
@@ -121,7 +122,7 @@ class KakaoDB(
             }
         }
 
-    fun latestLogId(): Long =
+    override fun latestLogId(): Long =
         withPrimaryConnection { db ->
             db.rawQuery("SELECT _id FROM chat_logs ORDER BY _id DESC LIMIT 1", null).use { cursor ->
                 if (cursor.moveToFirst()) {
@@ -132,9 +133,9 @@ class KakaoDB(
             }
         }
 
-    fun pollChatLogsAfter(
+    override fun pollChatLogsAfter(
         afterLogId: Long,
-        limit: Int = DEFAULT_POLL_BATCH_SIZE,
+        limit: Int,
     ): List<ChatLogEntry> {
         val effectiveLimit = limit.coerceIn(1, DEFAULT_POLL_BATCH_SIZE)
         return withPrimaryConnection { db ->
@@ -198,7 +199,7 @@ class KakaoDB(
         }
     }
 
-    fun upsertObservedProfile(identity: KakaoNotificationIdentity) {
+    override fun upsertObservedProfile(identity: KakaoNotificationIdentity) {
         val updatedAt = System.currentTimeMillis()
         synchronized(dbLock) {
             connection.execSQL(
@@ -224,10 +225,10 @@ class KakaoDB(
         }
     }
 
-    fun executeQuery(
+    override fun executeQuery(
         sqlQuery: String,
         bindArgs: Array<String?>?,
-        maxRows: Int = DEFAULT_QUERY_RESULT_LIMIT,
+        maxRows: Int,
     ): List<Map<String, String?>> =
         withReadConnection { conn ->
             readQueryRows(conn, sqlQuery, bindArgs, maxRows.coerceAtLeast(1))

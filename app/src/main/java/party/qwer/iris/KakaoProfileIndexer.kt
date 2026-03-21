@@ -16,10 +16,10 @@ interface NotificationIdentityStore {
 }
 
 class KakaoDbNotificationIdentityStore(
-    private val kakaoDb: KakaoDB,
+    private val profileRepo: ProfileRepository,
 ) : NotificationIdentityStore {
     override fun upsert(identity: KakaoNotificationIdentity) {
-        kakaoDb.upsertObservedProfile(identity)
+        profileRepo.upsertObservedProfile(identity)
     }
 }
 
