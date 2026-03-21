@@ -49,7 +49,7 @@ class H2cDispatcher internal constructor(
         Dispatcher().apply {
             when (transport) {
                 WebhookTransport.H2C -> {
-                    maxRequests = DISPATCH_QUEUE_CAPACITY
+                    maxRequests = DISPATCH_QUEUE_CAPACITY * MAX_ROUTE_MULTIPLIER
                     maxRequestsPerHost = DISPATCH_QUEUE_CAPACITY
                 }
                 WebhookTransport.HTTP1 -> {
@@ -395,6 +395,7 @@ class H2cDispatcher internal constructor(
     companion object {
         private const val WORKER_SHUTDOWN_TIMEOUT_MS = 10_000L
         private const val DISPATCH_QUEUE_CAPACITY = 64
+        private const val MAX_ROUTE_MULTIPLIER = 4
         private const val MAX_CONCURRENT_REQUESTS = 8
         private const val MAX_IDLE_CONNECTIONS = 4
         private const val KEEP_ALIVE_DURATION_MS = 30_000L

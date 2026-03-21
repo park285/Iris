@@ -18,14 +18,12 @@ class H2cDispatcherClientConfigTest {
     }
 
     @Test
-    fun `h2c transport sets maxRequests and maxRequestsPerHost to queue capacity`() {
-        val dispatcher = okhttp3.Dispatcher()
-        val pool = okhttp3.ConnectionPool()
+    fun `h2c transport sets maxRequestsPerHost to queue capacity and maxRequests higher for multi-domain`() {
         val config = party.qwer.iris.ConfigManager(configPath = "/tmp/iris-client-config-test.json")
 
         H2cDispatcher(config, transportOverride = "h2c").use { h2c ->
             val sharedDispatcher = readDispatcherField(h2c)
-            kotlin.test.assertEquals(64, sharedDispatcher.maxRequests)
+            kotlin.test.assertEquals(256, sharedDispatcher.maxRequests)
             kotlin.test.assertEquals(64, sharedDispatcher.maxRequestsPerHost)
         }
     }
