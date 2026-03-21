@@ -284,7 +284,7 @@ class IrisServer(
             rowCount = rows.size,
             data =
                 rows.map {
-                    KakaoDB.decryptRow(it)
+                    decryptRow(it)
                 },
         )
     }
