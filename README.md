@@ -108,7 +108,7 @@ Bot Webhook
 ### 백엔드 통신 형식
 
 - Iris는 webhook 요청 바디에 `route`, `messageId`, `sourceLogId`, `text`, `room`, `sender`, `userId`를 전송합니다.
-- `threadId`는 optional 필드이지만, 현재 observer 경로에서는 채우지 않으므로 수신 측은 보통 absent로 처리하는 편이 안전합니다.
+- `threadId`, `threadScope`는 optional 필드이며, observer 경로에서 thread metadata가 존재하면 webhook payload에 포함됩니다.
 - Iris는 헤더 `X-Iris-Route`, `X-Iris-Message-Id`, `X-Iris-Token`을 함께 전송합니다.
 - 전송 프로토콜 기본값은 h2c 입니다. 필요 시 `IRIS_WEBHOOK_TRANSPORT=http1`로 HTTP/1.1(및 HTTPS)로 강제할 수 있습니다.
 - 현재 route 기본값은 일반 webhook command는 `hololive`, `!질문`/`!리셋`/`!관리자`는 `chatbotgo` 입니다.
