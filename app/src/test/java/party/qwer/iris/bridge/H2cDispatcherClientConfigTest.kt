@@ -6,21 +6,23 @@ import kotlin.test.assertSame
 class H2cDispatcherClientConfigTest {
     @Test
     fun `shares dispatcher and connection pool across transport clients`() {
-        H2cDispatcher(transportOverride = "http1").use { dispatcher ->
-            val h2cClient = readClientField(dispatcher, "h2cClient")
-            val http1Client = readClientField(dispatcher, "http1Client")
+        val sharedDispatcher = okhttp3.Dispatcher()
+        val sharedConnectionPool = okhttp3.ConnectionPool()
+        val factory = WebhookHttpClientFactory(WebhookTransport.HTTP1, sharedDispatcher, sharedConnectionPool)
 
-            assertSame(h2cClient.dispatcher, http1Client.dispatcher)
-            assertSame(h2cClient.connectionPool, http1Client.connectionPool)
-        }
+        val h2cClient = readClientField(factory, "h2cClient")
+        val http1Client = readClientField(factory, "http1Client")
+
+        assertSame(h2cClient.dispatcher, http1Client.dispatcher)
+        assertSame(h2cClient.connectionPool, http1Client.connectionPool)
     }
 
     private fun readClientField(
-        dispatcher: H2cDispatcher,
+        factory: WebhookHttpClientFactory,
         fieldName: String,
     ): okhttp3.OkHttpClient =
-        H2cDispatcher::class.java.getDeclaredField(fieldName).let { field ->
+        WebhookHttpClientFactory::class.java.getDeclaredField(fieldName).let { field ->
             field.isAccessible = true
-            field.get(dispatcher) as okhttp3.OkHttpClient
+            field.get(factory) as okhttp3.OkHttpClient
         }
 }
