@@ -2,7 +2,6 @@ package party.qwer.iris
 
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteException
-import org.json.JSONObject
 
 class KakaoDB {
     private val connection: SQLiteDatabase
@@ -19,7 +18,7 @@ class KakaoDB {
             attachAuxiliaryDatabases(openedConnection)
             ensureObservedProfileTable(openedConnection)
             connection = openedConnection
-            when (val resolution = resolveBotUserId(detectBotUserId(), Configurable.botId)) {
+            when (val resolution = resolveBotUserId(detectBotUserId(connection), Configurable.botId)) {
                 is BotUserIdResolution.Detected -> {
                     IrisLogger.info("Bot user_id is detected from chat_logs: ${resolution.botId}")
                     Configurable.botId = resolution.botId
@@ -41,64 +40,6 @@ class KakaoDB {
             throw IllegalStateException("You don't have a permission to access KakaoTalk Database.", e)
         }
     }
-
-    private fun detectBotUserId(): Long = detectBotUserIdByStringMatch().takeIf { it > 0L } ?: detectBotUserIdByJsonFallback()
-
-    private fun detectBotUserIdByStringMatch(): Long =
-        withPrimaryConnection { db ->
-            db
-                .rawQuery(
-                    """
-                    SELECT user_id
-                    FROM chat_logs
-                    WHERE user_id > 0
-                      AND v LIKE '%"isMine":true%'
-                    ORDER BY _id DESC
-                    LIMIT 1
-                    """.trimIndent(),
-                    null,
-                ).use { cursor ->
-                    if (cursor.moveToFirst()) {
-                        cursor.getLong(0)
-                    } else {
-                        0L
-                    }
-                }
-        }
-
-    private fun detectBotUserIdByJsonFallback(): Long =
-        withPrimaryConnection { db ->
-            db
-                .rawQuery(
-                    """
-                    SELECT user_id, v
-                    FROM chat_logs
-                    WHERE user_id > 0
-                      AND v IS NOT NULL
-                      AND v != ''
-                      AND v LIKE '%"isMine"%'
-                    ORDER BY _id DESC
-                    LIMIT $BOT_USER_ID_FALLBACK_SCAN_LIMIT
-                    """.trimIndent(),
-                    null,
-                ).use { cursor ->
-                    while (cursor.moveToNext()) {
-                        val userId = cursor.getLong(0)
-                        val metadata = cursor.getString(1).orEmpty()
-                        if (!metadata.contains("\"isMine\"")) {
-                            continue
-                        }
-                        val isMine =
-                            runCatching {
-                                JSONObject(metadata).optBoolean("isMine", false)
-                            }.getOrDefault(false)
-                        if (isMine) {
-                            return@use userId
-                        }
-                    }
-                    0L
-                }
-        }
 
     fun resolveSenderName(userId: Long): String {
         if (userId == Configurable.botId) {
@@ -380,34 +321,7 @@ class KakaoDB {
         private val DB_PATH = "${PathUtils.getAppPath()}databases"
         const val DEFAULT_QUERY_RESULT_LIMIT = 500
         const val DEFAULT_POLL_BATCH_SIZE = 100
-        private const val BOT_USER_ID_FALLBACK_SCAN_LIMIT = 200
     }
 }
 
 private fun android.database.Cursor.getOptionalString(index: Int): String? = index.takeIf { it >= 0 }?.let { getString(it) }
-
-internal sealed interface BotUserIdResolution {
-    val botId: Long
-
-    data class Detected(
-        override val botId: Long,
-    ) : BotUserIdResolution
-
-    data class ConfigFallback(
-        override val botId: Long,
-    ) : BotUserIdResolution
-
-    data object Missing : BotUserIdResolution {
-        override val botId: Long = 0L
-    }
-}
-
-internal fun resolveBotUserId(
-    detectedBotId: Long,
-    configuredBotId: Long,
-): BotUserIdResolution =
-    when {
-        detectedBotId > 0L -> BotUserIdResolution.Detected(detectedBotId)
-        configuredBotId > 0L -> BotUserIdResolution.ConfigFallback(configuredBotId)
-        else -> BotUserIdResolution.Missing
-    }
