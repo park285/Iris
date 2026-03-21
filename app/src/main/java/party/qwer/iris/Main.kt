@@ -20,9 +20,9 @@ class Main {
                 val shutdownLatch = CountDownLatch(1)
                 val configManager = ConfigManager()
 
-                configManager.onMessageSendRateChanged = { Replier.restartMessageSender() }
-                Replier.messageSendRateProvider = { configManager.messageSendRate }
-                Replier.startMessageSender()
+                val replyService = ReplyService(configManager)
+                configManager.onMessageSendRateChanged = { replyService.restartMessageSender() }
+                replyService.startMessageSender()
                 IrisLogger.info("Message sender thread started")
 
                 val kakaoDb = KakaoDB(configManager)
@@ -51,6 +51,7 @@ class Main {
                             kakaoDb,
                             configManager,
                             notificationReferer,
+                            replyService,
                         ).also {
                             it.startServer()
                             IrisLogger.info("Iris Server started")
@@ -67,7 +68,7 @@ class Main {
                             kakaoProfileIndexer.stop()
                             imageDeleter.stopDeletion()
                             observerHelper.close()
-                            Replier.shutdown()
+                            replyService.shutdown()
                             configManager.saveConfigNow()
                             kakaoDb.closeConnection()
                             IrisLogger.info("[Main] Cleanup completed")

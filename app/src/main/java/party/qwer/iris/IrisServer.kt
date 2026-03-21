@@ -36,6 +36,7 @@ class IrisServer(
     private val kakaoDB: KakaoDB,
     private val configManager: ConfigManager,
     private val notificationReferer: String,
+    private val messageSender: MessageSender,
 ) {
     private val serverJson =
         Json {
@@ -227,7 +228,7 @@ class IrisServer(
             invalidRequest("threadId is only supported for text replies")
         }
 
-        val admission = admitReply(replyRequest, roomId, notificationReferer, threadId, threadScope)
+        val admission = admitReply(replyRequest, roomId, notificationReferer, threadId, threadScope, messageSender)
         if (admission.status != ReplyAdmissionStatus.ACCEPTED) {
             requestRejected(
                 admission.message ?: "reply request rejected",

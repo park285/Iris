@@ -34,11 +34,12 @@ internal fun admitReply(
     notificationReferer: String,
     threadId: Long?,
     threadScope: Int?,
+    messageSender: MessageSender,
 ): ReplyAdmissionResult =
     when (replyRequest.type) {
-        ReplyType.TEXT -> Replier.sendMessage(notificationReferer, roomId, extractTextPayload(replyRequest), threadId, threadScope)
-        ReplyType.IMAGE -> Replier.sendPhoto(roomId, extractSingleImagePayload(replyRequest))
-        ReplyType.IMAGE_MULTIPLE -> Replier.sendMultiplePhotos(roomId, extractImagePayloads(replyRequest))
+        ReplyType.TEXT -> messageSender.sendMessage(notificationReferer, roomId, extractTextPayload(replyRequest), threadId, threadScope)
+        ReplyType.IMAGE -> messageSender.sendPhoto(roomId, extractSingleImagePayload(replyRequest))
+        ReplyType.IMAGE_MULTIPLE -> messageSender.sendMultiplePhotos(roomId, extractImagePayloads(replyRequest))
     }
 
 internal fun extractTextPayload(replyRequest: ReplyRequest): String =
