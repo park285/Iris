@@ -29,6 +29,7 @@ class Replier {
         private val coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         private var messageSenderJob: Job? = null
         private val imageDir = File(IRIS_IMAGE_DIR_PATH)
+        var messageSendRateProvider: () -> Long = { 0L }
         private val imageMediaScanEnabled =
             System
                 .getenv("IRIS_IMAGE_MEDIA_SCAN")
@@ -57,7 +58,7 @@ class Replier {
                             IrisLogger.debug("[Replier] Processing message from channel")
                             request.send()
                             IrisLogger.debug("[Replier] Message sent successfully")
-                            delay(Configurable.messageSendRate)
+                            delay(messageSendRateProvider())
                         } catch (e: Exception) {
                             IrisLogger.error("[Replier] Error sending message from channel: ${e.message}", e)
                         }

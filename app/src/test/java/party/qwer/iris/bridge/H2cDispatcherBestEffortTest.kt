@@ -3,7 +3,7 @@ package party.qwer.iris.bridge
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpHandler
 import com.sun.net.httpserver.HttpServer
-import party.qwer.iris.Configurable
+import party.qwer.iris.ConfigManager
 import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -18,13 +18,15 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class H2cDispatcherBestEffortTest {
+    private val config = ConfigManager(configPath = "/tmp/iris-h2c-dispatcher-best-effort-test-config.json")
+
     @Test
     fun `does not recover pending deliveries after restart`() {
         val port = reservePort()
         val endpoint = "http://127.0.0.1:$port/webhook/iris"
-        Configurable.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, endpoint)
+        config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, endpoint)
 
-        H2cDispatcher(transportOverride = "http1").use { dispatcher ->
+        H2cDispatcher(config, transportOverride = "http1").use { dispatcher ->
             assertEquals(
                 RoutingResult.ACCEPTED,
                 dispatcher.route(
@@ -53,7 +55,7 @@ class H2cDispatcherBestEffortTest {
             }
 
         try {
-            H2cDispatcher(transportOverride = "http1").use { restarted ->
+            H2cDispatcher(config, transportOverride = "http1").use { restarted ->
                 Thread.sleep(1_500)
                 assertFalse(latch.await(200, TimeUnit.MILLISECONDS))
                 assertEquals(0, requestCount.get())
@@ -82,7 +84,7 @@ class H2cDispatcherBestEffortTest {
     fun `returns retry later immediately when per-route queue is full`() {
         val port = reservePort()
         val endpoint = "http://127.0.0.1:$port/webhook/iris"
-        Configurable.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, endpoint)
+        config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, endpoint)
 
         val firstRequestStarted = CountDownLatch(1)
         val releaseFirstRequest = CountDownLatch(1)
@@ -99,6 +101,7 @@ class H2cDispatcherBestEffortTest {
 
         try {
             H2cDispatcher(
+                config,
                 transportOverride = "http1",
                 queueCapacityOverride = 1,
             ).use { dispatcher ->
@@ -118,7 +121,7 @@ class H2cDispatcherBestEffortTest {
     fun `drops exhausted delivery then continues with next queued message`() {
         val port = reservePort()
         val endpoint = "http://127.0.0.1:$port/webhook/iris"
-        Configurable.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, endpoint)
+        config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, endpoint)
 
         val messageOrder = CopyOnWriteArrayList<String>()
         val requestLatch = CountDownLatch(4)
@@ -140,6 +143,7 @@ class H2cDispatcherBestEffortTest {
 
         try {
             H2cDispatcher(
+                config,
                 transportOverride = "http1",
                 maxDeliveryAttemptsOverride = 3,
                 backoffDelayProviderOverride = { 10L },

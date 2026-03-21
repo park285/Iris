@@ -3,7 +3,9 @@ package party.qwer.iris
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteException
 
-class KakaoDB {
+class KakaoDB(
+    private val config: ConfigManager,
+) {
     private val connection: SQLiteDatabase
     private val dbLock = Any()
     private val readConnectionLock = Any()
@@ -22,10 +24,10 @@ class KakaoDB {
             attachAuxiliaryDatabases(openedConnection)
             ensureObservedProfileTable(openedConnection)
             connection = openedConnection
-            when (val resolution = resolveBotUserId(detectBotUserId(connection), Configurable.botId)) {
+            when (val resolution = resolveBotUserId(detectBotUserId(connection), config.botId)) {
                 is BotUserIdResolution.Detected -> {
                     IrisLogger.info("Bot user_id is detected from chat_logs: ${resolution.botId}")
-                    Configurable.botId = resolution.botId
+                    config.botId = resolution.botId
                 }
 
                 is BotUserIdResolution.ConfigFallback -> {
@@ -46,8 +48,8 @@ class KakaoDB {
     }
 
     fun resolveSenderName(userId: Long): String {
-        if (userId == Configurable.botId) {
-            return Configurable.botName
+        if (userId == config.botId) {
+            return config.botName
         }
 
         return getNameOfUserId(userId)
@@ -95,7 +97,7 @@ class KakaoDB {
             return "Unknown"
         }
 
-        val botId = Configurable.botId
+        val botId = config.botId
         if (botId <= 0L) return encryptedName
 
         return try {

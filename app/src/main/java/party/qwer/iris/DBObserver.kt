@@ -12,6 +12,7 @@ import kotlinx.coroutines.runBlocking
 
 class DBObserver(
     private val observerHelper: ObserverHelper,
+    private val config: ConfigProvider,
 ) {
     private val coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -35,7 +36,7 @@ class DBObserver(
                         IrisLogger.error("Error during DB polling: ${e.message}", e)
                     }
 
-                    delay(Configurable.dbPollingRate.takeIf { it > 0 } ?: 1000)
+                    delay(config.dbPollingRate.takeIf { it > 0 } ?: 1000)
                 }
             }
     }

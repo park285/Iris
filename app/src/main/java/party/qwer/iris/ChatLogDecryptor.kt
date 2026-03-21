@@ -30,25 +30,31 @@ private val PROFILE_DECRYPT_KEYS =
         "board_v",
     )
 
-fun decryptRow(inputRow: Map<String, String?>): Map<String, String?> {
+fun decryptRow(
+    inputRow: Map<String, String?>,
+    config: ConfigProvider,
+): Map<String, String?> {
     var row = inputRow.toMutableMap()
     try {
-        row = decryptMessageFields(row)
-        row = decryptProfileFields(row)
+        row = decryptMessageFields(row, config)
+        row = decryptProfileFields(row, config)
     } catch (e: Exception) {
         IrisLogger.error("JSON processing error during decryption: $e")
     }
     return row
 }
 
-private fun decryptMessageFields(row: MutableMap<String, String?>): MutableMap<String, String?> {
+private fun decryptMessageFields(
+    row: MutableMap<String, String?>,
+    config: ConfigProvider,
+): MutableMap<String, String?> {
     if (!row.contains("message") && !row.contains("attachment")) return row
     val vStr = row.getOrDefault("v", "")
     if (vStr?.isNotEmpty() != true) return row
     return try {
         val vJson = JSONObject(vStr)
         val enc = vJson.optInt("enc", 0)
-        val userId = row["user_id"]?.toLongOrNull() ?: Configurable.botId
+        val userId = row["user_id"]?.toLongOrNull() ?: config.botId
         if (userId > 0L) decryptRowValues(row, enc, userId, MESSAGE_DECRYPT_KEYS) else row
     } catch (e: JSONException) {
         IrisLogger.error("Error parsing 'v' for decryption: $e")
@@ -56,9 +62,12 @@ private fun decryptMessageFields(row: MutableMap<String, String?>): MutableMap<S
     }
 }
 
-private fun decryptProfileFields(row: MutableMap<String, String?>): MutableMap<String, String?> {
+private fun decryptProfileFields(
+    row: MutableMap<String, String?>,
+    config: ConfigProvider,
+): MutableMap<String, String?> {
     if (!row.contains("enc") || !PROFILE_DECRYPT_KEYWORDS.any { row.contains(it) }) return row
-    val botId = Configurable.botId
+    val botId = config.botId
     if (botId <= 0L) return row
     val enc = row["enc"]?.toIntOrNull() ?: 0
     return decryptRowValues(row, enc, botId, PROFILE_DECRYPT_KEYS)

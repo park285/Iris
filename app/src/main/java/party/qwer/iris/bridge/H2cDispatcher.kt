@@ -22,7 +22,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import party.qwer.iris.CommandParser
-import party.qwer.iris.Configurable
+import party.qwer.iris.ConfigProvider
 import party.qwer.iris.IrisLogger
 import java.io.Closeable
 import java.io.IOException
@@ -32,6 +32,7 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 class H2cDispatcher internal constructor(
+    private val config: ConfigProvider,
     transportOverride: String? = null,
     queueCapacityOverride: Int? = null,
     maxDeliveryAttemptsOverride: Int? = null,
@@ -98,7 +99,7 @@ class H2cDispatcher internal constructor(
             resolveWebhookRoute(parsedCommand)
                 ?: resolveImageRoute(command.messageType)
                 ?: return RoutingResult.SKIPPED
-        val webhookUrl = Configurable.webhookEndpointFor(targetRoute).takeIf { it.isNotBlank() }
+        val webhookUrl = config.webhookEndpointFor(targetRoute).takeIf { it.isNotBlank() }
         if (webhookUrl.isNullOrBlank()) {
             IrisLogger.error("[H2cDispatcher] No webhook URL configured for route: $targetRoute")
             return RoutingResult.SKIPPED
@@ -280,7 +281,7 @@ class H2cDispatcher internal constructor(
                     .header(HEADER_IRIS_MESSAGE_ID, delivery.messageId)
                     .header(HEADER_IRIS_ROUTE, delivery.route)
                     .apply {
-                        val webhookToken = Configurable.webhookToken
+                        val webhookToken = config.webhookToken
                         if (webhookToken.isNotBlank()) {
                             header(HEADER_IRIS_TOKEN, webhookToken)
                         }

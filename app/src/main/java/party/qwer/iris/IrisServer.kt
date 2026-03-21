@@ -34,6 +34,7 @@ import java.util.UUID
 
 class IrisServer(
     private val kakaoDB: KakaoDB,
+    private val configManager: ConfigManager,
     private val notificationReferer: String,
 ) {
     private val serverJson =
@@ -81,7 +82,7 @@ class IrisServer(
             }
         return embeddedServer(Netty, config) {
             connector {
-                port = Configurable.botSocketPort
+                port = configManager.botSocketPort
                 host = "0.0.0.0"
             }
             enableHttp2 = true
@@ -147,7 +148,7 @@ class IrisServer(
                 if (!requireBotToken(call)) {
                     return@get
                 }
-                call.respond(Configurable.configResponse())
+                call.respond(configManager.configResponse())
             }
 
             post("{name}") {
@@ -157,9 +158,9 @@ class IrisServer(
 
                 val name = call.parameters["name"] ?: throw ApiRequestException("missing config name")
                 val request = call.receive<ConfigRequest>()
-                val updateOutcome = applyConfigUpdate(name, request)
+                val updateOutcome = applyConfigUpdate(configManager, name, request)
 
-                if (!Configurable.saveConfigNow()) {
+                if (!configManager.saveConfigNow()) {
                     throw ApiRequestException(
                         "failed to persist config update",
                         HttpStatusCode.InternalServerError,
@@ -167,7 +168,7 @@ class IrisServer(
                 }
 
                 call.respond(
-                    Configurable.configUpdateResponse(
+                    configManager.configUpdateResponse(
                         name = updateOutcome.name,
                         persisted = true,
                         applied = updateOutcome.applied,
@@ -242,7 +243,7 @@ class IrisServer(
     }
 
     private suspend fun requireBotToken(call: ApplicationCall): Boolean {
-        val expectedToken = Configurable.botToken
+        val expectedToken = configManager.botToken
         if (expectedToken.isBlank()) {
             IrisLogger.error("[IrisServer] Refusing protected request because bot token is not configured")
             call.respond(HttpStatusCode.ServiceUnavailable, CommonErrorResponse(message = "service unavailable"))
@@ -284,7 +285,7 @@ class IrisServer(
             rowCount = rows.size,
             data =
                 rows.map {
-                    decryptRow(it)
+                    decryptRow(it, configManager)
                 },
         )
     }
