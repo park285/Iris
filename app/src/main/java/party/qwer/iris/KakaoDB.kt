@@ -114,46 +114,47 @@ class KakaoDB {
 
     private fun getNameOfUserId(userId: Long): String? {
         val bindArgs = arrayOf(userId.toString())
-        val sql =
-            if (hasOpenChatMember) {
-                """
-                WITH info AS (SELECT ? AS user_id)
-                SELECT COALESCE(open_chat_member.nickname, friends.name) AS name,
-                       COALESCE(open_chat_member.enc, friends.enc) AS enc
-                FROM info
-                LEFT JOIN db2.open_chat_member ON open_chat_member.user_id = info.user_id
-                LEFT JOIN db2.friends ON friends.id = info.user_id
-                """.trimIndent()
-            } else {
-                "SELECT name, enc FROM db2.friends WHERE id = ?"
-            }
+        val sql = if (hasOpenChatMember) {
+            """
+            WITH info AS (SELECT ? AS user_id)
+            SELECT COALESCE(open_chat_member.nickname, friends.name) AS name,
+                   COALESCE(open_chat_member.enc, friends.enc) AS enc
+            FROM info
+            LEFT JOIN db2.open_chat_member ON open_chat_member.user_id = info.user_id
+            LEFT JOIN db2.friends ON friends.id = info.user_id
+            """.trimIndent()
+        } else {
+            "SELECT name, enc FROM db2.friends WHERE id = ?"
+        }
 
         return withPrimaryConnection { db ->
             db.rawQuery(sql, bindArgs).use { cursor ->
-                if (!cursor.moveToNext()) {
-                    IrisLogger.debugLazy { "[getNameOfUserId] No user found for userId=$userId" }
-                    return@use "Unknown"
-                }
-
-                val encryptedName = cursor.getString(cursor.getColumnIndexOrThrow("name"))
-                val enc = cursor.getInt(cursor.getColumnIndexOrThrow("enc"))
-                if (encryptedName == null) {
-                    IrisLogger.debugLazy { "[getNameOfUserId] name column is null for userId=$userId" }
-                    return@use "Unknown"
-                }
-
-                val botId = Configurable.botId
-                if (botId <= 0L) {
-                    return@use encryptedName
-                }
-
-                try {
-                    KakaoDecrypt.decrypt(enc, encryptedName, botId)
-                } catch (e: Exception) {
-                    IrisLogger.debugLazy { "Decryption error in getNameOfUserId: $e" }
-                    encryptedName
-                }
+                decryptUserName(cursor, userId)
             }
+        }
+    }
+
+    private fun decryptUserName(cursor: android.database.Cursor, userId: Long): String? {
+        if (!cursor.moveToNext()) {
+            IrisLogger.debugLazy { "[getNameOfUserId] No user found for userId=$userId" }
+            return "Unknown"
+        }
+
+        val encryptedName = cursor.getString(cursor.getColumnIndexOrThrow("name"))
+        val enc = cursor.getInt(cursor.getColumnIndexOrThrow("enc"))
+        if (encryptedName == null) {
+            IrisLogger.debugLazy { "[getNameOfUserId] name column is null for userId=$userId" }
+            return "Unknown"
+        }
+
+        val botId = Configurable.botId
+        if (botId <= 0L) return encryptedName
+
+        return try {
+            KakaoDecrypt.decrypt(enc, encryptedName, botId)
+        } catch (e: Exception) {
+            IrisLogger.debugLazy { "Decryption error in getNameOfUserId: $e" }
+            encryptedName
         }
     }
 
@@ -404,9 +405,8 @@ class KakaoDB {
                 "board_v",
             )
 
-        fun decryptRow(row: Map<String, String?>): Map<String, String?> {
-            @Suppress("NAME_SHADOWING")
-            var row = row.toMutableMap()
+        fun decryptRow(inputRow: Map<String, String?>): Map<String, String?> {
+            var row = inputRow.toMutableMap()
 
             try {
                 row = decryptMessageFields(row)
@@ -464,17 +464,13 @@ class KakaoDB {
             keysToDecrypt: Array<String>,
         ): MutableMap<String, String?> {
             for (key in keysToDecrypt) {
-                if (row.containsKey(key)) {
-                    try {
-                        val encryptedValue = row.getOrDefault(key, "")
-                        if (encryptedValue != "{}" && encryptedValue != "[]") {
-                            encryptedValue?.let {
-                                row[key] = KakaoDecrypt.decrypt(enc, it, botId)
-                            }
-                        }
-                    } catch (e: Exception) {
-                        IrisLogger.error("Decryption error for $key: $e")
-                    }
+                if (!row.containsKey(key)) continue
+                val encryptedValue = row[key] ?: continue
+                if (encryptedValue == "{}" || encryptedValue == "[]") continue
+                try {
+                    row[key] = KakaoDecrypt.decrypt(enc, encryptedValue, botId)
+                } catch (e: Exception) {
+                    IrisLogger.error("Decryption error for $key: $e")
                 }
             }
             return row
