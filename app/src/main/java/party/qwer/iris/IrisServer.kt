@@ -31,6 +31,7 @@ import party.qwer.iris.model.QueryResponse
 import party.qwer.iris.model.ReplyAcceptedResponse
 import party.qwer.iris.model.ReplyRequest
 import party.qwer.iris.model.ReplyType
+import java.security.MessageDigest
 import java.util.UUID
 
 class IrisServer(
@@ -368,7 +369,13 @@ class IrisServer(
             call.respond(HttpStatusCode.ServiceUnavailable, CommonErrorResponse(message = "service unavailable"))
             return false
         }
-        if (call.request.headers[HEADER_BOT_TOKEN] == expectedToken) {
+        val provided = call.request.headers[HEADER_BOT_TOKEN].orEmpty()
+        if (
+            MessageDigest.isEqual(
+                provided.toByteArray(Charsets.UTF_8),
+                expectedToken.toByteArray(Charsets.UTF_8),
+            )
+        ) {
             return true
         }
 
