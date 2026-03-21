@@ -4,6 +4,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -153,9 +155,9 @@ class H2cDispatcher internal constructor(
         val routeStates = routeDispatchers.all().toList()
         routeStates.forEach { it.dispatchChannel.close() }
         runBlocking {
-            routeStates.forEach { routeState ->
-                val completed =
-                    runCatching {
+            routeStates.map { routeState ->
+                async {
+                    val completed = runCatching {
                         withTimeoutOrNull(WORKER_SHUTDOWN_TIMEOUT_MS) {
                             routeState.workerJob.join()
                             true
@@ -166,14 +168,15 @@ class H2cDispatcher internal constructor(
                         )
                         false
                     }
-                if (!completed) {
-                    IrisLogger.error(
-                        "[H2cDispatcher] Worker shutdown timed out for route=${routeState.route}; " +
-                            "remaining in-flight delivery will be cancelled.",
-                    )
-                    routeState.workerJob.cancelAndJoin()
+                    if (!completed) {
+                        IrisLogger.error(
+                            "[H2cDispatcher] Worker shutdown timed out for route=${routeState.route}; " +
+                                "remaining in-flight delivery will be cancelled.",
+                        )
+                        routeState.workerJob.cancelAndJoin()
+                    }
                 }
-            }
+            }.awaitAll()
             scopeJob.cancelAndJoin()
         }
         sharedDispatcher.executorService.shutdown()
@@ -238,9 +241,14 @@ class H2cDispatcher internal constructor(
                 DeliveryOutcome.DROP,
                 -> {
                     routeState.queuedMessageIds.remove(delivery.messageId)
-                    val tag = if (outcome == DeliveryOutcome.SUCCESS) "completed" else "dropped"
-                    val log = "[H2cDispatcher] Delivery $tag: route=${delivery.route}, messageId=${delivery.messageId}"
-                    if (outcome == DeliveryOutcome.SUCCESS) IrisLogger.debug(log) else IrisLogger.error(log)
+                    when (outcome) {
+                        DeliveryOutcome.SUCCESS -> IrisLogger.debug(
+                            "[H2cDispatcher] Delivery completed: route=${delivery.route}, messageId=${delivery.messageId}",
+                        )
+                        else -> IrisLogger.error(
+                            "[H2cDispatcher] Delivery dropped: route=${delivery.route}, messageId=${delivery.messageId}",
+                        )
+                    }
                     return
                 }
 
