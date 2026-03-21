@@ -14,7 +14,7 @@ import javax.crypto.spec.SecretKeySpec
 class KakaoDecrypt {
     companion object {
         // 스레드 안전한 키 캐시
-        private val keyCache: MutableMap<String, ByteArray?> = java.util.concurrent.ConcurrentHashMap()
+        private val keyCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
         private val KEY_BYTES =
             byteArrayOf(
                 0x16.toByte(),
@@ -318,7 +318,7 @@ class KakaoDecrypt {
         ): String {
             val salt = genSalt(user_id, encType)
             val saltStr = String(salt, StandardCharsets.UTF_8)
-            val key = keyCache.getOrPut(saltStr) { deriveKey(KEY_BYTES, salt, 2, 32) }
+            val key = keyCache.computeIfAbsent(saltStr) { deriveKey(KEY_BYTES, salt, 2, 32) }
 
             val secretKeySpec = SecretKeySpec(key, "AES")
             val ivParameterSpec = IvParameterSpec(IV_BYTES)
