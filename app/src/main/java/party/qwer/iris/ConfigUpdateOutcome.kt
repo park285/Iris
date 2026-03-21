@@ -8,7 +8,10 @@ internal data class ConfigUpdateOutcome(
     val requiresRestart: Boolean,
 )
 
-internal fun applyConfigUpdate(name: String, request: ConfigRequest): ConfigUpdateOutcome =
+internal fun applyConfigUpdate(
+    name: String,
+    request: ConfigRequest,
+): ConfigUpdateOutcome =
     when (name) {
         "endpoint" -> updateEndpointConfig(name, request)
         "dbrate" -> updateDbRateConfig(name, request)
@@ -17,7 +20,10 @@ internal fun applyConfigUpdate(name: String, request: ConfigRequest): ConfigUpda
         else -> throw ApiRequestException("unknown config '$name'")
     }
 
-private fun updateEndpointConfig(name: String, request: ConfigRequest): ConfigUpdateOutcome {
+private fun updateEndpointConfig(
+    name: String,
+    request: ConfigRequest,
+): ConfigUpdateOutcome {
     val route = resolveEndpointRoute(request.route)
     val value = request.endpoint?.trim() ?: throw ApiRequestException("missing endpoint value")
     if (value.isNotEmpty() && !value.startsWith("http://") && !value.startsWith("https://")) {
@@ -31,21 +37,30 @@ private fun updateEndpointConfig(name: String, request: ConfigRequest): ConfigUp
     )
 }
 
-private fun updateDbRateConfig(name: String, request: ConfigRequest): ConfigUpdateOutcome {
+private fun updateDbRateConfig(
+    name: String,
+    request: ConfigRequest,
+): ConfigUpdateOutcome {
     val value = request.rate ?: throw ApiRequestException("missing or invalid rate")
     if (value < 1) throw ApiRequestException("rate must be greater than 0")
     Configurable.dbPollingRate = value
     return ConfigUpdateOutcome(name = name, applied = true, requiresRestart = false)
 }
 
-private fun updateSendRateConfig(name: String, request: ConfigRequest): ConfigUpdateOutcome {
+private fun updateSendRateConfig(
+    name: String,
+    request: ConfigRequest,
+): ConfigUpdateOutcome {
     val value = request.rate ?: throw ApiRequestException("missing or invalid rate")
     if (value < 0) throw ApiRequestException("rate must be 0 or greater")
     Configurable.messageSendRate = value
     return ConfigUpdateOutcome(name = name, applied = true, requiresRestart = false)
 }
 
-private fun updateBotPortConfig(name: String, request: ConfigRequest): ConfigUpdateOutcome {
+private fun updateBotPortConfig(
+    name: String,
+    request: ConfigRequest,
+): ConfigUpdateOutcome {
     val value = request.port ?: throw ApiRequestException("missing or invalid port")
     if (value < 1 || value > 65535) throw ApiRequestException("invalid port number; port must be between 1 and 65535")
     Configurable.botSocketPort = value

@@ -10,7 +10,10 @@ internal const val MAX_BASE64_IMAGE_PAYLOAD_LENGTH = MAX_IMAGE_PAYLOAD_BYTES * 4
 
 internal fun decodeBase64Image(base64ImageDataString: String): ByteArray = base64MimeDecoder.decode(base64ImageDataString)
 
-internal fun saveImage(imageBytes: ByteArray, outputDir: File): File =
+internal fun saveImage(
+    imageBytes: ByteArray,
+    outputDir: File,
+): File =
     File(outputDir, "${UUID.randomUUID()}.${detectImageFileExtension(imageBytes)}").apply {
         writeBytes(imageBytes)
     }

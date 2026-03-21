@@ -60,11 +60,12 @@ class KakaoProfileIndexer(
     }
 
     fun stop() {
-        val job = synchronized(this) {
-            val captured = workerJob ?: return
-            workerJob = null
-            captured
-        }
+        val job =
+            synchronized(this) {
+                val captured = workerJob ?: return
+                workerJob = null
+                captured
+            }
 
         runBlocking {
             job.cancelAndJoin()

@@ -69,15 +69,16 @@ class Replier {
 
         @OptIn(DelicateCoroutinesApi::class)
         fun restartMessageSender() {
-            val jobToCancel = synchronized(this@Companion) {
-                if (messageChannel.isClosedForSend) {
-                    IrisLogger.error("[Replier] Cannot restart message sender after shutdown")
-                    return
+            val jobToCancel =
+                synchronized(this@Companion) {
+                    if (messageChannel.isClosedForSend) {
+                        IrisLogger.error("[Replier] Cannot restart message sender after shutdown")
+                        return
+                    }
+                    val captured = messageSenderJob
+                    messageSenderJob = null
+                    captured
                 }
-                val captured = messageSenderJob
-                messageSenderJob = null
-                captured
-            }
 
             jobToCancel?.let { runBlocking { it.cancelAndJoin() } }
             startMessageSender()
@@ -88,12 +89,13 @@ class Replier {
          */
         fun shutdown() {
             IrisLogger.info("[Replier] Shutting down message channel...")
-            val jobToJoin = synchronized(this@Companion) {
-                messageChannel.close()
-                val captured = messageSenderJob
-                messageSenderJob = null
-                captured
-            }
+            val jobToJoin =
+                synchronized(this@Companion) {
+                    messageChannel.close()
+                    val captured = messageSenderJob
+                    messageSenderJob = null
+                    captured
+                }
 
             jobToJoin?.let { runBlocking { it.join() } }
             IrisLogger.info("[Replier] Message channel closed")
@@ -380,4 +382,3 @@ private fun cleanupPreparedImages(preparedImages: PreparedImages) {
         }
     }
 }
-

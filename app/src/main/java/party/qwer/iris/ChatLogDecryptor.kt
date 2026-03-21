@@ -4,16 +4,31 @@ import org.json.JSONException
 import org.json.JSONObject
 
 private val MESSAGE_DECRYPT_KEYS = arrayOf("message", "attachment")
-private val PROFILE_DECRYPT_KEYWORDS = listOf(
-    "name", "nick_name", "nickname", "profile_image_url",
-    "full_profile_image_url", "original_profile_image_url",
-    "status_message", "contact_name", "board_v",
-)
-private val PROFILE_DECRYPT_KEYS = arrayOf(
-    "nick_name", "name", "nickname", "profile_image_url",
-    "full_profile_image_url", "original_profile_image_url",
-    "status_message", "contact_name", "v", "board_v",
-)
+private val PROFILE_DECRYPT_KEYWORDS =
+    listOf(
+        "name",
+        "nick_name",
+        "nickname",
+        "profile_image_url",
+        "full_profile_image_url",
+        "original_profile_image_url",
+        "status_message",
+        "contact_name",
+        "board_v",
+    )
+private val PROFILE_DECRYPT_KEYS =
+    arrayOf(
+        "nick_name",
+        "name",
+        "nickname",
+        "profile_image_url",
+        "full_profile_image_url",
+        "original_profile_image_url",
+        "status_message",
+        "contact_name",
+        "v",
+        "board_v",
+    )
 
 fun decryptRow(inputRow: Map<String, String?>): Map<String, String?> {
     var row = inputRow.toMutableMap()

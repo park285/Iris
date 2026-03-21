@@ -396,7 +396,6 @@ class H2cDispatcher internal constructor(
         private const val HEADER_IRIS_ROUTE = "X-Iris-Route"
         private const val APPLICATION_JSON = "application/json"
         private const val NONE = "<none>"
-
     }
 }
 

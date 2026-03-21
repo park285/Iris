@@ -121,7 +121,7 @@ class KakaoDB {
 
     fun latestLogId(): Long =
         withPrimaryConnection { db ->
-            db.rawQuery("SELECT MAX(_id) FROM chat_logs", null).use { cursor ->
+            db.rawQuery("SELECT _id FROM chat_logs ORDER BY _id DESC LIMIT 1", null).use { cursor ->
                 if (cursor.moveToFirst()) {
                     cursor.getLong(0)
                 } else {
@@ -139,7 +139,7 @@ class KakaoDB {
             db
                 .rawQuery(
                     """
-                    SELECT _id, id, chat_id, user_id, message, v, created_at, type, thread_id, supplement, attachment
+                    SELECT *
                     FROM chat_logs
                     WHERE _id > ?
                     ORDER BY _id ASC
