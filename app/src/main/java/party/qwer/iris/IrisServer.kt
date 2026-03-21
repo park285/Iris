@@ -22,8 +22,6 @@ import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonPrimitive
 import party.qwer.iris.model.CommonErrorResponse
 import party.qwer.iris.model.ConfigRequest
 import party.qwer.iris.model.QueryRequest
@@ -228,7 +226,7 @@ class IrisServer(
             invalidRequest("threadId is only supported for text replies")
         }
 
-        val admission = admitReply(replyRequest, roomId, threadId, threadScope)
+        val admission = admitReply(replyRequest, roomId, notificationReferer, threadId, threadScope)
         if (admission.status != ReplyAdmissionStatus.ACCEPTED) {
             requestRejected(
                 admission.message ?: "reply request rejected",
@@ -242,35 +240,6 @@ class IrisServer(
             type = replyRequest.type,
         )
     }
-
-    private fun admitReply(
-        replyRequest: ReplyRequest,
-        roomId: Long,
-        threadId: Long?,
-        threadScope: Int?,
-    ): ReplyAdmissionResult =
-        when (replyRequest.type) {
-            ReplyType.TEXT ->
-                Replier.sendMessage(
-                    notificationReferer,
-                    roomId,
-                    extractTextPayload(replyRequest),
-                    threadId,
-                    threadScope,
-                )
-
-            ReplyType.IMAGE ->
-                Replier.sendPhoto(
-                    roomId,
-                    extractSingleImagePayload(replyRequest),
-                )
-
-            ReplyType.IMAGE_MULTIPLE ->
-                Replier.sendMultiplePhotos(
-                    roomId,
-                    extractImagePayloads(replyRequest),
-                )
-        }
 
     private suspend fun requireBotToken(call: ApplicationCall): Boolean {
         val expectedToken = Configurable.botToken
@@ -350,19 +319,6 @@ private fun requestRejected(
     message: String,
     status: HttpStatusCode,
 ): Nothing = throw ApiRequestException(message, status)
-
-private fun extractTextPayload(replyRequest: ReplyRequest): String =
-    runCatching { replyRequest.data.jsonPrimitive.content }
-        .getOrElse { invalidRequest("text replies require string data") }
-
-private fun extractSingleImagePayload(replyRequest: ReplyRequest): String = extractTextPayload(replyRequest)
-
-private fun extractImagePayloads(replyRequest: ReplyRequest): List<String> =
-    runCatching {
-        replyRequest.data.jsonArray.map { element -> element.jsonPrimitive.content }
-    }.getOrElse {
-        invalidRequest("image_multiple replies require a JSON array of base64 strings")
-    }
 
 private fun requireQueryText(query: String) {
     if (query.isBlank()) {
