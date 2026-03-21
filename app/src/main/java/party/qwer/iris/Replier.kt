@@ -213,18 +213,23 @@ class Replier {
             room: Long,
             base64ImageDataStrings: List<String>,
         ): ReplyAdmissionResult {
-            if (!isValidBase64ImagePayloads(base64ImageDataStrings)) {
-                return ReplyAdmissionResult(
-                    ReplyAdmissionStatus.INVALID_PAYLOAD,
-                    "image replies require valid base64 payload",
-                )
-            }
+            val decodedImages =
+                try {
+                    require(base64ImageDataStrings.isNotEmpty()) { "no image data provided" }
+                    base64ImageDataStrings.map { base64 ->
+                        require(base64.length <= MAX_BASE64_IMAGE_PAYLOAD_LENGTH) { "payload exceeds size limit" }
+                        decodeBase64Image(base64)
+                    }
+                } catch (_: IllegalArgumentException) {
+                    return ReplyAdmissionResult(
+                        ReplyAdmissionStatus.INVALID_PAYLOAD,
+                        "image replies require valid base64 payload",
+                    )
+                }
+
             return enqueueRequest(
                 SendMessageRequest {
-                    sendImages(
-                        room = room,
-                        base64ImageDataStrings = base64ImageDataStrings,
-                    )
+                    sendDecodedImages(room, decodedImages)
                 },
             )
         }
@@ -262,41 +267,16 @@ class Replier {
             }
         }
 
-        private fun sendImages(
+        private fun sendDecodedImages(
             room: Long,
-            base64ImageDataStrings: List<String>,
+            decodedImages: List<ByteArray>,
         ) {
-            val preparedImages = prepareImages(room, base64ImageDataStrings)
-            sendPreparedImages(preparedImages)
-        }
-
-        private fun prepareImages(
-            room: Long,
-            base64ImageDataStrings: List<String>,
-        ): PreparedImages =
-            try {
-                prepareImagesInternal(room, base64ImageDataStrings)
-            } catch (e: IllegalArgumentException) {
-                throw IllegalArgumentException("invalid image payload for room=$room: ${e.message}", e)
-            } catch (e: Exception) {
-                IrisLogger.error("Error preparing images for room=$room: ${e.message}", e)
-                throw e
-            }
-
-        private fun prepareImagesInternal(
-            room: Long,
-            base64ImageDataStrings: List<String>,
-        ): PreparedImages {
-            require(base64ImageDataStrings.isNotEmpty()) { "no image data provided" }
             ensureImageDir(imageDir)
-
-            val uris = ArrayList<Uri>(base64ImageDataStrings.size)
-            val createdFiles = ArrayList<File>(base64ImageDataStrings.size)
+            val uris = ArrayList<Uri>(decodedImages.size)
+            val createdFiles = ArrayList<File>(decodedImages.size)
             try {
-                base64ImageDataStrings.forEach { base64ImageDataString ->
-                    val decodedImage = decodeBase64Image(base64ImageDataString)
-                    val imageFile = saveImage(decodedImage, imageDir)
-
+                decodedImages.forEach { imageBytes ->
+                    val imageFile = saveImage(imageBytes, imageDir)
                     createdFiles.add(imageFile)
                     val imageUri = Uri.fromFile(imageFile)
                     if (imageMediaScanEnabled) {
@@ -304,12 +284,13 @@ class Replier {
                     }
                     uris.add(imageUri)
                 }
-
                 require(uris.isNotEmpty()) { "no image URIs created" }
-                return PreparedImages(
-                    room = room,
-                    uris = uris,
-                    files = createdFiles,
+                sendPreparedImages(
+                    PreparedImages(
+                        room = room,
+                        uris = uris,
+                        files = createdFiles,
+                    ),
                 )
             } catch (e: Exception) {
                 createdFiles.forEach { file ->
