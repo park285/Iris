@@ -198,7 +198,7 @@ class ObserverHelper(
                 threadId = threadMetadata?.threadId,
                 threadScope = threadMetadata?.threadScope,
                 messageType = logEntry.messageType?.trim()?.takeIf { it.isNotEmpty() },
-                attachment = logEntry.attachment?.takeIf { it.isNotBlank() },
+                attachment = logEntry.attachment?.takeIf { it.isNotBlank() }?.let { decryptMessage(it, enc, logEntry.userId) },
             )
 
         return when (ensureDispatcher()?.route(routingCommand) ?: RoutingResult.RETRY_LATER) {
