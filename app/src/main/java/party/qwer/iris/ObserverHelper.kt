@@ -103,7 +103,7 @@ class ObserverHelper(
             )
         }.getOrElse { error ->
             IrisLogger.error("[ObserverHelper] Invalid metadata for logId=${logEntry.id}: ${error.message}")
-            lastLogId = logEntry.id
+            advanceLastLogId(logEntry.id)
             null
         }
 

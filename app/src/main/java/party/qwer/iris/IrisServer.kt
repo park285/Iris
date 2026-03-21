@@ -22,8 +22,6 @@ import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonPrimitive
 import party.qwer.iris.model.CommonErrorResponse
 import party.qwer.iris.model.ConfigRequest
 import party.qwer.iris.model.QueryRequest
@@ -212,92 +210,6 @@ class IrisServer(
         }
     }
 
-    private fun applyConfigUpdate(
-        name: String,
-        request: ConfigRequest,
-    ): ConfigUpdateOutcome =
-        when (name) {
-            "endpoint" -> updateEndpointConfig(name, request)
-            "dbrate" -> updateDbRateConfig(name, request)
-            "sendrate" -> updateSendRateConfig(name, request)
-            "botport" -> updateBotPortConfig(name, request)
-            else -> throw ApiRequestException("unknown config '$name'")
-        }
-
-    private fun updateEndpointConfig(
-        name: String,
-        request: ConfigRequest,
-    ): ConfigUpdateOutcome {
-        val route = resolveEndpointRoute(request.route)
-        val value = request.endpoint?.trim() ?: throw ApiRequestException("missing endpoint value")
-        if (value.isNotEmpty() && !value.startsWith("http://") && !value.startsWith("https://")) {
-            throw ApiRequestException("endpoint must start with http:// or https://")
-        }
-
-        Configurable.setWebhookEndpoint(route, value)
-        return ConfigUpdateOutcome(
-            name =
-                if (route == DEFAULT_WEBHOOK_ROUTE) {
-                    name
-                } else {
-                    "$name.$route"
-                },
-            applied = true,
-            requiresRestart = false,
-        )
-    }
-
-    private fun updateDbRateConfig(
-        name: String,
-        request: ConfigRequest,
-    ): ConfigUpdateOutcome {
-        val value = request.rate ?: throw ApiRequestException("missing or invalid rate")
-        if (value < 1) {
-            throw ApiRequestException("rate must be greater than 0")
-        }
-
-        Configurable.dbPollingRate = value
-        return ConfigUpdateOutcome(
-            name = name,
-            applied = true,
-            requiresRestart = false,
-        )
-    }
-
-    private fun updateSendRateConfig(
-        name: String,
-        request: ConfigRequest,
-    ): ConfigUpdateOutcome {
-        val value = request.rate ?: throw ApiRequestException("missing or invalid rate")
-        if (value < 0) {
-            throw ApiRequestException("rate must be 0 or greater")
-        }
-
-        Configurable.messageSendRate = value
-        return ConfigUpdateOutcome(
-            name = name,
-            applied = true,
-            requiresRestart = false,
-        )
-    }
-
-    private fun updateBotPortConfig(
-        name: String,
-        request: ConfigRequest,
-    ): ConfigUpdateOutcome {
-        val value = request.port ?: throw ApiRequestException("missing or invalid port")
-        if (value < 1 || value > 65535) {
-            throw ApiRequestException("invalid port number; port must be between 1 and 65535")
-        }
-
-        Configurable.botSocketPort = value
-        return ConfigUpdateOutcome(
-            name = name,
-            applied = false,
-            requiresRestart = true,
-        )
-    }
-
     private fun enqueueReply(replyRequest: ReplyRequest): ReplyAcceptedResponse {
         val roomId = replyRequest.room.toLongOrNull() ?: invalidRequest("room must be a numeric string")
         val threadId =
@@ -314,7 +226,7 @@ class IrisServer(
             invalidRequest("threadId is only supported for text replies")
         }
 
-        val admission = admitReply(replyRequest, roomId, threadId, threadScope)
+        val admission = admitReply(replyRequest, roomId, notificationReferer, threadId, threadScope)
         if (admission.status != ReplyAdmissionStatus.ACCEPTED) {
             requestRejected(
                 admission.message ?: "reply request rejected",
@@ -328,35 +240,6 @@ class IrisServer(
             type = replyRequest.type,
         )
     }
-
-    private fun admitReply(
-        replyRequest: ReplyRequest,
-        roomId: Long,
-        threadId: Long?,
-        threadScope: Int?,
-    ): ReplyAdmissionResult =
-        when (replyRequest.type) {
-            ReplyType.TEXT ->
-                Replier.sendMessage(
-                    notificationReferer,
-                    roomId,
-                    extractTextPayload(replyRequest),
-                    threadId,
-                    threadScope,
-                )
-
-            ReplyType.IMAGE ->
-                Replier.sendPhoto(
-                    roomId,
-                    extractSingleImagePayload(replyRequest),
-                )
-
-            ReplyType.IMAGE_MULTIPLE ->
-                Replier.sendMultiplePhotos(
-                    roomId,
-                    extractImagePayloads(replyRequest),
-                )
-        }
 
     private suspend fun requireBotToken(call: ApplicationCall): Boolean {
         val expectedToken = Configurable.botToken
@@ -401,22 +284,16 @@ class IrisServer(
             rowCount = rows.size,
             data =
                 rows.map {
-                    KakaoDB.decryptRow(it)
+                    decryptRow(it)
                 },
         )
     }
 }
 
-private class ApiRequestException(
+internal class ApiRequestException(
     override val message: String,
     val status: HttpStatusCode = HttpStatusCode.BadRequest,
 ) : RuntimeException(message)
-
-private data class ConfigUpdateOutcome(
-    val name: String,
-    val applied: Boolean,
-    val requiresRestart: Boolean,
-)
 
 internal fun validateReplyThreadScope(
     replyType: ReplyType,
@@ -438,77 +315,10 @@ private fun invalidRequest(message: String): Nothing = throw ApiRequestException
 
 private fun internalServerFailure(message: String): Nothing = throw ApiRequestException(message, HttpStatusCode.InternalServerError)
 
-private fun resolveEndpointRoute(rawRoute: String?): String {
-    val normalized = rawRoute?.trim().orEmpty()
-    if (normalized.isEmpty()) {
-        return DEFAULT_WEBHOOK_ROUTE
-    }
-    if (!normalized.all { it.isLetterOrDigit() || it == '-' || it == '_' }) {
-        throw ApiRequestException("route must contain only letters, digits, '-' or '_'")
-    }
-    return normalized
-}
-
 private fun requestRejected(
     message: String,
     status: HttpStatusCode,
 ): Nothing = throw ApiRequestException(message, status)
-
-private fun extractTextPayload(replyRequest: ReplyRequest): String =
-    runCatching { replyRequest.data.jsonPrimitive.content }
-        .getOrElse { invalidRequest("text replies require string data") }
-
-private fun extractSingleImagePayload(replyRequest: ReplyRequest): String = extractTextPayload(replyRequest)
-
-private fun extractImagePayloads(replyRequest: ReplyRequest): List<String> =
-    runCatching {
-        replyRequest.data.jsonArray.map { element -> element.jsonPrimitive.content }
-    }.getOrElse {
-        invalidRequest("image_multiple replies require a JSON array of base64 strings")
-    }
-
-private val SAFE_PRAGMAS =
-    setOf(
-        "table_info",
-        "table_xinfo",
-        "index_list",
-        "index_info",
-        "foreign_key_list",
-        "compile_options",
-        "database_list",
-        "collation_list",
-        "encoding",
-        "page_size",
-        "page_count",
-        "max_page_count",
-        "freelist_count",
-    )
-
-private val WRITE_KEYWORD_PATTERN =
-    Regex(
-        """\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|ATTACH|DETACH|REINDEX|VACUUM)\b""",
-        RegexOption.IGNORE_CASE,
-    )
-
-internal fun isReadOnlyQuery(query: String): Boolean {
-    val normalized = query.trimStart()
-    if (normalized.isBlank()) return false
-    val upper = normalized.uppercase()
-
-    if (upper.startsWith("PRAGMA")) {
-        val pragmaBody = normalized.substringAfter("PRAGMA", "").trimStart()
-        val pragmaName =
-            pragmaBody
-                .split('(', '=', ' ', ';')
-                .first()
-                .trim()
-                .lowercase()
-        return pragmaName in SAFE_PRAGMAS
-    }
-
-    if (!upper.startsWith("SELECT") && !upper.startsWith("WITH")) return false
-    return !WRITE_KEYWORD_PATTERN.containsMatchIn(normalized)
-}
 
 private fun requireQueryText(query: String) {
     if (query.isBlank()) {

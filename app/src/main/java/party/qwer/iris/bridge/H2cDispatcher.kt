@@ -13,15 +13,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.ConnectionPool
 import okhttp3.Dispatcher
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
@@ -47,22 +43,6 @@ class H2cDispatcher internal constructor(
     private val maxDeliveryAttempts = maxDeliveryAttemptsOverride ?: MAX_DELIVERY_ATTEMPTS
     private val backoffDelayProvider = backoffDelayProviderOverride
 
-    private val webhookTransport: WebhookTransport =
-        run {
-            val raw =
-                transportOverride?.trim()?.lowercase()
-                    ?: System
-                        .getenv("IRIS_WEBHOOK_TRANSPORT")
-                        ?.trim()
-                        ?.lowercase()
-                        .orEmpty()
-            when (raw) {
-                "http1", "http1_1", "http", "https" -> WebhookTransport.HTTP1
-                "", "h2c" -> WebhookTransport.H2C
-                else -> WebhookTransport.H2C
-            }
-        }
-
     private val sharedDispatcher =
         Dispatcher().apply {
             maxRequests = MAX_CONCURRENT_REQUESTS
@@ -74,36 +54,16 @@ class H2cDispatcher internal constructor(
             KEEP_ALIVE_DURATION_MS,
             TimeUnit.MILLISECONDS,
         )
-    private val baseClient: OkHttpClient = createBaseClient()
-    private val h2cClient: OkHttpClient = baseClient.newBuilder().protocols(listOf(Protocol.H2_PRIOR_KNOWLEDGE)).build()
-    private val http1Client: OkHttpClient = baseClient.newBuilder().protocols(listOf(Protocol.HTTP_1_1)).build()
+    private val clientFactory =
+        WebhookHttpClientFactory(
+            resolveWebhookTransport(transportOverride),
+            sharedDispatcher,
+            sharedConnectionPool,
+        )
     private val routeDispatchers = RouteDispatchRegistry(::createRouteDispatchState)
 
     @Volatile
     private var started = true
-
-    private fun createBaseClient(): OkHttpClient =
-        OkHttpClient
-            .Builder()
-            .retryOnConnectionFailure(false)
-            .dispatcher(sharedDispatcher)
-            .connectionPool(sharedConnectionPool)
-            .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-            .readTimeout(SOCKET_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-            .callTimeout(REQUEST_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-            .build()
-
-    private fun clientFor(webhookUrl: String): OkHttpClient {
-        // H2 prior knowledge is cleartext-only; HTTPS must use the HTTP/1.1-capable client.
-        if (webhookUrl.startsWith("https://")) {
-            return http1Client
-        }
-
-        return when (webhookTransport) {
-            WebhookTransport.H2C -> h2cClient
-            WebhookTransport.HTTP1 -> http1Client
-        }
-    }
 
     private fun createRouteDispatchState(route: String): RouteDispatchState {
         val dispatchChannel = Channel<QueuedDelivery>(capacity = routeQueueCapacity)
@@ -338,7 +298,7 @@ class H2cDispatcher internal constructor(
         webhookUrl: String,
     ): Int =
         suspendCancellableCoroutine { continuation ->
-            val call = clientFor(webhookUrl).newCall(request)
+            val call = clientFactory.clientFor(webhookUrl).newCall(request)
             continuation.invokeOnCancellation {
                 call.cancel()
             }
@@ -412,35 +372,7 @@ class H2cDispatcher internal constructor(
             url = webhookUrl,
             messageId = messageId,
             route = route,
-            payloadJson =
-                buildJsonObject {
-                    put("route", route)
-                    put("messageId", messageId)
-                    put("sourceLogId", command.sourceLogId)
-                    put("text", command.text)
-                    put("room", command.room)
-                    put("sender", command.sender)
-                    put("userId", command.userId)
-                    if (!command.chatLogId.isNullOrBlank()) {
-                        put("chatLogId", command.chatLogId)
-                    }
-                    if (!command.roomType.isNullOrBlank()) {
-                        put("roomType", command.roomType)
-                    }
-                    if (!command.roomLinkId.isNullOrBlank()) {
-                        put("roomLinkId", command.roomLinkId)
-                    }
-                    if (!command.threadId.isNullOrBlank()) {
-                        put("threadId", command.threadId)
-                    }
-                    command.threadScope?.let { put("threadScope", it) }
-                    if (!command.messageType.isNullOrBlank()) {
-                        put("type", command.messageType)
-                    }
-                    if (!command.attachment.isNullOrBlank()) {
-                        put("attachment", command.attachment)
-                    }
-                }.toString(),
+            payloadJson = buildWebhookPayload(command, route, messageId),
         )
     }
 
@@ -448,11 +380,6 @@ class H2cDispatcher internal constructor(
         SUCCESS,
         DROP,
         RETRY_LATER,
-    }
-
-    private enum class WebhookTransport {
-        H2C,
-        HTTP1,
     }
 
     companion object {
@@ -470,9 +397,6 @@ class H2cDispatcher internal constructor(
         private const val APPLICATION_JSON = "application/json"
         private const val NONE = "<none>"
 
-        private const val CONNECT_TIMEOUT_MS = 10_000L
-        private const val REQUEST_TIMEOUT_MS = 30_000L
-        private const val SOCKET_TIMEOUT_MS = 30_000L
     }
 }
 

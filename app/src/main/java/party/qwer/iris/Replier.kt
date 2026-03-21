@@ -18,8 +18,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import party.qwer.iris.Replier.Companion.SendMessageRequest
 import java.io.File
-import java.util.Base64
-import java.util.UUID
 
 // SendMsg : ye-seola/go-kdb
 
@@ -70,32 +68,34 @@ class Replier {
         }
 
         @OptIn(DelicateCoroutinesApi::class)
-        @Synchronized
         fun restartMessageSender() {
-            if (messageChannel.isClosedForSend) {
-                IrisLogger.error("[Replier] Cannot restart message sender after shutdown")
-                return
+            val jobToCancel = synchronized(this@Companion) {
+                if (messageChannel.isClosedForSend) {
+                    IrisLogger.error("[Replier] Cannot restart message sender after shutdown")
+                    return
+                }
+                val captured = messageSenderJob
+                messageSenderJob = null
+                captured
             }
-            runBlocking {
-                messageSenderJob?.cancelAndJoin()
-            }
-            messageSenderJob = null
+
+            jobToCancel?.let { runBlocking { it.cancelAndJoin() } }
             startMessageSender()
         }
 
         /**
          * 종료 시 채널을 닫고 대기 중인 메시지 처리를 기다림.
          */
-        @Synchronized
         fun shutdown() {
             IrisLogger.info("[Replier] Shutting down message channel...")
-            messageChannel.close()
-            messageSenderJob?.let { job ->
-                runBlocking {
-                    job.join()
-                }
+            val jobToJoin = synchronized(this@Companion) {
+                messageChannel.close()
+                val captured = messageSenderJob
+                messageSenderJob = null
+                captured
             }
-            messageSenderJob = null
+
+            jobToJoin?.let { runBlocking { it.join() } }
             IrisLogger.info("[Replier] Message channel closed")
         }
 
@@ -293,11 +293,7 @@ class Replier {
             try {
                 base64ImageDataStrings.forEach { base64ImageDataString ->
                     val decodedImage = decodeBase64Image(base64ImageDataString)
-                    val extension = detectImageFileExtension(decodedImage)
-                    val imageFile =
-                        File(imageDir, "${UUID.randomUUID()}.$extension").apply {
-                            writeBytes(decodedImage)
-                        }
+                    val imageFile = saveImage(decodedImage, imageDir)
 
                     createdFiles.add(imageFile)
                     val imageUri = Uri.fromFile(imageFile)
@@ -385,71 +381,3 @@ private fun cleanupPreparedImages(preparedImages: PreparedImages) {
     }
 }
 
-private val base64MimeDecoder = Base64.getMimeDecoder()
-private const val MAX_IMAGE_PAYLOAD_BYTES = 20 * 1024 * 1024 // 20 MB
-private const val MAX_BASE64_IMAGE_PAYLOAD_LENGTH = MAX_IMAGE_PAYLOAD_BYTES * 4 / 3 + 4
-
-internal fun isValidBase64ImagePayloads(base64ImageDataStrings: List<String>): Boolean =
-    try {
-        require(base64ImageDataStrings.isNotEmpty())
-        base64ImageDataStrings.forEach {
-            require(it.length <= MAX_BASE64_IMAGE_PAYLOAD_LENGTH) { "payload exceeds size limit" }
-            decodeBase64Image(it)
-        }
-        true
-    } catch (_: IllegalArgumentException) {
-        false
-    }
-
-private fun decodeBase64Image(base64ImageDataString: String): ByteArray = base64MimeDecoder.decode(base64ImageDataString)
-
-internal fun detectImageFileExtension(imageBytes: ByteArray): String {
-    if (isPngSignature(imageBytes)) {
-        return "png"
-    }
-
-    if (isJpegSignature(imageBytes)) {
-        return "jpg"
-    }
-
-    if (isWebpSignature(imageBytes)) {
-        return "webp"
-    }
-
-    if (isGifSignature(imageBytes)) {
-        return "gif"
-    }
-
-    return "img"
-}
-
-private fun isPngSignature(imageBytes: ByteArray): Boolean =
-    imageBytes.size >= 8 &&
-        imageBytes[0] == 0x89.toByte() &&
-        imageBytes[1] == 0x50.toByte() &&
-        imageBytes[2] == 0x4E.toByte() &&
-        imageBytes[3] == 0x47.toByte()
-
-private fun isJpegSignature(imageBytes: ByteArray): Boolean =
-    imageBytes.size >= 3 &&
-        imageBytes[0] == 0xFF.toByte() &&
-        imageBytes[1] == 0xD8.toByte() &&
-        imageBytes[2] == 0xFF.toByte()
-
-private fun isWebpSignature(imageBytes: ByteArray): Boolean =
-    imageBytes.size >= 12 &&
-        imageBytes[0] == 0x52.toByte() &&
-        imageBytes[1] == 0x49.toByte() &&
-        imageBytes[2] == 0x46.toByte() &&
-        imageBytes[3] == 0x46.toByte() &&
-        imageBytes[8] == 0x57.toByte() &&
-        imageBytes[9] == 0x45.toByte() &&
-        imageBytes[10] == 0x42.toByte() &&
-        imageBytes[11] == 0x50.toByte()
-
-private fun isGifSignature(imageBytes: ByteArray): Boolean =
-    imageBytes.size >= 4 &&
-        imageBytes[0] == 0x47.toByte() &&
-        imageBytes[1] == 0x49.toByte() &&
-        imageBytes[2] == 0x46.toByte() &&
-        imageBytes[3] == 0x38.toByte()
