@@ -60,209 +60,188 @@ class AndroidHiddenApi {
             throw IllegalStateException(errorMsg)
         }
 
+        private fun <T> resolveMethod(
+            methodName: String,
+            targetClass: Class<*>,
+            vararg candidates: () -> T,
+        ): T {
+            for (candidate in candidates) {
+                try {
+                    return candidate()
+                } catch (_: Exception) {
+                    // 다음 후보 시도
+                }
+            }
+            buildMethodResolutionError(methodName, targetClass)
+        }
+
         private fun getStartServiceMethod(): (Intent) -> Unit {
             val iActivityManager = iActivityManagerClass
             val iApplicationThread = iApplicationThreadClass
 
-            try {
-                // IApplicationThread caller, Intent service, String resolvedType,
-                // boolean requireForeground, String callingPackage, String callingFeatureId, int userId
-                val method =
-                    iActivityManager.getMethod(
-                        "startService",
-                        iApplicationThread,
-                        Intent::class.java,
-                        String::class.java,
-                        java.lang.Boolean.TYPE,
-                        String::class.java,
-                        String::class.java,
-                        java.lang.Integer.TYPE,
-                    )
-
-                return { intent ->
-                    method.invoke(
-                        activityManager,
-                        null,
-                        intent,
-                        null,
-                        false,
-                        callingPackageName,
-                        null,
-                        -3,
-                    )
-                }
-            } catch (_: Exception) {
-            }
-
-            try {
-                // IApplicationThread caller, Intent service, String resolvedType,
-                // boolean requireForeground, in String callingPackage, int userId);
-                val method =
-                    iActivityManager.getMethod(
-                        "startService",
-                        iApplicationThread,
-                        Intent::class.java,
-                        String::class.java,
-                        java.lang.Boolean.TYPE,
-                        String::class.java,
-                        java.lang.Integer.TYPE,
-                    )
-
-                return { intent ->
-                    method.invoke(
-                        activityManager,
-                        null,
-                        intent,
-                        null,
-                        false,
-                        callingPackageName,
-                        -3,
-                    )
-                }
-            } catch (_: Exception) {
-            }
-
-            buildMethodResolutionError("startService", iActivityManager)
+            return resolveMethod(
+                "startService",
+                iActivityManager,
+                {
+                    val method =
+                        iActivityManager.getMethod(
+                            "startService",
+                            iApplicationThread,
+                            Intent::class.java,
+                            String::class.java,
+                            java.lang.Boolean.TYPE,
+                            String::class.java,
+                            String::class.java,
+                            java.lang.Integer.TYPE,
+                        )
+                    ({ intent: Intent ->
+                        method.invoke(activityManager, null, intent, null, false, callingPackageName, null, -3)
+                    })
+                },
+                {
+                    val method =
+                        iActivityManager.getMethod(
+                            "startService",
+                            iApplicationThread,
+                            Intent::class.java,
+                            String::class.java,
+                            java.lang.Boolean.TYPE,
+                            String::class.java,
+                            java.lang.Integer.TYPE,
+                        )
+                    ({ intent: Intent ->
+                        method.invoke(activityManager, null, intent, null, false, callingPackageName, -3)
+                    })
+                },
+            )
         }
 
         private fun getStartActivityMethod(): (Intent) -> Unit {
             val iActivityManager = iActivityManagerClass
             val iApplicationThread = iApplicationThreadClass
 
-            try {
-                // IApplicationThread caller, String callingPackage, String callingFeatureId,
-                // Intent intent, String resolvedType, IBinder resultTo, String resultWho,
-                // int requestCode, int flags, ProfilerInfo profilerInfo, Bundle options, int userId
-                val profilerInfo = Class.forName("android.app.ProfilerInfo")
-                val method =
-                    iActivityManager.getMethod(
-                        "startActivity",
-                        iApplicationThread,
-                        String::class.java,
-                        String::class.java,
-                        Intent::class.java,
-                        String::class.java,
-                        IBinder::class.java,
-                        String::class.java,
-                        Integer.TYPE,
-                        Integer.TYPE,
-                        profilerInfo,
-                        Bundle::class.java,
-                        Integer.TYPE,
-                    )
-
-                return { intent ->
-                    method.invoke(
-                        activityManager,
-                        null,
-                        callingPackageName,
-                        null,
-                        intent,
-                        intent.type,
-                        null,
-                        null,
-                        0,
-                        0,
-                        null,
-                        null,
-                        -3,
-                    )
-                }
-            } catch (_: Exception) {
-            }
-
-            try {
-                // IApplicationThread, java.lang.String, android.content.Intent,
-                // java.lang.String, android.os.IBinder, java.lang.String, int, int, android.app.ProfilerInfo, android.os.Bundle, int
-                val profilerInfo = Class.forName("android.app.ProfilerInfo")
-                val method =
-                    iActivityManager.getMethod(
-                        "startActivityAsUser",
-                        iApplicationThread,
-                        String::class.java,
-                        Intent::class.java,
-                        String::class.java,
-                        IBinder::class.java,
-                        String::class.java,
-                        Integer.TYPE,
-                        Integer.TYPE,
-                        profilerInfo,
-                        Bundle::class.java,
-                        Integer.TYPE,
-                    )
-
-                return { intent ->
-                    method.invoke(
-                        activityManager,
-                        null,
-                        callingPackageName,
-                        intent,
-                        intent.type,
-                        null,
-                        null,
-                        0,
-                        0,
-                        null,
-                        null,
-                        -3,
-                    )
-                }
-            } catch (_: Exception) {
-            }
-
-            buildMethodResolutionError("startActivity", iActivityManager)
+            return resolveMethod(
+                "startActivity",
+                iActivityManager,
+                {
+                    val profilerInfo = Class.forName("android.app.ProfilerInfo")
+                    val method =
+                        iActivityManager.getMethod(
+                            "startActivity",
+                            iApplicationThread,
+                            String::class.java,
+                            String::class.java,
+                            Intent::class.java,
+                            String::class.java,
+                            IBinder::class.java,
+                            String::class.java,
+                            Integer.TYPE,
+                            Integer.TYPE,
+                            profilerInfo,
+                            Bundle::class.java,
+                            Integer.TYPE,
+                        )
+                    ({ intent: Intent ->
+                        method.invoke(
+                            activityManager,
+                            null,
+                            callingPackageName,
+                            null,
+                            intent,
+                            intent.type,
+                            null,
+                            null,
+                            0,
+                            0,
+                            null,
+                            null,
+                            -3,
+                        )
+                    })
+                },
+                {
+                    val profilerInfo = Class.forName("android.app.ProfilerInfo")
+                    val method =
+                        iActivityManager.getMethod(
+                            "startActivityAsUser",
+                            iApplicationThread,
+                            String::class.java,
+                            Intent::class.java,
+                            String::class.java,
+                            IBinder::class.java,
+                            String::class.java,
+                            Integer.TYPE,
+                            Integer.TYPE,
+                            profilerInfo,
+                            Bundle::class.java,
+                            Integer.TYPE,
+                        )
+                    ({ intent: Intent ->
+                        method.invoke(
+                            activityManager,
+                            null,
+                            callingPackageName,
+                            intent,
+                            intent.type,
+                            null,
+                            null,
+                            0,
+                            0,
+                            null,
+                            null,
+                            -3,
+                        )
+                    })
+                },
+            )
         }
 
         private fun getBroadcastIntentMethod(): (Intent) -> Unit {
             val iActivityManager = iActivityManagerClass
             val iApplicationThread = iApplicationThreadClass
 
-            try {
-                // IApplicationThread caller, Intent intent, String resolvedType,
-                // IIntentReceiver resultTo, int resultCode, String resultData,
-                // Bundle map, String[] requiredPermissions, int appOp, Bundle options,
-                // boolean serialized, boolean sticky, int userId
-                val iIntentReceiver = Class.forName("android.content.IIntentReceiver")
-                val method =
-                    iActivityManager.getMethod(
-                        "broadcastIntent",
-                        iApplicationThread,
-                        Intent::class.java,
-                        String::class.java,
-                        iIntentReceiver,
-                        Integer.TYPE,
-                        String::class.java,
-                        Bundle::class.java,
-                        Array<String>::class.java,
-                        Integer.TYPE,
-                        Bundle::class.java,
-                        Boolean::class.java,
-                        Boolean::class.java,
-                        Int::class.java,
-                    )
-
-                return { intent ->
-                    method.invoke(
-                        activityManager,
-                        null,
-                        intent,
-                        null,
-                        null,
-                        0,
-                        null,
-                        null,
-                        null,
-                        -1,
-                        null,
-                        false,
-                        false,
-                        -3,
-                    )
-                }
-            } catch (_: Exception) {
-            }
-
-            buildMethodResolutionError("broadcastIntent", iActivityManager)
+            return resolveMethod(
+                "broadcastIntent",
+                iActivityManager,
+                {
+                    val iIntentReceiver = Class.forName("android.content.IIntentReceiver")
+                    val method =
+                        iActivityManager.getMethod(
+                            "broadcastIntent",
+                            iApplicationThread,
+                            Intent::class.java,
+                            String::class.java,
+                            iIntentReceiver,
+                            Integer.TYPE,
+                            String::class.java,
+                            Bundle::class.java,
+                            Array<String>::class.java,
+                            Integer.TYPE,
+                            Bundle::class.java,
+                            java.lang.Boolean.TYPE,
+                            java.lang.Boolean.TYPE,
+                            Integer.TYPE,
+                        )
+                    ({ intent: Intent ->
+                        method.invoke(
+                            activityManager,
+                            null,
+                            intent,
+                            null,
+                            null,
+                            0,
+                            null,
+                            null,
+                            null,
+                            -1,
+                            null,
+                            false,
+                            false,
+                            -3,
+                        )
+                    })
+                },
+            )
         }
 
         private fun getService(name: String): IBinder {
