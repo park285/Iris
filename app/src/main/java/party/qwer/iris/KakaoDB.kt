@@ -6,6 +6,10 @@ import android.database.sqlite.SQLiteException
 class KakaoDB {
     private val connection: SQLiteDatabase
     private val dbLock = Any()
+    private val readConnectionLock = Any()
+
+    @Volatile
+    private var readConnection: SQLiteDatabase? = null
 
     init {
         try {
@@ -68,7 +72,7 @@ class KakaoDB {
                 "SELECT name, enc FROM db2.friends WHERE id = ?"
             }
 
-        return withPrimaryConnection { db ->
+        return withReadConnection { db ->
             db.rawQuery(sql, bindArgs).use { cursor ->
                 decryptUserName(cursor, userId)
             }
@@ -117,7 +121,7 @@ class KakaoDB {
 
     fun latestLogId(): Long =
         withPrimaryConnection { db ->
-            db.rawQuery("SELECT _id FROM chat_logs ORDER BY _id DESC LIMIT 1", null).use { cursor ->
+            db.rawQuery("SELECT MAX(_id) FROM chat_logs", null).use { cursor ->
                 if (cursor.moveToFirst()) {
                     cursor.getLong(0)
                 } else {
@@ -135,7 +139,7 @@ class KakaoDB {
             db
                 .rawQuery(
                     """
-                    SELECT *
+                    SELECT _id, id, chat_id, user_id, message, v, created_at, type, thread_id, supplement, attachment
                     FROM chat_logs
                     WHERE _id > ?
                     ORDER BY _id ASC
@@ -178,6 +182,12 @@ class KakaoDB {
     }
 
     fun closeConnection() {
+        synchronized(readConnectionLock) {
+            readConnection?.let { conn ->
+                if (conn.isOpen) conn.close()
+                readConnection = null
+            }
+        }
         synchronized(dbLock) {
             if (connection.isOpen) {
                 connection.close()
@@ -216,14 +226,10 @@ class KakaoDB {
         sqlQuery: String,
         bindArgs: Array<String?>?,
         maxRows: Int = DEFAULT_QUERY_RESULT_LIMIT,
-    ): List<Map<String, String?>> {
-        val queryConnection = openDetachedReadConnection()
-        return try {
-            readQueryRows(queryConnection, sqlQuery, bindArgs, maxRows.coerceAtLeast(1))
-        } finally {
-            queryConnection.close()
+    ): List<Map<String, String?>> =
+        withReadConnection { conn ->
+            readQueryRows(conn, sqlQuery, bindArgs, maxRows.coerceAtLeast(1))
         }
-    }
 
     private val hasOpenChatMember: Boolean by lazy { checkNewDb() }
 
@@ -241,6 +247,16 @@ class KakaoDB {
     private inline fun <T> withPrimaryConnection(block: (SQLiteDatabase) -> T): T =
         synchronized(dbLock) {
             block(connection)
+        }
+
+    private fun getOrCreateReadConnection(): SQLiteDatabase =
+        readConnection ?: synchronized(readConnectionLock) {
+            readConnection ?: openDetachedReadConnection().also { readConnection = it }
+        }
+
+    private inline fun <T> withReadConnection(block: (SQLiteDatabase) -> T): T =
+        synchronized(readConnectionLock) {
+            block(getOrCreateReadConnection())
         }
 
     private fun ensureObservedProfileTable(db: SQLiteDatabase) {

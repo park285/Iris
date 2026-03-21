@@ -15,7 +15,7 @@ class ObserverHelper(
     @Volatile
     private var dispatcher: H2cDispatcher? = null
 
-    private val senderNameCache = lruMap<Long, String>(64)
+    private val senderNameCache = lruMap<Long, String>(256)
     private val roomMetadataCache = lruMap<Long, KakaoDB.RoomMetadata>(64)
     private val recentCommandFingerprints = lruMap<CommandFingerprint, Long>(MAX_COMMAND_FINGERPRINTS)
 
