@@ -1,7 +1,15 @@
 package party.qwer.iris
 
 import android.service.notification.StatusBarNotification
-import kotlin.concurrent.thread
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 interface NotificationIdentityStore {
     fun upsert(identity: KakaoNotificationIdentity)
@@ -27,37 +35,35 @@ class KakaoProfileIndexer(
             override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean = size > 8_192
         }
 
+    private val coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     @Volatile
-    private var workerThread: Thread? = null
+    private var workerJob: Job? = null
 
     @Synchronized
     fun launch() {
-        if (workerThread?.isAlive == true) {
+        if (workerJob?.isActive == true) {
             return
         }
 
-        workerThread =
-            thread(start = true, isDaemon = true, name = "iris-kakao-profile-indexer") {
-                while (!Thread.currentThread().isInterrupted) {
-                    try {
-                        refreshDirectory()
-                    } catch (e: Exception) {
-                        IrisLogger.error("[KakaoProfileIndexer] refresh failed: ${e.message}", e)
-                    }
-
-                    try {
-                        Thread.sleep(scanIntervalMillis)
-                    } catch (_: InterruptedException) {
-                        Thread.currentThread().interrupt()
-                    }
+        workerJob = coroutineScope.launch {
+            while (isActive) {
+                try {
+                    refreshDirectory()
+                } catch (e: Exception) {
+                    IrisLogger.error("[KakaoProfileIndexer] refresh failed: ${e.message}", e)
                 }
+                delay(scanIntervalMillis)
             }
+        }
     }
 
     @Synchronized
     fun stop() {
-        workerThread?.interrupt()
-        workerThread = null
+        runBlocking {
+            workerJob?.cancelAndJoin()
+        }
+        workerJob = null
     }
 
     internal fun indexParsedIdentities(identities: Iterable<KakaoNotificationIdentity>) {
