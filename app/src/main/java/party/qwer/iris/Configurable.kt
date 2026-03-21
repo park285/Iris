@@ -107,10 +107,12 @@ class Configurable {
         }
 
         fun saveConfigNow(): Boolean {
-            if (!isDirty) {
-                return true
+            synchronized(this) {
+                if (!isDirty) {
+                    return true
+                }
+                return saveConfig()
             }
-            return saveConfig()
         }
 
         private fun markDirty() {
