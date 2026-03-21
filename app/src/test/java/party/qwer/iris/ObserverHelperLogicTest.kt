@@ -8,11 +8,12 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class ObserverHelperLogicTest {
-    private val originalBotId = Configurable.botId
+    private val config = ConfigManager(configPath = "/tmp/iris-observer-helper-test-config.json")
+    private val originalBotId = config.botId
 
     @AfterTest
     fun tearDown() {
-        Configurable.botId = originalBotId
+        config.botId = originalBotId
     }
 
     @Test
@@ -34,18 +35,18 @@ class ObserverHelperLogicTest {
 
     @Test
     fun `bot id zero disables own bot message detection`() {
-        Configurable.botId = 0L
+        config.botId = 0L
 
-        assertFalse(isOwnBotMessage(0L))
-        assertFalse(isOwnBotMessage(123L))
+        assertFalse(isOwnBotMessage(0L, config.botId))
+        assertFalse(isOwnBotMessage(123L, config.botId))
     }
 
     @Test
     fun `returns true only when user id matches configured bot id`() {
-        Configurable.botId = 42L
+        config.botId = 42L
 
-        assertTrue(isOwnBotMessage(42L))
-        assertFalse(isOwnBotMessage(41L))
+        assertTrue(isOwnBotMessage(42L, config.botId))
+        assertFalse(isOwnBotMessage(41L, config.botId))
     }
 
     @Test

@@ -3,9 +3,16 @@ package party.qwer.iris
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteException
 
-class KakaoDB {
+class KakaoDB(
+    private val config: ConfigManager,
+) : ChatLogRepository,
+    ProfileRepository {
     private val connection: SQLiteDatabase
     private val dbLock = Any()
+    private val readConnectionLock = Any()
+
+    @Volatile
+    private var readConnection: SQLiteDatabase? = null
 
     init {
         try {
@@ -18,10 +25,10 @@ class KakaoDB {
             attachAuxiliaryDatabases(openedConnection)
             ensureObservedProfileTable(openedConnection)
             connection = openedConnection
-            when (val resolution = resolveBotUserId(detectBotUserId(connection), Configurable.botId)) {
+            when (val resolution = resolveBotUserId(detectBotUserId(connection), config.botId)) {
                 is BotUserIdResolution.Detected -> {
                     IrisLogger.info("Bot user_id is detected from chat_logs: ${resolution.botId}")
-                    Configurable.botId = resolution.botId
+                    config.botId = resolution.botId
                 }
 
                 is BotUserIdResolution.ConfigFallback -> {
@@ -41,9 +48,9 @@ class KakaoDB {
         }
     }
 
-    fun resolveSenderName(userId: Long): String {
-        if (userId == Configurable.botId) {
-            return Configurable.botName
+    override fun resolveSenderName(userId: Long): String {
+        if (userId == config.botId) {
+            return config.botName
         }
 
         return getNameOfUserId(userId)
@@ -68,7 +75,7 @@ class KakaoDB {
                 "SELECT name, enc FROM db2.friends WHERE id = ?"
             }
 
-        return withPrimaryConnection { db ->
+        return withReadConnection { db ->
             db.rawQuery(sql, bindArgs).use { cursor ->
                 decryptUserName(cursor, userId)
             }
@@ -91,7 +98,7 @@ class KakaoDB {
             return "Unknown"
         }
 
-        val botId = Configurable.botId
+        val botId = config.botId
         if (botId <= 0L) return encryptedName
 
         return try {
@@ -102,7 +109,7 @@ class KakaoDB {
         }
     }
 
-    fun resolveRoomMetadata(chatId: Long): RoomMetadata =
+    override fun resolveRoomMetadata(chatId: Long): RoomMetadata =
         withPrimaryConnection { db ->
             db.rawQuery("SELECT type, link_id FROM chat_rooms WHERE id = ?", arrayOf(chatId.toString())).use { cursor ->
                 if (!cursor.moveToFirst()) {
@@ -115,7 +122,7 @@ class KakaoDB {
             }
         }
 
-    fun latestLogId(): Long =
+    override fun latestLogId(): Long =
         withPrimaryConnection { db ->
             db.rawQuery("SELECT _id FROM chat_logs ORDER BY _id DESC LIMIT 1", null).use { cursor ->
                 if (cursor.moveToFirst()) {
@@ -126,9 +133,9 @@ class KakaoDB {
             }
         }
 
-    fun pollChatLogsAfter(
+    override fun pollChatLogsAfter(
         afterLogId: Long,
-        limit: Int = DEFAULT_POLL_BATCH_SIZE,
+        limit: Int,
     ): List<ChatLogEntry> {
         val effectiveLimit = limit.coerceIn(1, DEFAULT_POLL_BATCH_SIZE)
         return withPrimaryConnection { db ->
@@ -178,6 +185,12 @@ class KakaoDB {
     }
 
     fun closeConnection() {
+        synchronized(readConnectionLock) {
+            readConnection?.let { conn ->
+                if (conn.isOpen) conn.close()
+                readConnection = null
+            }
+        }
         synchronized(dbLock) {
             if (connection.isOpen) {
                 connection.close()
@@ -186,7 +199,7 @@ class KakaoDB {
         }
     }
 
-    fun upsertObservedProfile(identity: KakaoNotificationIdentity) {
+    override fun upsertObservedProfile(identity: KakaoNotificationIdentity) {
         val updatedAt = System.currentTimeMillis()
         synchronized(dbLock) {
             connection.execSQL(
@@ -212,18 +225,14 @@ class KakaoDB {
         }
     }
 
-    fun executeQuery(
+    override fun executeQuery(
         sqlQuery: String,
         bindArgs: Array<String?>?,
-        maxRows: Int = DEFAULT_QUERY_RESULT_LIMIT,
-    ): List<Map<String, String?>> {
-        val queryConnection = openDetachedReadConnection()
-        return try {
-            readQueryRows(queryConnection, sqlQuery, bindArgs, maxRows.coerceAtLeast(1))
-        } finally {
-            queryConnection.close()
+        maxRows: Int,
+    ): List<Map<String, String?>> =
+        withReadConnection { conn ->
+            readQueryRows(conn, sqlQuery, bindArgs, maxRows.coerceAtLeast(1))
         }
-    }
 
     private val hasOpenChatMember: Boolean by lazy { checkNewDb() }
 
@@ -241,6 +250,16 @@ class KakaoDB {
     private inline fun <T> withPrimaryConnection(block: (SQLiteDatabase) -> T): T =
         synchronized(dbLock) {
             block(connection)
+        }
+
+    private fun getOrCreateReadConnection(): SQLiteDatabase =
+        readConnection ?: synchronized(readConnectionLock) {
+            readConnection ?: openDetachedReadConnection().also { readConnection = it }
+        }
+
+    private inline fun <T> withReadConnection(block: (SQLiteDatabase) -> T): T =
+        synchronized(readConnectionLock) {
+            block(getOrCreateReadConnection())
         }
 
     private fun ensureObservedProfileTable(db: SQLiteDatabase) {

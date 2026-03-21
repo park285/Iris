@@ -14,7 +14,11 @@ import javax.crypto.spec.SecretKeySpec
 class KakaoDecrypt {
     companion object {
         // 스레드 안전한 키 캐시
-        private val keyCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
+        private val keyCache = java.util.concurrent.ConcurrentHashMap<String, SecretKeySpec>()
+        private val threadLocalCipher =
+            ThreadLocal.withInitial {
+                Cipher.getInstance("AES/CBC/NoPadding")
+            }
         private val KEY_BYTES =
             byteArrayOf(
                 0x16.toByte(),
@@ -53,6 +57,7 @@ class KakaoDecrypt {
                 0x0c.toByte(),
                 0x35.toByte(),
             )
+        private val IV_SPEC = IvParameterSpec(IV_BYTES)
 
         private fun incept(n: Int): String {
             val dict1 =
@@ -318,13 +323,13 @@ class KakaoDecrypt {
         ): String {
             val salt = genSalt(user_id, encType)
             val saltStr = String(salt, StandardCharsets.UTF_8)
-            val key = keyCache.computeIfAbsent(saltStr) { deriveKey(KEY_BYTES, salt, 2, 32) }
+            val secretKeySpec =
+                keyCache.computeIfAbsent(saltStr) {
+                    SecretKeySpec(deriveKey(KEY_BYTES, salt, 2, 32), "AES")
+                }
+            val cipher = threadLocalCipher.get()
 
-            val secretKeySpec = SecretKeySpec(key, "AES")
-            val ivParameterSpec = IvParameterSpec(IV_BYTES)
-            val cipher = Cipher.getInstance("AES/CBC/NoPadding")
-
-            cipher.init(Cipher.DECRYPT_MODE, secretKeySpec, ivParameterSpec)
+            cipher.init(Cipher.DECRYPT_MODE, secretKeySpec, IV_SPEC)
 
             val ciphertext = Base64.getDecoder().decode(b64_ciphertext)
             if (ciphertext.size == 0) {

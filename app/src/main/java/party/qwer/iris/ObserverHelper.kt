@@ -7,7 +7,8 @@ import party.qwer.iris.bridge.RoutingResult
 import java.io.Closeable
 
 class ObserverHelper(
-    private val db: KakaoDB,
+    private val db: ChatLogRepository,
+    private val config: ConfigProvider,
 ) : Closeable {
     @Volatile
     private var lastLogId: Long = 0
@@ -15,7 +16,7 @@ class ObserverHelper(
     @Volatile
     private var dispatcher: H2cDispatcher? = null
 
-    private val senderNameCache = lruMap<Long, String>(64)
+    private val senderNameCache = lruMap<Long, String>(256)
     private val roomMetadataCache = lruMap<Long, KakaoDB.RoomMetadata>(64)
     private val recentCommandFingerprints = lruMap<CommandFingerprint, Long>(MAX_COMMAND_FINGERPRINTS)
 
@@ -52,7 +53,7 @@ class ObserverHelper(
 
     private fun initBridge() {
         try {
-            dispatcher = H2cDispatcher()
+            dispatcher = H2cDispatcher(config)
             IrisLogger.info("[ObserverHelper] H2C dispatcher initialized")
         } catch (e: Exception) {
             IrisLogger.error("[ObserverHelper] Failed to initialize H2C dispatcher: ${e.message}")
@@ -145,7 +146,7 @@ class ObserverHelper(
             return false
         }
 
-        if (isOwnBotMessage(logEntry.userId)) {
+        if (isOwnBotMessage(logEntry.userId, config.botId)) {
             IrisLogger.debug(
                 "[ObserverHelper] Skipping self-authored command logId=${logEntry.id} to avoid command loop",
             )
@@ -280,7 +281,10 @@ internal fun shouldSkipOrigin(
     parsedCommand: ParsedCommand,
 ): Boolean = (origin == "SYNCMSG" || origin == "MCHATLOGS") && parsedCommand.kind == CommandKind.NONE
 
-internal fun isOwnBotMessage(userId: Long): Boolean = Configurable.botId != 0L && userId == Configurable.botId
+internal fun isOwnBotMessage(
+    userId: Long,
+    botId: Long,
+): Boolean = botId != 0L && userId == botId
 
 private fun <K, V> lruMap(maxSize: Int): LinkedHashMap<K, V> =
     object : LinkedHashMap<K, V>(maxSize, 0.75f, true) {

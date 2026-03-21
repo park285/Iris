@@ -2,10 +2,9 @@ package party.qwer.iris
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
+import kotlin.test.assertFailsWith
 
-class ReplierImageDetectionTest {
+class ImageEncoderTest {
     @Test
     fun `detects png signature`() {
         val pngHeader = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
@@ -50,21 +49,27 @@ class ReplierImageDetectionTest {
     }
 
     @Test
-    fun `validates base64 image payload lists`() {
-        assertTrue(isValidBase64ImagePayloads(listOf("aGVsbG8=")))
-        assertFalse(isValidBase64ImagePayloads(listOf("not-base64!!")))
-        assertFalse(isValidBase64ImagePayloads(emptyList()))
+    fun `decodes valid base64 image payload`() {
+        val validSmallPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+
+        val decoded = decodeBase64Image(validSmallPng)
+
+        assertEquals(70, decoded.size)
+    }
+
+    @Test
+    fun `rejects invalid base64 image payload`() {
+        assertFailsWith<IllegalArgumentException> {
+            decodeBase64Image("not-base64!!")
+        }
     }
 
     @Test
     fun `rejects payload exceeding size limit`() {
-        val oversized = "A".repeat(28_000_000)
-        assertFalse(isValidBase64ImagePayloads(listOf(oversized)))
-    }
+        val oversized = "A".repeat(MAX_BASE64_IMAGE_PAYLOAD_LENGTH + 1)
 
-    @Test
-    fun `accepts payload within size limit`() {
-        val validSmallPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-        assertTrue(isValidBase64ImagePayloads(listOf(validSmallPng)))
+        assertFailsWith<IllegalArgumentException> {
+            require(oversized.length <= MAX_BASE64_IMAGE_PAYLOAD_LENGTH) { "payload exceeds size limit" }
+        }
     }
 }

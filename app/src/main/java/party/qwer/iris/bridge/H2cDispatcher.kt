@@ -22,7 +22,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import party.qwer.iris.CommandParser
-import party.qwer.iris.Configurable
+import party.qwer.iris.ConfigProvider
 import party.qwer.iris.IrisLogger
 import java.io.Closeable
 import java.io.IOException
@@ -32,6 +32,7 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 class H2cDispatcher internal constructor(
+    private val config: ConfigProvider,
     transportOverride: String? = null,
     queueCapacityOverride: Int? = null,
     maxDeliveryAttemptsOverride: Int? = null,
@@ -42,11 +43,16 @@ class H2cDispatcher internal constructor(
     private val routeQueueCapacity = queueCapacityOverride ?: DISPATCH_QUEUE_CAPACITY
     private val maxDeliveryAttempts = maxDeliveryAttemptsOverride ?: MAX_DELIVERY_ATTEMPTS
     private val backoffDelayProvider = backoffDelayProviderOverride
+    private val transport = resolveWebhookTransport(transportOverride)
 
     private val sharedDispatcher =
         Dispatcher().apply {
             maxRequests = MAX_CONCURRENT_REQUESTS
-            maxRequestsPerHost = MAX_CONCURRENT_REQUESTS_PER_HOST
+            maxRequestsPerHost =
+                when (transport) {
+                    WebhookTransport.H2C -> DISPATCH_QUEUE_CAPACITY
+                    WebhookTransport.HTTP1 -> 4
+                }
         }
     private val sharedConnectionPool =
         ConnectionPool(
@@ -56,7 +62,7 @@ class H2cDispatcher internal constructor(
         )
     private val clientFactory =
         WebhookHttpClientFactory(
-            resolveWebhookTransport(transportOverride),
+            transport,
             sharedDispatcher,
             sharedConnectionPool,
         )
@@ -93,7 +99,7 @@ class H2cDispatcher internal constructor(
             resolveWebhookRoute(parsedCommand)
                 ?: resolveImageRoute(command.messageType)
                 ?: return RoutingResult.SKIPPED
-        val webhookUrl = Configurable.webhookEndpointFor(targetRoute).takeIf { it.isNotBlank() }
+        val webhookUrl = config.webhookEndpointFor(targetRoute).takeIf { it.isNotBlank() }
         if (webhookUrl.isNullOrBlank()) {
             IrisLogger.error("[H2cDispatcher] No webhook URL configured for route: $targetRoute")
             return RoutingResult.SKIPPED
@@ -275,7 +281,7 @@ class H2cDispatcher internal constructor(
                     .header(HEADER_IRIS_MESSAGE_ID, delivery.messageId)
                     .header(HEADER_IRIS_ROUTE, delivery.route)
                     .apply {
-                        val webhookToken = Configurable.webhookToken
+                        val webhookToken = config.webhookToken
                         if (webhookToken.isNotBlank()) {
                             header(HEADER_IRIS_TOKEN, webhookToken)
                         }
@@ -386,7 +392,6 @@ class H2cDispatcher internal constructor(
         private const val WORKER_SHUTDOWN_TIMEOUT_MS = 10_000L
         private const val DISPATCH_QUEUE_CAPACITY = 64
         private const val MAX_CONCURRENT_REQUESTS = 8
-        private const val MAX_CONCURRENT_REQUESTS_PER_HOST = 4
         private const val MAX_IDLE_CONNECTIONS = 4
         private const val KEEP_ALIVE_DURATION_MS = 30_000L
         internal const val MAX_DELIVERY_ATTEMPTS = 6
@@ -396,7 +401,6 @@ class H2cDispatcher internal constructor(
         private const val HEADER_IRIS_ROUTE = "X-Iris-Route"
         private const val APPLICATION_JSON = "application/json"
         private const val NONE = "<none>"
-
     }
 }
 

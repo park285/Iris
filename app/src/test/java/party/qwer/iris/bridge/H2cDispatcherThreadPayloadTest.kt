@@ -3,7 +3,7 @@ package party.qwer.iris.bridge
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpHandler
 import com.sun.net.httpserver.HttpServer
-import party.qwer.iris.Configurable
+import party.qwer.iris.ConfigManager
 import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -16,11 +16,13 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class H2cDispatcherThreadPayloadTest {
+    private val config = ConfigManager(configPath = "/tmp/iris-h2c-dispatcher-thread-payload-test-config.json")
+
     @Test
     fun `includes thread metadata in webhook payload when routing command has thread metadata`() {
         val port = reservePort()
         val endpoint = "http://127.0.0.1:$port/webhook/iris"
-        Configurable.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, endpoint)
+        config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, endpoint)
 
         val requestBody = AtomicReference("")
         val requestLatch = CountDownLatch(1)
@@ -35,7 +37,7 @@ class H2cDispatcherThreadPayloadTest {
             }
 
         try {
-            H2cDispatcher(transportOverride = "http1").use { dispatcher ->
+            H2cDispatcher(config, transportOverride = "http1").use { dispatcher ->
                 assertEquals(
                     RoutingResult.ACCEPTED,
                     dispatcher.route(
@@ -57,13 +59,13 @@ class H2cDispatcherThreadPayloadTest {
                 )
 
                 assertTrue(requestLatch.await(3, TimeUnit.SECONDS))
-                assertTrue(requestBody.get().contains(""""chatLogId":"3796822474849894401""""))
-                assertTrue(requestBody.get().contains(""""roomType":"OD""""))
-                assertTrue(requestBody.get().contains(""""roomLinkId":"435751742""""))
-                assertTrue(requestBody.get().contains(""""threadId":"12345""""))
-                assertTrue(requestBody.get().contains(""""threadScope":2"""))
-                assertTrue(requestBody.get().contains(""""type":"1""""))
-                assertTrue(requestBody.get().contains(""""attachment":"{encrypted-data}""""))
+                assertTrue(requestBody.get().contains("\"chatLogId\":\"3796822474849894401\""))
+                assertTrue(requestBody.get().contains("\"roomType\":\"OD\""))
+                assertTrue(requestBody.get().contains("\"roomLinkId\":\"435751742\""))
+                assertTrue(requestBody.get().contains("\"threadId\":\"12345\""))
+                assertTrue(requestBody.get().contains("\"threadScope\":2"))
+                assertTrue(requestBody.get().contains("\"type\":\"1\""))
+                assertTrue(requestBody.get().contains("\"attachment\":\"{encrypted-data}\""))
             }
         } finally {
             server.stop(0)
@@ -75,7 +77,7 @@ class H2cDispatcherThreadPayloadTest {
     fun `omits type and attachment from payload when not provided`() {
         val port = reservePort()
         val endpoint = "http://127.0.0.1:$port/webhook/iris"
-        Configurable.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, endpoint)
+        config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, endpoint)
 
         val requestBody = AtomicReference("")
         val requestLatch = CountDownLatch(1)
@@ -90,7 +92,7 @@ class H2cDispatcherThreadPayloadTest {
             }
 
         try {
-            H2cDispatcher(transportOverride = "http1").use { dispatcher ->
+            H2cDispatcher(config, transportOverride = "http1").use { dispatcher ->
                 assertEquals(
                     RoutingResult.ACCEPTED,
                     dispatcher.route(
@@ -106,8 +108,8 @@ class H2cDispatcherThreadPayloadTest {
 
                 assertTrue(requestLatch.await(3, TimeUnit.SECONDS))
                 val body = requestBody.get()
-                assertTrue(!body.contains(""""type":""""))
-                assertTrue(!body.contains(""""attachment":""""))
+                assertTrue(!body.contains("\"type\":"))
+                assertTrue(!body.contains("\"attachment\":"))
             }
         } finally {
             server.stop(0)

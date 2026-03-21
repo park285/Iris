@@ -10,21 +10,12 @@ internal const val MAX_BASE64_IMAGE_PAYLOAD_LENGTH = MAX_IMAGE_PAYLOAD_BYTES * 4
 
 internal fun decodeBase64Image(base64ImageDataString: String): ByteArray = base64MimeDecoder.decode(base64ImageDataString)
 
-internal fun saveImage(imageBytes: ByteArray, outputDir: File): File =
+internal fun saveImage(
+    imageBytes: ByteArray,
+    outputDir: File,
+): File =
     File(outputDir, "${UUID.randomUUID()}.${detectImageFileExtension(imageBytes)}").apply {
         writeBytes(imageBytes)
-    }
-
-internal fun isValidBase64ImagePayloads(base64ImageDataStrings: List<String>): Boolean =
-    try {
-        require(base64ImageDataStrings.isNotEmpty())
-        base64ImageDataStrings.forEach {
-            require(it.length <= MAX_BASE64_IMAGE_PAYLOAD_LENGTH) { "payload exceeds size limit" }
-            decodeBase64Image(it)
-        }
-        true
-    } catch (_: IllegalArgumentException) {
-        false
     }
 
 internal fun detectImageFileExtension(imageBytes: ByteArray): String {

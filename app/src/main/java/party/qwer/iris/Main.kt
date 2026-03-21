@@ -18,15 +18,17 @@ class Main {
             try {
                 val notificationReferer = readNotificationReferer()
                 val shutdownLatch = CountDownLatch(1)
+                val configManager = ConfigManager()
 
-                Configurable.onMessageSendRateChanged = { Replier.restartMessageSender() }
-                Replier.startMessageSender()
+                val replyService = ReplyService(configManager)
+                configManager.onMessageSendRateChanged = { replyService.restartMessageSender() }
+                replyService.startMessageSender()
                 IrisLogger.info("Message sender thread started")
 
-                val kakaoDb = KakaoDB()
-                val observerHelper = ObserverHelper(kakaoDb)
+                val kakaoDb = KakaoDB(configManager)
+                val observerHelper = ObserverHelper(kakaoDb, configManager)
 
-                val dbObserver = DBObserver(observerHelper)
+                val dbObserver = DBObserver(observerHelper, configManager)
                 dbObserver.startPolling()
                 IrisLogger.info("DBObserver started")
 
@@ -47,7 +49,9 @@ class Main {
                     } else {
                         IrisServer(
                             kakaoDb,
+                            configManager,
                             notificationReferer,
+                            replyService,
                         ).also {
                             it.startServer()
                             IrisLogger.info("Iris Server started")
@@ -64,7 +68,8 @@ class Main {
                             kakaoProfileIndexer.stop()
                             imageDeleter.stopDeletion()
                             observerHelper.close()
-                            Replier.shutdown()
+                            replyService.shutdown()
+                            configManager.saveConfigNow()
                             kakaoDb.closeConnection()
                             IrisLogger.info("[Main] Cleanup completed")
                         } finally {

@@ -14,7 +14,11 @@ internal enum class WebhookTransport {
 internal fun resolveWebhookTransport(transportOverride: String?): WebhookTransport {
     val raw =
         transportOverride?.trim()?.lowercase()
-            ?: System.getenv("IRIS_WEBHOOK_TRANSPORT")?.trim()?.lowercase().orEmpty()
+            ?: System
+                .getenv("IRIS_WEBHOOK_TRANSPORT")
+                ?.trim()
+                ?.lowercase()
+                .orEmpty()
     return when (raw) {
         "http1", "http1_1", "http", "https" -> WebhookTransport.HTTP1
         else -> WebhookTransport.H2C

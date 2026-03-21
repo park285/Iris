@@ -4,7 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-class IrisServerQueryValidationTest {
+class QuerySanitizerTest {
     @Test
     fun `SELECT is allowed`() {
         assertTrue(isReadOnlyQuery("SELECT * FROM chat_logs"))

@@ -3,7 +3,11 @@ package party.qwer.iris.bridge
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-internal fun buildWebhookPayload(command: RoutingCommand, route: String, messageId: String): String =
+internal fun buildWebhookPayload(
+    command: RoutingCommand,
+    route: String,
+    messageId: String,
+): String =
     buildJsonObject {
         put("route", route)
         put("messageId", messageId)

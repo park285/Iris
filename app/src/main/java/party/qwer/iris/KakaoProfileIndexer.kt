@@ -16,10 +16,10 @@ interface NotificationIdentityStore {
 }
 
 class KakaoDbNotificationIdentityStore(
-    private val kakaoDb: KakaoDB,
+    private val profileRepo: ProfileRepository,
 ) : NotificationIdentityStore {
     override fun upsert(identity: KakaoNotificationIdentity) {
-        kakaoDb.upsertObservedProfile(identity)
+        profileRepo.upsertObservedProfile(identity)
     }
 }
 
@@ -60,11 +60,12 @@ class KakaoProfileIndexer(
     }
 
     fun stop() {
-        val job = synchronized(this) {
-            val captured = workerJob ?: return
-            workerJob = null
-            captured
-        }
+        val job =
+            synchronized(this) {
+                val captured = workerJob ?: return
+                workerJob = null
+                captured
+            }
 
         runBlocking {
             job.cancelAndJoin()
@@ -72,6 +73,8 @@ class KakaoProfileIndexer(
     }
 
     internal fun indexParsedIdentities(identities: Iterable<KakaoNotificationIdentity>) {
+        val toUpsert = mutableListOf<KakaoNotificationIdentity>()
+
         synchronized(this) {
             val activeKeys = HashSet<String>()
             for (identity in identities) {
@@ -80,13 +83,16 @@ class KakaoProfileIndexer(
                 if (lastDigestByNotificationKey[identity.notificationKey] != digest) {
                     lastDigestByNotificationKey[identity.notificationKey] = digest
                     if (lastDigestByIdentity[identity.stableId] != digest) {
-                        profileStore.upsert(identity)
+                        toUpsert += identity
                         lastDigestByIdentity[identity.stableId] = digest
                     }
                 }
             }
-
             lastDigestByNotificationKey.keys.retainAll(activeKeys)
+        }
+
+        for (identity in toUpsert) {
+            profileStore.upsert(identity)
         }
     }
 

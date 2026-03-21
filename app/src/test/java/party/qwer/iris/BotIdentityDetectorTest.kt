@@ -4,7 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 
-class KakaoDBBotUserIdResolutionTest {
+class BotIdentityDetectorTest {
     @Test
     fun `prefers detected bot id when available`() {
         val resolution = resolveBotUserId(detectedBotId = 123L, configuredBotId = 456L)
