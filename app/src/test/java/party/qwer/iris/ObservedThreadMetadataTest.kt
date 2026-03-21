@@ -2,7 +2,6 @@ package party.qwer.iris
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNull
 
 class ObservedThreadMetadataTest {
     @Test
@@ -48,7 +47,28 @@ class ObservedThreadMetadataTest {
     }
 
     @Test
-    fun `ignores thread metadata for non-text messages`() {
+    fun `returns direct thread metadata for image messages`() {
+        val logEntry =
+            KakaoDB.ChatLogEntry(
+                id = 1L,
+                chatId = 10L,
+                userId = 20L,
+                message = "사진",
+                metadata = """{"enc":0,"origin":"CHATLOG"}""",
+                createdAt = "2026-03-21T00:00:00",
+                messageType = "2",
+                threadId = "12345",
+                supplement = "{}",
+            )
+
+        assertEquals(
+            ObservedThreadMetadata(threadId = "12345"),
+            resolveObservedThreadMetadata(logEntry, enc = 0),
+        )
+    }
+
+    @Test
+    fun `ignores supplement thread metadata for non-text messages`() {
         val logEntry =
             KakaoDB.ChatLogEntry(
                 id = 1L,
@@ -62,6 +82,9 @@ class ObservedThreadMetadataTest {
                 supplement = """{"threadId":"67890","scope":3}""",
             )
 
-        assertNull(resolveObservedThreadMetadata(logEntry, enc = 0))
+        assertEquals(
+            ObservedThreadMetadata(threadId = "12345"),
+            resolveObservedThreadMetadata(logEntry, enc = 0),
+        )
     }
 }

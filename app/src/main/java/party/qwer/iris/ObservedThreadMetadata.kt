@@ -9,31 +9,35 @@ internal fun resolveObservedThreadMetadata(
     logEntry: KakaoDB.ChatLogEntry,
     enc: Int,
 ): ObservedThreadMetadata? {
-    if (logEntry.messageType != "1") {
-        return null
-    }
-
     val supplement = decryptObservedSupplement(logEntry.supplement, enc, logEntry.userId)
     val directThreadId =
         logEntry.threadId
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
     val supplementThreadId =
-        THREAD_ID_PATTERN
-            .find(supplement.orEmpty())
-            ?.groupValues
-            ?.getOrNull(1)
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
+        if (logEntry.messageType == "1") {
+            THREAD_ID_PATTERN
+                .find(supplement.orEmpty())
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+        } else {
+            null
+        }
     val resolvedThreadId = directThreadId ?: supplementThreadId ?: return null
 
     val resolvedScope =
-        SCOPE_PATTERN
-            .find(supplement.orEmpty())
-            ?.groupValues
-            ?.getOrNull(1)
-            ?.toIntOrNull()
-            ?.takeIf { it > 0 }
+        if (logEntry.messageType == "1") {
+            SCOPE_PATTERN
+                .find(supplement.orEmpty())
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.toIntOrNull()
+                ?.takeIf { it > 0 }
+        } else {
+            null
+        }
 
     return ObservedThreadMetadata(
         threadId = resolvedThreadId,
