@@ -66,15 +66,12 @@ class ImageDeleter(
         }
 
         val expirationCutoff = System.currentTimeMillis() - retentionMillis
-        val files = imageDir.listFiles()
-        if (files != null) {
-            for (file in files) {
-                if (file.isFile && file.lastModified() < expirationCutoff) {
-                    if (file.delete()) {
-                        IrisLogger.debug("Deleted old image file: " + file.name)
-                    } else {
-                        IrisLogger.error("Failed to delete image file: " + file.name)
-                    }
+        imageDir.listFiles()?.forEach { file ->
+            if (file.isFile && file.lastModified() < expirationCutoff) {
+                if (file.delete()) {
+                    IrisLogger.debug("Deleted old image file: " + file.name)
+                } else {
+                    IrisLogger.error("Failed to delete image file: " + file.name)
                 }
             }
         }

@@ -69,31 +69,27 @@ class IrisServer(
         server = null
     }
 
-    private fun createServer(): EmbeddedServer<*, *> =
-        when (irisServerEngine()) {
-            IrisServerEngine.NETTY -> {
-                val transport = irisServerTransportConfig()
-                val environment = applicationEnvironment { }
-                val config =
-                    serverConfig(environment) {
-                        module {
-                            with(this@IrisServer) {
-                                configureContentNegotiation()
-                                configureStatusPages()
-                                configureRouting()
-                            }
-                        }
+    private fun createServer(): EmbeddedServer<*, *> {
+        val environment = applicationEnvironment { }
+        val config =
+            serverConfig(environment) {
+                module {
+                    with(this@IrisServer) {
+                        configureContentNegotiation()
+                        configureStatusPages()
+                        configureRouting()
                     }
-                embeddedServer(Netty, config) {
-                    connector {
-                        port = Configurable.botSocketPort
-                        host = "0.0.0.0"
-                    }
-                    enableHttp2 = transport.enableHttp2
-                    enableH2c = transport.enableH2c
                 }
             }
+        return embeddedServer(Netty, config) {
+            connector {
+                port = Configurable.botSocketPort
+                host = "0.0.0.0"
+            }
+            enableHttp2 = true
+            enableH2c = true
         }
+    }
 
     private fun Application.configureContentNegotiation() {
         install(ContentNegotiation) {
@@ -421,23 +417,6 @@ private data class ConfigUpdateOutcome(
     val applied: Boolean,
     val requiresRestart: Boolean,
 )
-
-internal enum class IrisServerEngine {
-    NETTY,
-}
-
-internal fun irisServerEngine(): IrisServerEngine = IrisServerEngine.NETTY
-
-internal data class IrisServerTransportConfig(
-    val enableHttp2: Boolean,
-    val enableH2c: Boolean,
-)
-
-internal fun irisServerTransportConfig(): IrisServerTransportConfig =
-    IrisServerTransportConfig(
-        enableHttp2 = true,
-        enableH2c = true,
-    )
 
 internal fun validateReplyThreadScope(
     replyType: ReplyType,
