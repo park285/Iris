@@ -205,23 +205,7 @@ class Replier {
         fun sendPhoto(
             room: Long,
             base64ImageDataString: String,
-        ): ReplyAdmissionResult {
-            val imagePayloads = listOf(base64ImageDataString)
-            if (!isValidBase64ImagePayloads(imagePayloads)) {
-                return ReplyAdmissionResult(
-                    ReplyAdmissionStatus.INVALID_PAYLOAD,
-                    "image replies require valid base64 payload",
-                )
-            }
-            return enqueueRequest(
-                SendMessageRequest {
-                    sendImages(
-                        room = room,
-                        base64ImageDataStrings = imagePayloads,
-                    )
-                },
-            )
-        }
+        ): ReplyAdmissionResult = sendMultiplePhotos(room, listOf(base64ImageDataString))
 
         fun sendMultiplePhotos(
             room: Long,
@@ -402,11 +386,16 @@ private fun cleanupPreparedImages(preparedImages: PreparedImages) {
 }
 
 private val base64MimeDecoder = Base64.getMimeDecoder()
+private const val MAX_IMAGE_PAYLOAD_BYTES = 20 * 1024 * 1024  // 20 MB
+private const val MAX_BASE64_IMAGE_PAYLOAD_LENGTH = MAX_IMAGE_PAYLOAD_BYTES * 4 / 3 + 4
 
 internal fun isValidBase64ImagePayloads(base64ImageDataStrings: List<String>): Boolean =
     try {
         require(base64ImageDataStrings.isNotEmpty())
-        base64ImageDataStrings.forEach { decodeBase64Image(it) }
+        base64ImageDataStrings.forEach {
+            require(it.length <= MAX_BASE64_IMAGE_PAYLOAD_LENGTH) { "payload exceeds size limit" }
+            decodeBase64Image(it)
+        }
         true
     } catch (_: IllegalArgumentException) {
         false

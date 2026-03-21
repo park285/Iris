@@ -55,4 +55,16 @@ class ReplierImageDetectionTest {
         assertFalse(isValidBase64ImagePayloads(listOf("not-base64!!")))
         assertFalse(isValidBase64ImagePayloads(emptyList()))
     }
+
+    @Test
+    fun `rejects payload exceeding size limit`() {
+        val oversized = "A".repeat(28_000_000)
+        assertFalse(isValidBase64ImagePayloads(listOf(oversized)))
+    }
+
+    @Test
+    fun `accepts payload within size limit`() {
+        val validSmallPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        assertTrue(isValidBase64ImagePayloads(listOf(validSmallPng)))
+    }
 }
