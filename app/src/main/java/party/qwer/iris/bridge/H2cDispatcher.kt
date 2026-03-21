@@ -13,8 +13,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.ConnectionPool
@@ -412,35 +410,7 @@ class H2cDispatcher internal constructor(
             url = webhookUrl,
             messageId = messageId,
             route = route,
-            payloadJson =
-                buildJsonObject {
-                    put("route", route)
-                    put("messageId", messageId)
-                    put("sourceLogId", command.sourceLogId)
-                    put("text", command.text)
-                    put("room", command.room)
-                    put("sender", command.sender)
-                    put("userId", command.userId)
-                    if (!command.chatLogId.isNullOrBlank()) {
-                        put("chatLogId", command.chatLogId)
-                    }
-                    if (!command.roomType.isNullOrBlank()) {
-                        put("roomType", command.roomType)
-                    }
-                    if (!command.roomLinkId.isNullOrBlank()) {
-                        put("roomLinkId", command.roomLinkId)
-                    }
-                    if (!command.threadId.isNullOrBlank()) {
-                        put("threadId", command.threadId)
-                    }
-                    command.threadScope?.let { put("threadScope", it) }
-                    if (!command.messageType.isNullOrBlank()) {
-                        put("type", command.messageType)
-                    }
-                    if (!command.attachment.isNullOrBlank()) {
-                        put("attachment", command.attachment)
-                    }
-                }.toString(),
+            payloadJson = buildWebhookPayload(command, route, messageId),
         )
     }
 
