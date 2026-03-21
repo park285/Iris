@@ -42,11 +42,16 @@ class H2cDispatcher internal constructor(
     private val routeQueueCapacity = queueCapacityOverride ?: DISPATCH_QUEUE_CAPACITY
     private val maxDeliveryAttempts = maxDeliveryAttemptsOverride ?: MAX_DELIVERY_ATTEMPTS
     private val backoffDelayProvider = backoffDelayProviderOverride
+    private val transport = resolveWebhookTransport(transportOverride)
 
     private val sharedDispatcher =
         Dispatcher().apply {
             maxRequests = MAX_CONCURRENT_REQUESTS
-            maxRequestsPerHost = MAX_CONCURRENT_REQUESTS_PER_HOST
+            maxRequestsPerHost =
+                when (transport) {
+                    WebhookTransport.H2C -> DISPATCH_QUEUE_CAPACITY
+                    WebhookTransport.HTTP1 -> 4
+                }
         }
     private val sharedConnectionPool =
         ConnectionPool(
@@ -56,7 +61,7 @@ class H2cDispatcher internal constructor(
         )
     private val clientFactory =
         WebhookHttpClientFactory(
-            resolveWebhookTransport(transportOverride),
+            transport,
             sharedDispatcher,
             sharedConnectionPool,
         )
@@ -386,7 +391,6 @@ class H2cDispatcher internal constructor(
         private const val WORKER_SHUTDOWN_TIMEOUT_MS = 10_000L
         private const val DISPATCH_QUEUE_CAPACITY = 64
         private const val MAX_CONCURRENT_REQUESTS = 8
-        private const val MAX_CONCURRENT_REQUESTS_PER_HOST = 4
         private const val MAX_IDLE_CONNECTIONS = 4
         private const val KEEP_ALIVE_DURATION_MS = 30_000L
         internal const val MAX_DELIVERY_ATTEMPTS = 6
