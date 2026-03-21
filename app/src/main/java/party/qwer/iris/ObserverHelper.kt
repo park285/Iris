@@ -203,7 +203,7 @@ class ObserverHelper(
         }
     }
 
-    private fun <K, V> cachedResolve(
+    private fun <K, V : Any> cachedResolve(
         cache: LinkedHashMap<K, V>,
         key: K,
         fallback: V,

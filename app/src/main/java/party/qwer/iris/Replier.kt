@@ -214,7 +214,7 @@ class Replier {
             if (!isValidBase64ImagePayloads(base64ImageDataStrings)) {
                 return ReplyAdmissionResult(
                     ReplyAdmissionStatus.INVALID_PAYLOAD,
-                    "image_multiple replies require at least one valid base64 payload",
+                    "image replies require valid base64 payload",
                 )
             }
             return enqueueRequest(

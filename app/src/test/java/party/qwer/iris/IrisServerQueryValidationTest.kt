@@ -100,4 +100,21 @@ class IrisServerQueryValidationTest {
     fun `SELECT containing column named delete is allowed`() {
         assertTrue(isReadOnlyQuery("SELECT delete_flag FROM chat_logs"))
     }
+
+    @Test
+    fun `SELECT with REPLACE function is allowed`() {
+        assertTrue(isReadOnlyQuery("SELECT REPLACE(name, 'old', 'new') FROM friends"))
+    }
+
+    @Test
+    fun `SELECT with string literal containing DELETE is rejected as false positive`() {
+        // regex 기반 검증의 한계: 문자열 리터럴 내 키워드도 차단됨
+        // 보안상 안전한 방향(과잉 차단)이므로 현재 동작을 문서화
+        assertFalse(isReadOnlyQuery("SELECT * FROM t WHERE msg = 'DELETE ME'"))
+    }
+
+    @Test
+    fun `standalone REPLACE statement is rejected via INSERT`() {
+        assertFalse(isReadOnlyQuery("INSERT OR REPLACE INTO t VALUES(1)"))
+    }
 }
