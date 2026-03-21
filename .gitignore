@@ -19,6 +19,9 @@ local.properties
 .kotlin/
 .vscode/
 
+# Worktrees
+.worktrees/
+
 # Claude Code / AI Assistant
 .claude/
 .codex/
