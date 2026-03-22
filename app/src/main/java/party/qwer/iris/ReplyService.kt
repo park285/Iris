@@ -16,6 +16,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 
 // SendMsg : ye-seola/go-kdb
@@ -26,6 +27,7 @@ class ReplyService(
     private companion object {
         private const val MESSAGE_CHANNEL_CAPACITY = 64
         private const val LOG_MESSAGE_PREVIEW_LENGTH = 30
+        private const val SHUTDOWN_TIMEOUT_MS = 10_000L
         private val zeroWidthCharacters = setOf('\u200B', '\u200C', '\u200D', '\u2060', '\uFEFF')
         private const val zeroWidthNoBreakSpace = "\uFEFF"
     }
@@ -73,17 +75,14 @@ class ReplyService(
     }
 
     @OptIn(DelicateCoroutinesApi::class)
+    @Synchronized
     fun restartMessageSender() {
-        val jobToCancel =
-            synchronized(this) {
-                if (messageChannel.isClosedForSend) {
-                    IrisLogger.error("[ReplyService] Cannot restart message sender after shutdown")
-                    return
-                }
-                val captured = messageSenderJob
-                messageSenderJob = null
-                captured
-            }
+        if (messageChannel.isClosedForSend) {
+            IrisLogger.error("[ReplyService] Cannot restart message sender after shutdown")
+            return
+        }
+        val jobToCancel = messageSenderJob
+        messageSenderJob = null
 
         jobToCancel?.let { runBlocking { it.cancelAndJoin() } }
         startMessageSender()
@@ -102,7 +101,21 @@ class ReplyService(
                 captured
             }
 
-        jobToJoin?.let { runBlocking { it.join() } }
+        jobToJoin?.let {
+            runBlocking {
+                val completed =
+                    withTimeoutOrNull(SHUTDOWN_TIMEOUT_MS) {
+                        it.join()
+                        true
+                    } == true
+                if (!completed) {
+                    IrisLogger.error("[ReplyService] Message sender shutdown timed out; cancelling")
+                    withTimeoutOrNull(SHUTDOWN_TIMEOUT_MS) {
+                        it.cancelAndJoin()
+                    } ?: IrisLogger.error("[ReplyService] Message sender cancel timed out; abandoning")
+                }
+            }
+        }
         IrisLogger.info("[ReplyService] Message channel closed")
     }
 
