@@ -69,7 +69,9 @@ class Main {
                             imageDeleter.stopDeletion()
                             observerHelper.close()
                             replyService.shutdown()
-                            configManager.saveConfigNow()
+                            if (!configManager.saveConfigNow()) {
+                                IrisLogger.error("[Main] Failed to save config during shutdown")
+                            }
                             kakaoDb.closeConnection()
                             IrisLogger.info("[Main] Cleanup completed")
                         } finally {

@@ -82,8 +82,8 @@ private fun registerAssembleOutputCopyTask(variantName: String) {
 registerAssembleOutputCopyTask("debug")
 registerAssembleOutputCopyTask("release")
 
-// assemble 시 Android Lint + ktlint 강제 실행
-tasks.matching { it.name.startsWith("assemble") }.configureEach {
+// release 빌드 시에만 Android Lint + ktlint 강제 실행
+tasks.matching { it.name == "assembleRelease" }.configureEach {
     dependsOn("ktlintCheck")
     dependsOn("lint")
 }

@@ -37,6 +37,7 @@ internal class WebhookHttpClientFactory(
             .dispatcher(sharedDispatcher)
             .connectionPool(sharedConnectionPool)
             .connectTimeout(CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .writeTimeout(SOCKET_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             .readTimeout(SOCKET_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             .callTimeout(REQUEST_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             .build()
