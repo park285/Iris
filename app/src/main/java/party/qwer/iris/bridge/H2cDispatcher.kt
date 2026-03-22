@@ -152,6 +152,10 @@ class H2cDispatcher internal constructor(
             scopeJob.cancelAndJoin()
         }
         sharedDispatcher.executorService.shutdown()
+        if (!sharedDispatcher.executorService.awaitTermination(5, TimeUnit.SECONDS)) {
+            IrisLogger.error("[H2cDispatcher] OkHttp executor did not terminate within 5s; forcing shutdown")
+            sharedDispatcher.executorService.shutdownNow()
+        }
         sharedConnectionPool.evictAll()
     }
 
