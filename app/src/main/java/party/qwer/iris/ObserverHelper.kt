@@ -17,8 +17,11 @@ class ObserverHelper(
     private var dispatcher: H2cDispatcher? = null
 
     private val senderNameCache = lruMap<Long, String>(256)
-    private val roomMetadataCache = lruMap<Long, KakaoDB.RoomMetadata>(64)
+    private val roomMetadataCache = lruMap<Long, KakaoDB.RoomMetadata>(256)
     private val recentCommandFingerprints = lruMap<CommandFingerprint, Long>(MAX_COMMAND_FINGERPRINTS)
+
+    @Volatile
+    private var initBridgeBackoffUntil: Long = 0L
 
     init {
         initBridge()
@@ -65,9 +68,18 @@ class ObserverHelper(
             return dispatcher
         }
 
+        val now = System.currentTimeMillis()
+        if (now < initBridgeBackoffUntil) {
+            return null
+        }
+
         synchronized(this) {
             if (dispatcher == null) {
                 initBridge()
+                if (dispatcher == null) {
+                    // now를 synchronized 내에서 재계산하여 정확한 backoff 보장
+                    initBridgeBackoffUntil = System.currentTimeMillis() + INIT_BRIDGE_BACKOFF_MS
+                }
             }
             return dispatcher
         }
@@ -261,6 +273,7 @@ class ObserverHelper(
     companion object {
         private const val MAX_COMMAND_FINGERPRINTS = 256
         private const val IMAGE_MESSAGE_TYPE = "2"
+        private const val INIT_BRIDGE_BACKOFF_MS = 30_000L
     }
 
     internal data class CommandFingerprint(
