@@ -5,6 +5,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -29,7 +30,10 @@ class KakaoProfileIndexer(
     private val scanIntervalMillis: Long = 3_000L,
     private val parseNotification: (StatusBarNotification) -> KakaoNotificationIdentity? = KakaoNotificationProfileParser::parse,
 ) {
-    private val lastDigestByNotificationKey = mutableMapOf<String, String>()
+    private val lastDigestByNotificationKey =
+        object : LinkedHashMap<String, String>(256, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean = size > 1_024
+        }
     private val lastDigestByIdentity =
         object : LinkedHashMap<String, String>(512, 0.75f, true) {
             override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean = size > 8_192
@@ -70,6 +74,8 @@ class KakaoProfileIndexer(
         runBlocking {
             job.cancelAndJoin()
         }
+        // Main.kt 셧다운 훅에서만 호출되므로 재시작 불가는 허용됨
+        coroutineScope.cancel()
     }
 
     internal fun indexParsedIdentities(identities: Iterable<KakaoNotificationIdentity>) {
