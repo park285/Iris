@@ -9,6 +9,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
+import kotlin.test.assertTrue
 
 class KakaoDecryptTest {
     @Test
@@ -159,6 +160,23 @@ class KakaoDecryptTest {
         assertEquals(emptyList(), errors.toList())
     }
 
+    @Test
+    fun `keyCache is bounded and does not exceed max size`() {
+        val cache = readKeyCache()
+        synchronized(cache) {
+            cache.clear()
+        }
+
+        // 513개 유니크 키를 생성하여 캐시 상한(512)을 초과시킨다
+        for (i in 0 until 513) {
+            KakaoDecrypt.decrypt(0, encryptSample(i.toLong()), i.toLong())
+        }
+
+        synchronized(cache) {
+            assertTrue(cache.size <= 512, "keyCache size ${cache.size} exceeds max 512")
+        }
+    }
+
     private fun genSalt(
         userId: Long,
         encType: Int,
@@ -190,6 +208,14 @@ class KakaoDecryptTest {
         method.isAccessible = true
         return method.invoke(KakaoDecrypt.Companion, passwordBytes, saltBytes, iterations, dkeySize) as ByteArray
     }
+
+    private fun readKeyCache(): LinkedHashMap<*, *> =
+        KakaoDecrypt::class.java.getDeclaredField("keyCache").let { field ->
+            field.isAccessible = true
+            field.get(null) as LinkedHashMap<*, *>
+        }
+
+    private fun encryptSample(userId: Long): String = encrypt(encType = 0, plaintext = "test", userId = userId)
 
     private fun encrypt(
         encType: Int,

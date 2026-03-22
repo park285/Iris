@@ -39,6 +39,27 @@ class H2cDispatcherClientConfigTest {
         }
     }
 
+    @Test
+    fun `all clients have explicit writeTimeout set`() {
+        val sharedDispatcher = okhttp3.Dispatcher()
+        val sharedConnectionPool = okhttp3.ConnectionPool()
+        val factory = WebhookHttpClientFactory(WebhookTransport.H2C, sharedDispatcher, sharedConnectionPool)
+
+        val h2cClient = readClientField(factory, "h2cClient")
+        val http1Client = readClientField(factory, "http1Client")
+
+        kotlin.test.assertEquals(
+            WebhookHttpClientFactory.SOCKET_TIMEOUT_MS,
+            h2cClient.writeTimeoutMillis.toLong(),
+            "h2cClient writeTimeout",
+        )
+        kotlin.test.assertEquals(
+            WebhookHttpClientFactory.SOCKET_TIMEOUT_MS,
+            http1Client.writeTimeoutMillis.toLong(),
+            "http1Client writeTimeout",
+        )
+    }
+
     private fun readDispatcherField(h2cDispatcher: H2cDispatcher): okhttp3.Dispatcher =
         H2cDispatcher::class.java.getDeclaredField("sharedDispatcher").let { field ->
             field.isAccessible = true
