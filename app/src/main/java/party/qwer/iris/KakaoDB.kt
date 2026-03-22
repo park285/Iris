@@ -124,7 +124,7 @@ class KakaoDB(
 
     override fun latestLogId(): Long =
         withPrimaryConnection { db ->
-            db.rawQuery("SELECT _id FROM chat_logs ORDER BY _id DESC LIMIT 1", null).use { cursor ->
+            db.rawQuery("SELECT MAX(_id) FROM chat_logs", null).use { cursor ->
                 if (cursor.moveToFirst()) {
                     cursor.getLong(0)
                 } else {
@@ -229,10 +229,15 @@ class KakaoDB(
         sqlQuery: String,
         bindArgs: Array<String?>?,
         maxRows: Int,
-    ): List<Map<String, String?>> =
-        withReadConnection { conn ->
-            readQueryRows(conn, sqlQuery, bindArgs, maxRows.coerceAtLeast(1))
+    ): List<Map<String, String?>> {
+        // /query API는 별도 read-only 연결을 사용하여 폴링 경로의 senderName 해석을 차단하지 않음
+        val queryConnection = openDetachedReadConnection()
+        try {
+            return readQueryRows(queryConnection, sqlQuery, bindArgs, maxRows.coerceAtLeast(1))
+        } finally {
+            queryConnection.close()
         }
+    }
 
     private val hasOpenChatMember: Boolean by lazy { checkNewDb() }
 
