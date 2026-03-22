@@ -17,8 +17,7 @@ class KakaoDecrypt {
         private const val KEY_CACHE_MAX_SIZE = 512
         private val keyCache =
             object : LinkedHashMap<String, SecretKeySpec>(64, 0.75f, true) {
-                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, SecretKeySpec>?): Boolean =
-                    size > KEY_CACHE_MAX_SIZE
+                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, SecretKeySpec>?): Boolean = size > KEY_CACHE_MAX_SIZE
             }
         private val threadLocalCipher =
             ThreadLocal.withInitial {
