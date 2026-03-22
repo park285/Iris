@@ -1,5 +1,6 @@
 package party.qwer.iris
 
+import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
@@ -15,6 +16,7 @@ import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
@@ -88,6 +90,7 @@ class IrisServer(
             }
             enableHttp2 = true
             enableH2c = true
+            workerGroupSize = NETTY_WORKER_THREADS
         }
     }
 
@@ -135,11 +138,11 @@ class IrisServer(
 
     private fun Route.configureHealthRoutes() {
         get("/health") {
-            call.respond(mapOf("status" to "ok"))
+            call.respondText(HEALTH_OK_JSON, ContentType.Application.Json)
         }
 
         get("/ready") {
-            call.respond(mapOf("status" to "ready"))
+            call.respondText(READY_OK_JSON, ContentType.Application.Json)
         }
     }
 
@@ -269,6 +272,9 @@ class IrisServer(
         private const val HEADER_BOT_TOKEN = "X-Bot-Token"
         private const val SERVER_GRACE_PERIOD_MS = 1_000L
         private const val SERVER_STOP_TIMEOUT_MS = 5_000L
+        private const val NETTY_WORKER_THREADS = 2
+        private const val HEALTH_OK_JSON = """{"status":"ok"}"""
+        private const val READY_OK_JSON = """{"status":"ready"}"""
     }
 
     private fun executeQueryRequest(queryRequest: QueryRequest): QueryResponse {
