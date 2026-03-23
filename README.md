@@ -85,7 +85,8 @@ Bot Webhook
   "endpoint": "http://<DEFAULT_REACHABLE_HOST_IP>:30001/webhook/iris",
   "webhooks": {
     "hololive": "http://<HOLOLIVE_HOST_IP>:30001/webhook/iris",
-    "chatbotgo": "http://<CHATBOTGO_HOST_IP>:31001/webhook/iris"
+    "chatbotgo": "http://<CHATBOTGO_HOST_IP>:31001/webhook/iris",
+    "settlement": "http://<SETTLEMENT_HOST_IP>:30002/webhook/iris"
   },
   "webhookToken": "<OPTIONAL_SHARED_TOKEN>",
   "botToken": "<REQUIRED_SHARED_TOKEN>",
@@ -96,7 +97,7 @@ Bot Webhook
 
 설명:
 - `endpoint`: route별 설정이 없는 경우 사용하는 기본 webhook endpoint
-- `webhooks.<route>`: route별 override endpoint. 예: `hololive`, `chatbotgo`
+- `webhooks.<route>`: route별 override endpoint. 예: `hololive`, `chatbotgo`, `settlement`
 - `webhooks.hololive`가 있으면 `endpoint`보다 우선합니다.
 - `webhookToken`: 설정 시 `X-Iris-Token` 헤더로 전달되는 공유 토큰
 - `botToken`: `/config`, `/reply`, `/query` 보호 API 호출 시 `X-Bot-Token` 헤더와 일치해야 하는 공유 토큰
@@ -105,13 +106,18 @@ Bot Webhook
 - 기본값으로 image reply 준비 시 media scan broadcast를 수행합니다. 필요 시 `IRIS_IMAGE_MEDIA_SCAN=0`으로 비활성화할 수 있습니다.
 - image cleanup 주기는 `IRIS_IMAGE_DELETE_INTERVAL_MS`, 보관 기간은 `IRIS_IMAGE_RETENTION_MS`로 조정할 수 있으며 기본값은 각각 1시간, 1일입니다.
 
+- 현재 비게임 webhook consumer inventory:
+  - `hololive` -> `hololive-kakao-bot-go`
+  - `chatbotgo` -> `chat-bot-go-kakao`
+  - `settlement` -> `settlement-go`
+
 ### 백엔드 통신 형식
 
 - Iris는 webhook 요청 바디에 `route`, `messageId`, `sourceLogId`, `text`, `room`, `sender`, `userId`를 전송합니다.
 - `threadId`, `threadScope`는 optional 필드이며, observer 경로에서 thread metadata가 존재하면 webhook payload에 포함됩니다.
 - Iris는 헤더 `X-Iris-Route`, `X-Iris-Message-Id`, `X-Iris-Token`을 함께 전송합니다.
 - 전송 프로토콜 기본값은 h2c 입니다. 필요 시 `IRIS_WEBHOOK_TRANSPORT=http1`로 HTTP/1.1(및 HTTPS)로 강제할 수 있습니다.
-- 현재 route 기본값은 일반 webhook command는 `hololive`, `!질문`/`!리셋`/`!관리자`는 `chatbotgo` 입니다.
+- 현재 route 기본값은 일반 webhook command는 `hololive`, `!질문`/`!리셋`/`!관리자`는 `chatbotgo`, `!정산`/`!정산완료`/`!정산 완료`는 `settlement` 입니다.
 
 ### 서버 준비(요약)
 - 내부 네트워크에서 h2c POST를 수신할 `/webhook/...` endpoint 구현 필요

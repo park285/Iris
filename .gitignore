@@ -36,6 +36,9 @@ local.properties
 # Nested module build outputs
 **/build/
 
+# Ops snapshots (local-only)
+docs/current-staging-split.md
+
 # Backup files
 *.backup
 *.bak
