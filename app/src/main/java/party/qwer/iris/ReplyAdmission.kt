@@ -26,7 +26,8 @@ internal fun replyAdmissionHttpStatus(status: ReplyAdmissionStatus): HttpStatusC
         ReplyAdmissionStatus.INVALID_PAYLOAD -> HttpStatusCode.BadRequest
     }
 
-internal fun supportsThreadReply(replyType: ReplyType): Boolean = replyType == ReplyType.TEXT
+internal fun supportsThreadReply(replyType: ReplyType): Boolean =
+    replyType == ReplyType.TEXT || replyType == ReplyType.IMAGE || replyType == ReplyType.IMAGE_MULTIPLE
 
 internal fun admitReply(
     replyRequest: ReplyRequest,
@@ -38,8 +39,8 @@ internal fun admitReply(
 ): ReplyAdmissionResult =
     when (replyRequest.type) {
         ReplyType.TEXT -> messageSender.sendMessage(notificationReferer, roomId, extractTextPayload(replyRequest), threadId, threadScope)
-        ReplyType.IMAGE -> messageSender.sendPhoto(roomId, extractSingleImagePayload(replyRequest))
-        ReplyType.IMAGE_MULTIPLE -> messageSender.sendMultiplePhotos(roomId, extractImagePayloads(replyRequest))
+        ReplyType.IMAGE -> messageSender.sendPhoto(roomId, extractSingleImagePayload(replyRequest), threadId, threadScope)
+        ReplyType.IMAGE_MULTIPLE -> messageSender.sendMultiplePhotos(roomId, extractImagePayloads(replyRequest), threadId, threadScope)
     }
 
 internal fun extractTextPayload(replyRequest: ReplyRequest): String =

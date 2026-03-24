@@ -30,6 +30,7 @@ class ReplyService(
         private const val SHUTDOWN_TIMEOUT_MS = 10_000L
         private val zeroWidthCharacters = setOf('\u200B', '\u200C', '\u200D', '\u2060', '\uFEFF')
         private const val zeroWidthNoBreakSpace = "\uFEFF"
+        private const val THREAD_HINT_PATH = "/data/local/tmp/iris-thread-hint.json"
     }
 
     private val messageChannel = Channel<SendMessageRequest>(capacity = MESSAGE_CHANNEL_CAPACITY)
@@ -222,11 +223,15 @@ class ReplyService(
     override fun sendPhoto(
         room: Long,
         base64ImageDataString: String,
-    ): ReplyAdmissionResult = sendMultiplePhotos(room, listOf(base64ImageDataString))
+        threadId: Long?,
+        threadScope: Int?,
+    ): ReplyAdmissionResult = sendMultiplePhotos(room, listOf(base64ImageDataString), threadId, threadScope)
 
     override fun sendMultiplePhotos(
         room: Long,
         base64ImageDataStrings: List<String>,
+        threadId: Long?,
+        threadScope: Int?,
     ): ReplyAdmissionResult {
         val decodedImages =
             try {
@@ -244,18 +249,55 @@ class ReplyService(
 
         return enqueueRequest(
             SendMessageRequest {
+                writeThreadHint(room, threadId, threadScope)
                 sendDecodedImages(room, decodedImages)
             },
         )
     }
 
-    override fun sendReplyMarkdown(
+    override fun sendTextShare(
         room: Long,
         msg: String,
     ): ReplyAdmissionResult =
         enqueueRequest(
             SendMessageRequest {
-                sendReplyMarkdownInternal(room, msg)
+                sendTextShareInternal(room, msg)
+            },
+        )
+
+    override fun sendThreadMarkdown(
+        room: Long,
+        msg: String,
+        threadId: Long,
+        threadScope: Int,
+    ): ReplyAdmissionResult =
+        try {
+            val before = DataStoreWatcher.capture()
+            IrisLogger.info(DataStoreWatcher.formatSnapshot("before_thread_markdown", before))
+            sendThreadMarkdownInternal(room, msg, threadId, threadScope)
+            val after = DataStoreWatcher.capture()
+            IrisLogger.info(DataStoreWatcher.formatSnapshot("after_thread_markdown", after))
+            val changes = DataStoreWatcher.diff(before, after)
+            if (changes.isNotEmpty()) {
+                IrisLogger.error("[DataStoreWatcher] DATASTORE CHANGED: ${changes.joinToString("; ")}")
+            }
+            ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
+        } catch (e: Exception) {
+            ReplyAdmissionResult(
+                ReplyAdmissionStatus.INVALID_PAYLOAD,
+                "${e.javaClass.name}: ${e.message ?: "thread markdown send failed"} (see /data/local/tmp/iris-thread-markdown-debug.txt)",
+            )
+        }
+
+    override fun sendThreadTextShare(
+        room: Long,
+        msg: String,
+        threadId: Long,
+        threadScope: Int,
+    ): ReplyAdmissionResult =
+        enqueueRequest(
+            SendMessageRequest {
+                sendThreadTextShareInternal(room, msg, threadId, threadScope)
             },
         )
 
@@ -327,6 +369,16 @@ class ReplyService(
         }
     }
 
+    private fun writeThreadHint(room: Long, threadId: Long?, threadScope: Int?) {
+        val hintFile = java.io.File(THREAD_HINT_PATH)
+        if (threadId != null && threadScope != null && threadScope >= 2) {
+            hintFile.writeText("{\"room\":\"$room\",\"threadId\":\"$threadId\",\"threadScope\":$threadScope}")
+            IrisLogger.debug("[ReplyService] thread hint written: room=$room threadId=$threadId scope=$threadScope")
+        } else {
+            if (hintFile.exists()) hintFile.delete()
+        }
+    }
+
     private fun sendPreparedImages(preparedImages: PreparedImages) {
         val intent =
             Intent(Intent.ACTION_SEND_MULTIPLE).apply {
@@ -348,18 +400,65 @@ class ReplyService(
         }
     }
 
-    private fun sendReplyMarkdownInternal(
+    private fun sendTextShareInternal(
         room: Long,
         msg: String,
     ) {
         val preparedMessage = preserveInvisiblePadding(msg)
-        val spec = buildReplyMarkdownIntentSpec(room, preparedMessage)
-        val intent = buildReplyMarkdownIntent(room, preparedMessage)
+        val spec = buildTextShareIntentSpec(room, preparedMessage)
+        val intent = buildTextShareIntent(room, preparedMessage)
 
         try {
             AndroidHiddenApi.startActivityAs(spec.callerPackageName, intent)
         } catch (e: Exception) {
-            IrisLogger.error("Error starting activity for reply-markdown: $e")
+            IrisLogger.error("Error starting activity for sending text share: $e")
+            throw e
+        }
+    }
+
+    private fun sendThreadTextShareInternal(
+        room: Long,
+        msg: String,
+        threadId: Long,
+        threadScope: Int,
+    ) {
+        val preparedMessage = preserveInvisiblePadding(msg)
+        val intent = buildThreadTextShareIntent(room, preparedMessage, threadId, threadScope)
+        val before = DataStoreWatcher.capture()
+        IrisLogger.info(DataStoreWatcher.formatSnapshot("before_thread_text_share", before))
+
+        try {
+            AndroidHiddenApi.startActivityAs("com.kakao.talk", intent)
+        } catch (e: Exception) {
+            IrisLogger.error("Error starting activity for thread text share: $e")
+            throw e
+        } finally {
+            val after = DataStoreWatcher.capture()
+            IrisLogger.info(DataStoreWatcher.formatSnapshot("after_thread_text_share", after))
+            val changes = DataStoreWatcher.diff(before, after)
+            if (changes.isNotEmpty()) {
+                IrisLogger.error("[DataStoreWatcher] DATASTORE CHANGED: ${changes.joinToString("; ")}")
+            }
+        }
+    }
+
+    private fun sendThreadMarkdownInternal(
+        room: Long,
+        msg: String,
+        threadId: Long,
+        threadScope: Int,
+    ) {
+        val preparedMessage = preserveInvisiblePadding(msg)
+
+        try {
+            KakaoThreadMarkdownSender.send(
+                room = room,
+                threadId = threadId,
+                threadScope = threadScope,
+                text = preparedMessage,
+            )
+        } catch (e: Exception) {
+            IrisLogger.error("Error calling Kakao thread markdown sender: $e")
             throw e
         }
     }
