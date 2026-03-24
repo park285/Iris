@@ -19,8 +19,10 @@ class AndroidHiddenApi {
             getBroadcastIntentMethod()
         }
 
+        // thread graft 안전: callingPkg가 attachment JSON에 기록되므로
+        // 반드시 com.kakao.talk으로 설정하여 정상 발송과 동일하게 만든다
         private val callingPackageName: String by lazy {
-            System.getenv("IRIS_RUNNER") ?: "com.android.shell"
+            System.getenv("IRIS_RUNNER") ?: "com.kakao.talk"
         }
 
         private val iActivityManagerClass: Class<*> by lazy {
@@ -121,10 +123,10 @@ class AndroidHiddenApi {
         }
 
         fun startActivityAs(
-            callerPackageName: String,
+            callingPackageName: String,
             intent: Intent,
         ) {
-            getStartActivityMethod(callerPackageName)(intent)
+            getStartActivityMethod(callingPackageName)(intent)
         }
 
         private fun getStartActivityMethod(callerPackageName: String): (Intent) -> Unit {
