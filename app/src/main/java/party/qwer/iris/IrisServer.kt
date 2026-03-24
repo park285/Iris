@@ -132,6 +132,7 @@ class IrisServer(
             configureHealthRoutes()
             configureConfigRoutes()
             configureReplyRoute()
+            configureReplyMarkdownRoute()
             configureQueryRoute()
         }
     }
@@ -195,6 +196,18 @@ class IrisServer(
         }
     }
 
+    private fun Route.configureReplyMarkdownRoute() {
+        post("/reply-markdown") {
+            if (!requireBotToken(call)) {
+                return@post
+            }
+
+            val replyRequest = call.receive<ReplyRequest>()
+            val response = enqueueReplyMarkdown(replyRequest)
+            call.respond(HttpStatusCode.Accepted, response)
+        }
+    }
+
     private fun Route.configureQueryRoute() {
         post("/query") {
             if (!requireBotToken(call)) {
@@ -241,6 +254,37 @@ class IrisServer(
 
         return ReplyAcceptedResponse(
             requestId = "reply-${UUID.randomUUID()}",
+            room = replyRequest.room,
+            type = replyRequest.type,
+        )
+    }
+
+    private fun enqueueReplyMarkdown(replyRequest: ReplyRequest): ReplyAcceptedResponse {
+        validateReplyMarkdownType(replyRequest.type)
+
+        val roomId = replyRequest.room.toLongOrNull() ?: invalidRequest("room must be a numeric string")
+        val threadId =
+            replyRequest.threadId?.let {
+                it.toLongOrNull() ?: invalidRequest("threadId must be a numeric string")
+            }
+        val threadScope = replyRequest.threadScope
+
+        try {
+            validateReplyMarkdownThreadMetadata(threadId, threadScope)
+        } catch (e: IllegalArgumentException) {
+            invalidRequest(e.message ?: "invalid reply-markdown metadata")
+        }
+
+        val admission = messageSender.sendReplyMarkdown(roomId, extractTextPayload(replyRequest))
+        if (admission.status != ReplyAdmissionStatus.ACCEPTED) {
+            requestRejected(
+                admission.message ?: "reply-markdown request rejected",
+                replyAdmissionHttpStatus(admission.status),
+            )
+        }
+
+        return ReplyAcceptedResponse(
+            requestId = "reply-markdown-${UUID.randomUUID()}",
             room = replyRequest.room,
             type = replyRequest.type,
         )

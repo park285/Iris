@@ -249,6 +249,16 @@ class ReplyService(
         )
     }
 
+    override fun sendReplyMarkdown(
+        room: Long,
+        msg: String,
+    ): ReplyAdmissionResult =
+        enqueueRequest(
+            SendMessageRequest {
+                sendReplyMarkdownInternal(room, msg)
+            },
+        )
+
     @Synchronized
     private fun enqueueRequest(request: SendMessageRequest): ReplyAdmissionResult {
         if (messageSenderJob?.isActive != true) {
@@ -334,6 +344,22 @@ class ReplyService(
         } catch (e: Exception) {
             IrisLogger.error("Error starting activity for sending multiple photos: $e")
             cleanupPreparedImages(preparedImages)
+            throw e
+        }
+    }
+
+    private fun sendReplyMarkdownInternal(
+        room: Long,
+        msg: String,
+    ) {
+        val preparedMessage = preserveInvisiblePadding(msg)
+        val spec = buildReplyMarkdownIntentSpec(room, preparedMessage)
+        val intent = buildReplyMarkdownIntent(room, preparedMessage)
+
+        try {
+            AndroidHiddenApi.startActivityAs(spec.callerPackageName, intent)
+        } catch (e: Exception) {
+            IrisLogger.error("Error starting activity for reply-markdown: $e")
             throw e
         }
     }

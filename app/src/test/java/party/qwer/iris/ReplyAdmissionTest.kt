@@ -64,4 +64,14 @@ class ReplyAdmissionTest {
 
         assertEquals("threadScope must be a positive integer", error.message)
     }
+
+    @Test
+    fun `reply markdown route only allows text replies`() {
+        val error =
+            assertFailsWith<IllegalArgumentException> {
+                validateReplyMarkdownType(ReplyType.IMAGE)
+            }
+
+        assertEquals("reply-markdown replies require type=text", error.message)
+    }
 }

@@ -18,4 +18,9 @@ interface MessageSender {
         room: Long,
         base64ImageDataStrings: List<String>,
     ): ReplyAdmissionResult
+
+    fun sendReplyMarkdown(
+        room: Long,
+        msg: String,
+    ): ReplyAdmissionResult
 }
