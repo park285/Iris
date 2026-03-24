@@ -13,7 +13,7 @@ class AndroidHiddenApi {
             getStartServiceMethod()
         }
         val startActivity: (Intent) -> Unit by lazy {
-            getStartActivityMethod()
+            getStartActivityMethod(callingPackageName)
         }
         val broadcastIntent: (Intent) -> Unit by lazy {
             getBroadcastIntentMethod()
@@ -120,7 +120,14 @@ class AndroidHiddenApi {
             )
         }
 
-        private fun getStartActivityMethod(): (Intent) -> Unit {
+        fun startActivityAs(
+            callerPackageName: String,
+            intent: Intent,
+        ) {
+            getStartActivityMethod(callerPackageName)(intent)
+        }
+
+        private fun getStartActivityMethod(callerPackageName: String): (Intent) -> Unit {
             val iActivityManager = iActivityManagerClass
             val iApplicationThread = iApplicationThreadClass
 
@@ -150,7 +157,7 @@ class AndroidHiddenApi {
                             method.invoke(
                                 activityManager,
                                 null,
-                                callingPackageName,
+                                callerPackageName,
                                 null,
                                 intent,
                                 intent.type,
@@ -187,7 +194,7 @@ class AndroidHiddenApi {
                             method.invoke(
                                 activityManager,
                                 null,
-                                callingPackageName,
+                                callerPackageName,
                                 intent,
                                 intent.type,
                                 null,
