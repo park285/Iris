@@ -12,7 +12,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
@@ -43,6 +42,7 @@ class ReplyService(
     private val coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val sendMutex = Mutex()
     private var started = false
+    private var shutdownComplete = false
     private val imageDir = File(IRIS_IMAGE_DIR_PATH)
     private val imageMediaScanEnabled =
         System
@@ -54,6 +54,10 @@ class ReplyService(
 
     @Synchronized
     fun start() {
+        if (shutdownComplete) {
+            IrisLogger.error("[ReplyService] Cannot start after shutdown")
+            return
+        }
         started = true
         IrisLogger.debug("[ReplyService] started (workers created on demand)")
     }
@@ -62,14 +66,21 @@ class ReplyService(
         IrisLogger.info("[ReplyService] Restarting...")
         val snapshot: List<ReplyWorkerState>
         synchronized(this) {
+            if (shutdownComplete) {
+                IrisLogger.error("[ReplyService] Cannot restart after shutdown")
+                return
+            }
             started = false
             snapshot = workerRegistry.values.toList()
         }
         snapshot.forEach { it.channel.close() }
         runBlocking {
             snapshot.forEach { worker ->
-                withTimeoutOrNull(SHUTDOWN_TIMEOUT_MS) { worker.job.join() }
-                    ?: worker.job.cancelAndJoin()
+                withTimeoutOrNull(SHUTDOWN_TIMEOUT_MS) { worker.job.join() } ?: run {
+                    worker.job.cancel()
+                    withTimeoutOrNull(SHUTDOWN_TIMEOUT_MS) { worker.job.join() }
+                        ?: IrisLogger.error("[ReplyService] Worker(${worker.key}) cancel timed out; abandoning")
+                }
             }
         }
         synchronized(this) {
@@ -81,13 +92,19 @@ class ReplyService(
 
     fun shutdown() {
         IrisLogger.info("[ReplyService] Shutting down...")
-        synchronized(this) { started = false }
+        synchronized(this) {
+            started = false
+            shutdownComplete = true
+        }
         val workers = workerRegistry.values.toList()
         workers.forEach { it.channel.close() }
         runBlocking {
             workers.forEach { worker ->
-                withTimeoutOrNull(SHUTDOWN_TIMEOUT_MS) { worker.job.join() }
-                    ?: worker.job.cancelAndJoin()
+                withTimeoutOrNull(SHUTDOWN_TIMEOUT_MS) { worker.job.join() } ?: run {
+                    worker.job.cancel()
+                    withTimeoutOrNull(SHUTDOWN_TIMEOUT_MS) { worker.job.join() }
+                        ?: IrisLogger.error("[ReplyService] Worker(${worker.key}) cancel timed out; abandoning")
+                }
             }
         }
         workerRegistry.clear()
