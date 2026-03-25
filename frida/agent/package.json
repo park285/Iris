@@ -1,0 +1,19 @@
+{
+  "name": "@iris/frida-agent",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "tsx --test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "frida-java-bridge": "7.0.13"
+  },
+  "devDependencies": {
+    "frida-compile": "19.0.5",
+    "@types/frida-gum": "19.0.2",
+    "@types/node": "25.5.0",
+    "tsx": "4.21.0",
+    "typescript": "6.0.2"
+  }
+}
