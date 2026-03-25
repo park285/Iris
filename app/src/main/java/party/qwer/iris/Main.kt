@@ -19,6 +19,7 @@ class Main {
                 val notificationReferer = readNotificationReferer()
                 val shutdownLatch = CountDownLatch(1)
                 val configManager = ConfigManager()
+                val graftReadinessClient = GraftReadinessClient()
 
                 val replyService = ReplyService(configManager)
                 configManager.onMessageSendRateChanged = { replyService.restartMessageSender() }
@@ -52,6 +53,7 @@ class Main {
                             configManager,
                             notificationReferer,
                             replyService,
+                            graftReadinessClient,
                         ).also {
                             it.startServer()
                             IrisLogger.info("Iris Server started")
