@@ -96,4 +96,50 @@ class ReplyServiceTest {
         val result = service.sendMessage("ref", chatId = 1L, msg = "after", threadId = null, threadScope = null)
         assertEquals(ReplyAdmissionStatus.SHUTDOWN, result.status)
     }
+
+    @Test
+    fun `same key messages are all accepted in order`() {
+        val service = ReplyService(testConfig)
+        service.start()
+
+        val results =
+            (1..10).map { i ->
+                service.sendMessage("ref", chatId = 1L, msg = "msg$i", threadId = 100L, threadScope = 1)
+            }
+
+        results.forEach { assertEquals(ReplyAdmissionStatus.ACCEPTED, it.status) }
+        service.shutdown()
+    }
+
+    @Test
+    fun `different keys create independent workers`() {
+        val service = ReplyService(testConfig)
+        service.start()
+
+        val result1 = service.sendMessage("ref", chatId = 1L, msg = "a", threadId = 100L, threadScope = 1)
+        val result2 = service.sendMessage("ref", chatId = 1L, msg = "b", threadId = 200L, threadScope = 1)
+        val result3 = service.sendMessage("ref", chatId = 2L, msg = "c", threadId = null, threadScope = null)
+
+        assertEquals(ReplyAdmissionStatus.ACCEPTED, result1.status)
+        assertEquals(ReplyAdmissionStatus.ACCEPTED, result2.status)
+        assertEquals(ReplyAdmissionStatus.ACCEPTED, result3.status)
+
+        service.shutdown()
+    }
+
+    @Test
+    fun `new worker is created after restart for same key`() {
+        val service = ReplyService(testConfig)
+        service.start()
+
+        val result1 = service.sendMessage("ref", chatId = 1L, msg = "before", threadId = null, threadScope = null)
+        assertEquals(ReplyAdmissionStatus.ACCEPTED, result1.status)
+
+        service.restart()
+
+        val result2 = service.sendMessage("ref", chatId = 1L, msg = "after", threadId = null, threadScope = null)
+        assertEquals(ReplyAdmissionStatus.ACCEPTED, result2.status)
+
+        service.shutdown()
+    }
 }
