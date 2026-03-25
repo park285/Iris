@@ -7,17 +7,18 @@ import android.net.Uri
 import android.os.Bundle
 import android.text.SpannableStringBuilder
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 data class ReplyQueueKey(val chatId: Long, val threadId: Long?)
 
@@ -27,17 +28,20 @@ class ReplyService(
     private val config: ConfigProvider,
 ) : MessageSender {
     private companion object {
-        private const val MESSAGE_CHANNEL_CAPACITY = 64
-        private const val LOG_MESSAGE_PREVIEW_LENGTH = 30
+        private const val PER_WORKER_QUEUE_CAPACITY = 16
+        private const val MAX_WORKERS = 16
+        private const val WORKER_IDLE_TIMEOUT_MS = 60_000L
         private const val SHUTDOWN_TIMEOUT_MS = 10_000L
+        private const val LOG_MESSAGE_PREVIEW_LENGTH = 30
         private val zeroWidthCharacters = setOf('\u200B', '\u200C', '\u200D', '\u2060', '\uFEFF')
         private const val zeroWidthNoBreakSpace = "\uFEFF"
         private const val THREAD_HINT_PATH = "/data/local/tmp/iris-thread-hint.json"
     }
 
-    private val messageChannel = Channel<SendMessageRequest>(capacity = MESSAGE_CHANNEL_CAPACITY)
+    private val workerRegistry = ConcurrentHashMap<ReplyQueueKey, ReplyWorkerState>()
     private val coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var messageSenderJob: Job? = null
+    private val sendMutex = Mutex()
+    private var started = false
     private val imageDir = File(IRIS_IMAGE_DIR_PATH)
     private val imageMediaScanEnabled =
         System
@@ -47,79 +51,44 @@ class ReplyService(
             ?.let { raw -> raw != "0" && raw != "false" && raw != "off" }
             ?: true
 
-    @OptIn(DelicateCoroutinesApi::class)
     @Synchronized
-    fun startMessageSender() {
-        if (messageChannel.isClosedForSend) {
-            IrisLogger.error("[ReplyService] Cannot start message sender after shutdown")
-            return
-        }
-        if (messageSenderJob?.isActive == true) {
-            IrisLogger.debug("[ReplyService] messageSenderJob is already running")
-            return
-        }
+    fun start() {
+        started = true
+        IrisLogger.debug("[ReplyService] started (workers created on demand)")
+    }
 
-        messageSenderJob =
-            coroutineScope.launch {
-                IrisLogger.debug("[ReplyService] messageSenderJob started, waiting for messages...")
-                for (request in messageChannel) {
-                    try {
-                        IrisLogger.debug("[ReplyService] Processing message from channel")
-                        request.send()
-                        IrisLogger.debug("[ReplyService] Message sent successfully")
-                        delay(config.messageSendRate)
-                    } catch (e: Exception) {
-                        IrisLogger.error("[ReplyService] Error sending message from channel: ${e.message}", e)
-                    }
-                }
-                IrisLogger.debug("[ReplyService] messageSenderJob terminated (channel closed)")
+    fun restart() {
+        IrisLogger.info("[ReplyService] Restarting...")
+        val snapshot: List<ReplyWorkerState>
+        synchronized(this) {
+            started = false
+            snapshot = workerRegistry.values.toList()
+        }
+        snapshot.forEach { it.channel.close() }
+        runBlocking {
+            snapshot.forEach { worker ->
+                withTimeoutOrNull(SHUTDOWN_TIMEOUT_MS) { worker.job.join() } ?: worker.job.cancel()
             }
-        IrisLogger.debug("[ReplyService] messageSenderJob launched")
-    }
-
-    @OptIn(DelicateCoroutinesApi::class)
-    @Synchronized
-    fun restartMessageSender() {
-        if (messageChannel.isClosedForSend) {
-            IrisLogger.error("[ReplyService] Cannot restart message sender after shutdown")
-            return
         }
-        val jobToCancel = messageSenderJob
-        messageSenderJob = null
-
-        jobToCancel?.let { runBlocking { it.cancelAndJoin() } }
-        startMessageSender()
+        synchronized(this) {
+            workerRegistry.clear()
+            started = true
+        }
+        IrisLogger.info("[ReplyService] Restart complete")
     }
 
-    /**
-     * 종료 시 채널을 닫고 대기 중인 메시지 처리를 기다림.
-     */
     fun shutdown() {
-        IrisLogger.info("[ReplyService] Shutting down message channel...")
-        val jobToJoin =
-            synchronized(this) {
-                messageChannel.close()
-                val captured = messageSenderJob
-                messageSenderJob = null
-                captured
-            }
-
-        jobToJoin?.let {
-            runBlocking {
-                val completed =
-                    withTimeoutOrNull(SHUTDOWN_TIMEOUT_MS) {
-                        it.join()
-                        true
-                    } == true
-                if (!completed) {
-                    IrisLogger.error("[ReplyService] Message sender shutdown timed out; cancelling")
-                    withTimeoutOrNull(SHUTDOWN_TIMEOUT_MS) {
-                        it.cancelAndJoin()
-                    } ?: IrisLogger.error("[ReplyService] Message sender cancel timed out; abandoning")
-                }
+        IrisLogger.info("[ReplyService] Shutting down...")
+        synchronized(this) { started = false }
+        val workers = workerRegistry.values.toList()
+        workers.forEach { it.channel.close() }
+        runBlocking {
+            workers.forEach { worker ->
+                withTimeoutOrNull(SHUTDOWN_TIMEOUT_MS) { worker.job.join() } ?: worker.job.cancel()
             }
         }
-        IrisLogger.info("[ReplyService] Message channel closed")
+        workerRegistry.clear()
+        IrisLogger.info("[ReplyService] Shutdown complete")
     }
 
     private fun preserveInvisiblePadding(message: String): CharSequence {
@@ -208,16 +177,12 @@ class ReplyService(
     ): ReplyAdmissionResult {
         IrisLogger.debugLazy { "[ReplyService] sendMessage called: chatId=$chatId, msg='${msg.take(LOG_MESSAGE_PREVIEW_LENGTH)}...'" }
         return enqueueRequest(
-            SendMessageRequest {
-                IrisLogger.debugLazy { "[ReplyService] sendMessageInternal executing for chatId=$chatId" }
-                sendMessageInternal(
-                    referer,
-                    chatId,
-                    msg,
-                    threadId,
-                    threadScope,
-                )
-                IrisLogger.debugLazy { "[ReplyService] sendMessageInternal completed for chatId=$chatId" }
+            chatId,
+            threadId,
+            object : SendMessageRequest {
+                override suspend fun send() {
+                    sendMessageInternal(referer, chatId, msg, threadId, threadScope)
+                }
             },
         )
     }
@@ -250,9 +215,32 @@ class ReplyService(
             }
 
         return enqueueRequest(
-            SendMessageRequest {
-                writeThreadHint(room, threadId, threadScope)
-                sendDecodedImages(room, decodedImages)
+            room,
+            threadId,
+            object : SendMessageRequest {
+                private lateinit var preparedImages: PreparedImages
+
+                override suspend fun prepare() {
+                    ensureImageDir(imageDir)
+                    val uris = ArrayList<Uri>(decodedImages.size)
+                    val createdFiles = ArrayList<File>(decodedImages.size)
+                    decodedImages.forEach { imageBytes ->
+                        val imageFile = saveImage(imageBytes, imageDir)
+                        createdFiles.add(imageFile)
+                        val imageUri = Uri.fromFile(imageFile)
+                        if (imageMediaScanEnabled) {
+                            mediaScan(imageUri)
+                        }
+                        uris.add(imageUri)
+                    }
+                    require(uris.isNotEmpty()) { "no image URIs created" }
+                    preparedImages = PreparedImages(room = room, uris = uris, files = createdFiles)
+                }
+
+                override suspend fun send() {
+                    writeThreadHint(room, threadId, threadScope)
+                    sendPreparedImages(preparedImages)
+                }
             },
         )
     }
@@ -262,8 +250,12 @@ class ReplyService(
         msg: String,
     ): ReplyAdmissionResult =
         enqueueRequest(
-            SendMessageRequest {
-                sendTextShareInternal(room, msg)
+            room,
+            null,
+            object : SendMessageRequest {
+                override suspend fun send() {
+                    sendTextShareInternal(room, msg)
+                }
             },
         )
 
@@ -272,76 +264,99 @@ class ReplyService(
         msg: String,
     ): ReplyAdmissionResult =
         enqueueRequest(
-            SendMessageRequest {
-                sendReplyMarkdownInternal(room, msg)
+            room,
+            null,
+            object : SendMessageRequest {
+                override suspend fun send() {
+                    sendReplyMarkdownInternal(room, msg)
+                }
             },
         )
 
-    @Synchronized
-    private fun enqueueRequest(request: SendMessageRequest): ReplyAdmissionResult {
-        if (messageSenderJob?.isActive != true) {
-            IrisLogger.error("[ReplyService] Rejecting enqueue because sender is unavailable")
-            return ReplyAdmissionResult(
-                ReplyAdmissionStatus.SHUTDOWN,
-                "reply sender unavailable",
-            )
-        }
+    private fun launchWorker(key: ReplyQueueKey): ReplyWorkerState {
+        val channel = Channel<SendMessageRequest>(PER_WORKER_QUEUE_CAPACITY)
+        lateinit var state: ReplyWorkerState
+        val job =
+            coroutineScope.launch {
+                try {
+                    while (true) {
+                        val request =
+                            withTimeoutOrNull(WORKER_IDLE_TIMEOUT_MS) {
+                                channel.receive()
+                            } ?: break
 
-        val sendResult = messageChannel.trySend(request)
-        return when {
-            sendResult.isSuccess -> {
-                IrisLogger.debug("[ReplyService] Message queued to channel successfully")
-                ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
+                        try {
+                            request.prepare()
+                            sendMutex.withLock {
+                                request.send()
+                            }
+                            delay(config.messageSendRate)
+                        } catch (e: Exception) {
+                            IrisLogger.error("[ReplyService] worker($key) send error: ${e.message}", e)
+                        }
+                    }
+                } finally {
+                    channel.close()
+                    workerRegistry.remove(key, state)
+                    IrisLogger.debug("[ReplyService] worker($key) terminated (idle timeout)")
+                }
             }
-            sendResult.isClosed -> {
-                IrisLogger.error("[ReplyService] Rejecting enqueue because channel is closed")
-                ReplyAdmissionResult(
-                    ReplyAdmissionStatus.SHUTDOWN,
-                    "reply sender unavailable",
-                )
+        state = ReplyWorkerState(key, channel, job)
+        return state
+    }
+
+    private fun getOrCreateWorker(key: ReplyQueueKey): ReplyWorkerState? {
+        workerRegistry[key]?.let { return it }
+
+        synchronized(this) {
+            workerRegistry[key]?.let { return it }
+            if (workerRegistry.size >= MAX_WORKERS) {
+                return null
             }
-            else -> {
-                IrisLogger.error("[ReplyService] Rejecting enqueue because queue is full")
-                ReplyAdmissionResult(
-                    ReplyAdmissionStatus.QUEUE_FULL,
-                    "reply queue is full",
-                )
-            }
+            val worker = launchWorker(key)
+            workerRegistry[key] = worker
+            return worker
         }
     }
 
-    private fun sendDecodedImages(
-        room: Long,
-        decodedImages: List<ByteArray>,
-    ) {
-        ensureImageDir(imageDir)
-        val uris = ArrayList<Uri>(decodedImages.size)
-        val createdFiles = ArrayList<File>(decodedImages.size)
-        try {
-            decodedImages.forEach { imageBytes ->
-                val imageFile = saveImage(imageBytes, imageDir)
-                createdFiles.add(imageFile)
-                val imageUri = Uri.fromFile(imageFile)
-                if (imageMediaScanEnabled) {
-                    mediaScan(imageUri)
-                }
-                uris.add(imageUri)
+    @Synchronized
+    private fun enqueueRequest(
+        chatId: Long,
+        threadId: Long?,
+        request: SendMessageRequest,
+    ): ReplyAdmissionResult {
+        if (!started) {
+            IrisLogger.error("[ReplyService] Rejecting enqueue because sender is unavailable")
+            return ReplyAdmissionResult(ReplyAdmissionStatus.SHUTDOWN, "reply sender unavailable")
+        }
+
+        val key = ReplyQueueKey(chatId, threadId)
+        val worker =
+            getOrCreateWorker(key)
+                ?: return ReplyAdmissionResult(ReplyAdmissionStatus.QUEUE_FULL, "too many active reply workers")
+
+        val sendResult = worker.channel.trySend(request)
+        return when {
+            sendResult.isSuccess -> {
+                IrisLogger.debug("[ReplyService] Message queued to worker($key)")
+                ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
             }
-            require(uris.isNotEmpty()) { "no image URIs created" }
-            sendPreparedImages(
-                PreparedImages(
-                    room = room,
-                    uris = uris,
-                    files = createdFiles,
-                ),
-            )
-        } catch (e: Exception) {
-            createdFiles.forEach { file ->
-                if (file.exists() && !file.delete()) {
-                    IrisLogger.error("Failed to delete partially prepared image file: ${file.absolutePath}")
+            sendResult.isClosed -> {
+                workerRegistry.remove(key, worker)
+                val retryWorker =
+                    getOrCreateWorker(key)
+                        ?: return ReplyAdmissionResult(ReplyAdmissionStatus.QUEUE_FULL, "too many active reply workers")
+                val retryResult = retryWorker.channel.trySend(request)
+                if (retryResult.isSuccess) {
+                    ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
+                } else {
+                    ReplyAdmissionResult(ReplyAdmissionStatus.QUEUE_FULL, "reply queue is full")
                 }
             }
-            throw e
+            else -> {
+                IrisLogger.error("[ReplyService] Rejecting enqueue because queue is full for worker($key)")
+                ReplyAdmissionResult(ReplyAdmissionStatus.QUEUE_FULL, "reply queue is full")
+            }
         }
     }
 
@@ -412,7 +427,15 @@ class ReplyService(
         }
     }
 
-    private fun interface SendMessageRequest {
+    private data class ReplyWorkerState(
+        val key: ReplyQueueKey,
+        val channel: Channel<SendMessageRequest>,
+        val job: Job,
+    )
+
+    private interface SendMessageRequest {
+        suspend fun prepare() {}
+
         suspend fun send()
     }
 

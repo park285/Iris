@@ -22,8 +22,8 @@ class Main {
                 val graftReadinessClient = GraftReadinessClient()
 
                 val replyService = ReplyService(configManager)
-                configManager.onMessageSendRateChanged = { replyService.restartMessageSender() }
-                replyService.startMessageSender()
+                configManager.onMessageSendRateChanged = { replyService.restart() }
+                replyService.start()
                 IrisLogger.info("Message sender thread started")
 
                 val kakaoDb = KakaoDB(configManager)
