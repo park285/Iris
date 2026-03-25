@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/park285/Iris/frida/daemon/internal/adb"
 	"github.com/park285/Iris/frida/daemon/internal/agentbuild"
@@ -33,9 +34,18 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	readiness := app.NewReadinessTracker(app.ReadinessOptions{
+		HeartbeatTTL: time.Duration(cfg.HeartbeatTimeoutSeconds) * time.Second,
+	})
+	if _, err := app.StartReadinessServer(ctx, cfg.ReadinessAddr, readiness); err != nil {
+		log.Fatal(err)
+	}
+
 	pidFinder := adb.Service{Runner: adb.ExecRunner{}}
 	bundler := agentbuild.NewBundler(cfg.FridaCoreDevkitDir)
-	reconciler := lifecycle.NewRunner(fridaapi.NewRuntime(cfg.DeviceID, cfg.FridaCoreDevkitDir))
+	reconciler := lifecycle.NewRunner(fridaapi.NewRuntime(cfg.DeviceID, cfg.FridaCoreDevkitDir, func(message string) {
+		readiness.ObserveScriptMessage(message)
+	}), readiness)
 
 	if err := app.Run(ctx, cfg, pidFinder, bundler, reconciler); err != nil {
 		log.Fatal(err)

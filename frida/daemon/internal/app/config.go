@@ -9,12 +9,14 @@ import (
 )
 
 type Config struct {
-	AgentProjectRoot       string
-	AgentEntryPoint        string
-	DeviceID               string
-	FridaCoreDevkitDir     string
-	PidPollIntervalSeconds int
-	RetryDelaySeconds      int
+	AgentProjectRoot        string
+	AgentEntryPoint         string
+	DeviceID                string
+	FridaCoreDevkitDir      string
+	ReadinessAddr           string
+	HeartbeatTimeoutSeconds int
+	PidPollIntervalSeconds  int
+	RetryDelaySeconds       int
 }
 
 func ParseConfig(repoRoot string, args []string) (Config, error) {
@@ -22,6 +24,8 @@ func ParseConfig(repoRoot string, args []string) (Config, error) {
 	agent := fs.String("agent", "", "agent entry point relative to frida/agent")
 	device := fs.String("device", "emulator-5554", "adb device id")
 	devkit := fs.String("frida-core-devkit", "", "frida core devkit directory")
+	readinessAddr := fs.String("readiness-addr", "127.0.0.1:17373", "local readiness endpoint bind address")
+	heartbeatTimeout := fs.Int("heartbeat-timeout", 15, "agent heartbeat timeout seconds")
 	pidPoll := fs.Int("pid-poll-interval", 30, "pid poll interval seconds")
 	retryDelay := fs.Int("retry-delay", 5, "retry delay seconds")
 	if err := fs.Parse(args); err != nil {
@@ -38,12 +42,14 @@ func ParseConfig(repoRoot string, args []string) (Config, error) {
 	}
 
 	return Config{
-		AgentProjectRoot:       projectRoot,
-		AgentEntryPoint:        filepath.Join(projectRoot, cleanAgent),
-		DeviceID:               *device,
-		FridaCoreDevkitDir:     *devkit,
-		PidPollIntervalSeconds: *pidPoll,
-		RetryDelaySeconds:      *retryDelay,
+		AgentProjectRoot:        projectRoot,
+		AgentEntryPoint:         filepath.Join(projectRoot, cleanAgent),
+		DeviceID:                *device,
+		FridaCoreDevkitDir:      *devkit,
+		ReadinessAddr:           *readinessAddr,
+		HeartbeatTimeoutSeconds: *heartbeatTimeout,
+		PidPollIntervalSeconds:  *pidPoll,
+		RetryDelaySeconds:       *retryDelay,
 	}, nil
 }
 

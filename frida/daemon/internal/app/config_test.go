@@ -20,6 +20,12 @@ func TestParseConfigUsesPinnedAgentProjectRoot(t *testing.T) {
 	if got, want := cfg.DeviceID, "emulator-5554"; got != want {
 		t.Fatalf("DeviceID = %q, want %q", got, want)
 	}
+	if got, want := cfg.ReadinessAddr, "127.0.0.1:17373"; got != want {
+		t.Fatalf("ReadinessAddr = %q, want %q", got, want)
+	}
+	if got, want := cfg.HeartbeatTimeoutSeconds, 15; got != want {
+		t.Fatalf("HeartbeatTimeoutSeconds = %d, want %d", got, want)
+	}
 	if got, want := cfg.PidPollIntervalSeconds, 30; got != want {
 		t.Fatalf("PidPollIntervalSeconds = %d, want %d", got, want)
 	}
@@ -43,6 +49,24 @@ func TestParseConfigCarriesDevkitPathWhenProvided(t *testing.T) {
 
 	if got, want := cfg.FridaCoreDevkitDir, "/opt/frida/devkit"; got != want {
 		t.Fatalf("FridaCoreDevkitDir = %q, want %q", got, want)
+	}
+}
+
+func TestParseConfigCarriesReadinessSettings(t *testing.T) {
+	cfg, err := ParseConfig("/repo", []string{
+		"--agent", "thread-image-graft.ts",
+		"--readiness-addr", "127.0.0.1:18999",
+		"--heartbeat-timeout", "17",
+	})
+	if err != nil {
+		t.Fatalf("ParseConfig returned error: %v", err)
+	}
+
+	if got, want := cfg.ReadinessAddr, "127.0.0.1:18999"; got != want {
+		t.Fatalf("ReadinessAddr = %q, want %q", got, want)
+	}
+	if got, want := cfg.HeartbeatTimeoutSeconds, 17; got != want {
+		t.Fatalf("HeartbeatTimeoutSeconds = %d, want %d", got, want)
 	}
 }
 
