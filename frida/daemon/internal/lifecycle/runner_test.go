@@ -6,9 +6,9 @@ import (
 )
 
 type fakeRuntime struct {
-	events         []string
-	attachCalls    int
-	attachErrorOn  int
+	events        []string
+	attachCalls   int
+	attachErrorOn int
 }
 
 func (f *fakeRuntime) Attach(pid int, bundle string) error {
@@ -25,9 +25,22 @@ func (f *fakeRuntime) UnloadAndDetach() error {
 	return nil
 }
 
+type fakeObserver struct {
+	events []string
+}
+
+func (f *fakeObserver) Attached(pid int) {
+	f.events = append(f.events, "attached")
+}
+
+func (f *fakeObserver) Detached() {
+	f.events = append(f.events, "detached")
+}
+
 func TestRunnerAttachesOnFirstPID(t *testing.T) {
 	rt := &fakeRuntime{}
-	r := NewRunner(rt)
+	observer := &fakeObserver{}
+	r := NewRunner(rt, observer)
 
 	if err := r.Reconcile(1234, "bundle"); err != nil {
 		t.Fatalf("Reconcile returned error: %v", err)
@@ -37,11 +50,15 @@ func TestRunnerAttachesOnFirstPID(t *testing.T) {
 	if !reflect.DeepEqual(rt.events, want) {
 		t.Fatalf("events = %v, want %v", rt.events, want)
 	}
+	if !reflect.DeepEqual(observer.events, []string{"attached"}) {
+		t.Fatalf("observer events = %v, want %v", observer.events, []string{"attached"})
+	}
 }
 
 func TestRunnerReattachesWhenPIDChanges(t *testing.T) {
 	rt := &fakeRuntime{}
-	r := NewRunner(rt)
+	observer := &fakeObserver{}
+	r := NewRunner(rt, observer)
 
 	if err := r.Reconcile(1234, "bundle-a"); err != nil {
 		t.Fatalf("first Reconcile returned error: %v", err)
@@ -54,11 +71,15 @@ func TestRunnerReattachesWhenPIDChanges(t *testing.T) {
 	if !reflect.DeepEqual(rt.events, want) {
 		t.Fatalf("events = %v, want %v", rt.events, want)
 	}
+	if !reflect.DeepEqual(observer.events, []string{"attached", "detached", "attached"}) {
+		t.Fatalf("observer events = %v, want %v", observer.events, []string{"attached", "detached", "attached"})
+	}
 }
 
 func TestRunnerShutdownUsesUnloadThenDetach(t *testing.T) {
 	rt := &fakeRuntime{}
-	r := NewRunner(rt)
+	observer := &fakeObserver{}
+	r := NewRunner(rt, observer)
 
 	if err := r.Reconcile(1234, "bundle"); err != nil {
 		t.Fatalf("Reconcile returned error: %v", err)
@@ -71,11 +92,15 @@ func TestRunnerShutdownUsesUnloadThenDetach(t *testing.T) {
 	if !reflect.DeepEqual(rt.events, want) {
 		t.Fatalf("events = %v, want %v", rt.events, want)
 	}
+	if !reflect.DeepEqual(observer.events, []string{"attached", "detached"}) {
+		t.Fatalf("observer events = %v, want %v", observer.events, []string{"attached", "detached"})
+	}
 }
 
 func TestRunnerClearsStateBeforeRetryingFailedReattach(t *testing.T) {
 	rt := &fakeRuntime{attachErrorOn: 2}
-	r := NewRunner(rt)
+	observer := &fakeObserver{}
+	r := NewRunner(rt, observer)
 
 	if err := r.Reconcile(1234, "bundle-a"); err != nil {
 		t.Fatalf("first Reconcile returned error: %v", err)
@@ -90,6 +115,9 @@ func TestRunnerClearsStateBeforeRetryingFailedReattach(t *testing.T) {
 	want := []string{"attach", "create-script", "load", "unload", "detach", "attach", "create-script", "load"}
 	if !reflect.DeepEqual(rt.events, want) {
 		t.Fatalf("events = %v, want %v", rt.events, want)
+	}
+	if !reflect.DeepEqual(observer.events, []string{"attached", "detached", "attached"}) {
+		t.Fatalf("observer events = %v, want %v", observer.events, []string{"attached", "detached", "attached"})
 	}
 }
 

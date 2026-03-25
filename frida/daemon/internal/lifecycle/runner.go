@@ -4,12 +4,18 @@ import "github.com/park285/Iris/frida/daemon/internal/fridaapi"
 
 type Runner struct {
 	runtime    fridaapi.Runtime
+	observer   Observer
 	currentPID int
 	attached   bool
 }
 
-func NewRunner(runtime fridaapi.Runtime) *Runner {
-	return &Runner{runtime: runtime}
+type Observer interface {
+	Attached(pid int)
+	Detached()
+}
+
+func NewRunner(runtime fridaapi.Runtime, observer Observer) *Runner {
+	return &Runner{runtime: runtime, observer: observer}
 }
 
 func (r *Runner) Reconcile(pid int, bundle string) error {
@@ -19,6 +25,9 @@ func (r *Runner) Reconcile(pid int, bundle string) error {
 		}
 		r.currentPID = pid
 		r.attached = true
+		if r.observer != nil {
+			r.observer.Attached(pid)
+		}
 		return nil
 	}
 
@@ -31,11 +40,17 @@ func (r *Runner) Reconcile(pid int, bundle string) error {
 	}
 	r.attached = false
 	r.currentPID = 0
+	if r.observer != nil {
+		r.observer.Detached()
+	}
 	if err := r.runtime.Attach(pid, bundle); err != nil {
 		return err
 	}
 	r.currentPID = pid
 	r.attached = true
+	if r.observer != nil {
+		r.observer.Attached(pid)
+	}
 	return nil
 }
 
@@ -48,5 +63,8 @@ func (r *Runner) Shutdown() error {
 	}
 	r.attached = false
 	r.currentPID = 0
+	if r.observer != nil {
+		r.observer.Detached()
+	}
 	return nil
 }
