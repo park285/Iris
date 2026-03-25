@@ -43,3 +43,8 @@ docs/current-staging-split.md
 *.backup
 *.bak
 *~
+
+# Build artifacts
+frida/agent/node_modules/
+frida/agent/generated/
+frida/daemon/graft-daemon
