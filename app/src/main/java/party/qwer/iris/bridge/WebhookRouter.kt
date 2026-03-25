@@ -12,6 +12,7 @@ private val CHATBOTGO_COMMAND_PREFIXES =
     setOf(
         "!질문",
         "!이미지",
+        "!그림",
         "!리셋",
         "!관리자",
         "!한강",
