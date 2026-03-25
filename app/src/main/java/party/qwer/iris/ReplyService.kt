@@ -12,6 +12,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
@@ -67,7 +68,8 @@ class ReplyService(
         snapshot.forEach { it.channel.close() }
         runBlocking {
             snapshot.forEach { worker ->
-                withTimeoutOrNull(SHUTDOWN_TIMEOUT_MS) { worker.job.join() } ?: worker.job.cancel()
+                withTimeoutOrNull(SHUTDOWN_TIMEOUT_MS) { worker.job.join() }
+                    ?: worker.job.cancelAndJoin()
             }
         }
         synchronized(this) {
@@ -84,7 +86,8 @@ class ReplyService(
         workers.forEach { it.channel.close() }
         runBlocking {
             workers.forEach { worker ->
-                withTimeoutOrNull(SHUTDOWN_TIMEOUT_MS) { worker.job.join() } ?: worker.job.cancel()
+                withTimeoutOrNull(SHUTDOWN_TIMEOUT_MS) { worker.job.join() }
+                    ?: worker.job.cancelAndJoin()
             }
         }
         workerRegistry.clear()
@@ -224,16 +227,25 @@ class ReplyService(
                     ensureImageDir(imageDir)
                     val uris = ArrayList<Uri>(decodedImages.size)
                     val createdFiles = ArrayList<File>(decodedImages.size)
-                    decodedImages.forEach { imageBytes ->
-                        val imageFile = saveImage(imageBytes, imageDir)
-                        createdFiles.add(imageFile)
-                        val imageUri = Uri.fromFile(imageFile)
-                        if (imageMediaScanEnabled) {
-                            mediaScan(imageUri)
+                    try {
+                        decodedImages.forEach { imageBytes ->
+                            val imageFile = saveImage(imageBytes, imageDir)
+                            createdFiles.add(imageFile)
+                            val imageUri = Uri.fromFile(imageFile)
+                            if (imageMediaScanEnabled) {
+                                mediaScan(imageUri)
+                            }
+                            uris.add(imageUri)
                         }
-                        uris.add(imageUri)
+                        require(uris.isNotEmpty()) { "no image URIs created" }
+                    } catch (e: Exception) {
+                        createdFiles.forEach { file ->
+                            if (file.exists() && !file.delete()) {
+                                IrisLogger.error("Failed to delete partially prepared image file: ${file.absolutePath}")
+                            }
+                        }
+                        throw e
                     }
-                    require(uris.isNotEmpty()) { "no image URIs created" }
                     preparedImages = PreparedImages(room = room, uris = uris, files = createdFiles)
                 }
 
