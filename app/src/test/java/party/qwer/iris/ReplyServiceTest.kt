@@ -1,5 +1,11 @@
 package party.qwer.iris
 
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
@@ -140,6 +146,98 @@ class ReplyServiceTest {
         val result2 = service.sendMessage("ref", chatId = 1L, msg = "after", threadId = null, threadScope = null)
         assertEquals(ReplyAdmissionStatus.ACCEPTED, result2.status)
 
+        service.shutdown()
+    }
+
+    @Test
+    fun `same key preserves send order`() {
+        val service = ReplyService(testConfig)
+        service.start()
+        val executed = CopyOnWriteArrayList<Int>()
+        val latch = CountDownLatch(5)
+
+        for (i in 0 until 5) {
+            service.enqueueAction(chatId = 1L, threadId = 100L) {
+                executed.add(i)
+                latch.countDown()
+            }
+        }
+
+        assertTrue(latch.await(5, TimeUnit.SECONDS), "all messages should be processed")
+        assertEquals(listOf(0, 1, 2, 3, 4), executed)
+        service.shutdown()
+    }
+
+    @Test
+    fun `send mutex prevents concurrent send calls`() {
+        val service = ReplyService(testConfig)
+        service.start()
+        val concurrent = AtomicInteger(0)
+        val maxConcurrent = AtomicInteger(0)
+        val latch = CountDownLatch(4)
+
+        for (i in 0L until 2L) {
+            repeat(2) {
+                service.enqueueAction(chatId = i, threadId = null) {
+                    val cur = concurrent.incrementAndGet()
+                    maxConcurrent.updateAndGet { prev -> maxOf(prev, cur) }
+                    delay(50)
+                    concurrent.decrementAndGet()
+                    latch.countDown()
+                }
+            }
+        }
+
+        assertTrue(latch.await(5, TimeUnit.SECONDS), "all sends should complete")
+        assertEquals(1, maxConcurrent.get(), "send calls must not overlap (mutex)")
+        service.shutdown()
+    }
+
+    @Test
+    fun `shutdown drains pending messages`() {
+        val service = ReplyService(testConfig)
+        service.start()
+        val executed = AtomicInteger(0)
+
+        repeat(3) {
+            service.enqueueAction(chatId = 1L, threadId = null) {
+                delay(20)
+                executed.incrementAndGet()
+            }
+        }
+
+        service.shutdown()
+        assertEquals(3, executed.get(), "all pending messages should be drained before shutdown completes")
+    }
+
+    @Test
+    fun `different keys process independently`() {
+        val slowConfig =
+            object : ConfigProvider {
+                override val botId = 0L
+                override val botName = ""
+                override val botSocketPort = 0
+                override val botToken = ""
+                override val webhookToken = ""
+                override val dbPollingRate = 1000L
+                override val messageSendRate = 200L
+                override fun webhookEndpointFor(route: String) = ""
+            }
+        val service = ReplyService(slowConfig)
+        service.start()
+        val latch = CountDownLatch(2)
+
+        val startTime = System.currentTimeMillis()
+        for (i in 0L until 2L) {
+            service.enqueueAction(chatId = i, threadId = null) {
+                latch.countDown()
+            }
+        }
+
+        assertTrue(latch.await(5, TimeUnit.SECONDS), "both workers should complete")
+        val elapsed = System.currentTimeMillis() - startTime
+        // 직렬이면 최소 200ms+ (첫 번째 워커의 rate limit delay), 병렬이면 거의 즉시
+        assertTrue(elapsed < 150, "different key workers should not wait for each other's rate limit (took ${elapsed}ms)")
         service.shutdown()
     }
 }

@@ -20,7 +20,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
-data class ReplyQueueKey(val chatId: Long, val threadId: Long?)
+internal data class ReplyQueueKey(val chatId: Long, val threadId: Long?)
 
 // SendMsg : ye-seola/go-kdb
 
@@ -274,6 +274,19 @@ class ReplyService(
         )
     }
 
+    internal fun enqueueAction(
+        chatId: Long,
+        threadId: Long?,
+        action: suspend () -> Unit,
+    ): ReplyAdmissionResult =
+        enqueueRequest(
+            chatId,
+            threadId,
+            object : SendMessageRequest {
+                override suspend fun send() = action()
+            },
+        )
+
     override fun sendTextShare(
         room: Long,
         msg: String,
@@ -307,12 +320,17 @@ class ReplyService(
         lateinit var state: ReplyWorkerState
         val job =
             coroutineScope.launch {
+                var idleTimeout = false
                 try {
                     while (true) {
                         val request =
                             withTimeoutOrNull(WORKER_IDLE_TIMEOUT_MS) {
                                 channel.receive()
-                            } ?: break
+                            }
+                        if (request == null) {
+                            idleTimeout = true
+                            break
+                        }
 
                         try {
                             request.prepare()
@@ -327,7 +345,8 @@ class ReplyService(
                 } finally {
                     channel.close()
                     workerRegistry.remove(key, state)
-                    IrisLogger.debug("[ReplyService] worker($key) terminated (idle timeout)")
+                    val reason = if (idleTimeout) "idle timeout" else "channel closed"
+                    IrisLogger.debug("[ReplyService] worker($key) terminated ($reason)")
                 }
             }
         state = ReplyWorkerState(key, channel, job)
