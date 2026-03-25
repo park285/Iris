@@ -25,3 +25,28 @@ export const CHAT_MEDIA_SENDER_TARGET = {
   processMethod: 't',
   injectMethod: 'A',
 } as const;
+
+export const THREAD_IMAGE_GRAFT_HOOK_SPECS = {
+  b6: {
+    className: BASE_INTENT_FILTER_TARGET.className,
+    methodName: BASE_INTENT_FILTER_TARGET.captureMethod,
+  },
+  o: {
+    className: CHAT_MEDIA_SENDER_TARGET.className,
+    methodName: CHAT_MEDIA_SENDER_TARGET.entryMethod,
+  },
+  t: {
+    className: CHAT_MEDIA_SENDER_TARGET.className,
+    methodName: CHAT_MEDIA_SENDER_TARGET.processMethod,
+  },
+  A: {
+    className: CHAT_MEDIA_SENDER_TARGET.className,
+    methodName: CHAT_MEDIA_SENDER_TARGET.injectMethod,
+  },
+  u: {
+    className: KAKAO_IMAGE_GRAFT_TARGET.className,
+    methodName: KAKAO_IMAGE_GRAFT_TARGET.methodName,
+  },
+} as const;
+
+export type ThreadImageGraftHookKey = keyof typeof THREAD_IMAGE_GRAFT_HOOK_SPECS;
