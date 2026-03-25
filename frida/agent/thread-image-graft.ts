@@ -20,6 +20,12 @@ const fingerprintStore = new FingerprintSessionStore();
 let currentMediaSenderSession: SessionMeta | null = null;
 let threadImageGraftHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
+const hasNativePointer =
+  typeof (globalThis as typeof globalThis & { NativePointer?: unknown }).NativePointer !== 'undefined';
+const JavaBridgeGlobal = hasNativePointer
+  ? (((await import('frida-java-bridge')).default as unknown) as RuntimeLike['Java'])
+  : null;
+
 type RuntimeLike = {
   Java?: {
     available?: boolean;
@@ -108,6 +114,10 @@ function nowMs(runtime?: RuntimeLike): number {
     return runtime.now();
   }
   return Date.now();
+}
+
+function resolveJavaBridge(runtime: RuntimeLike): RuntimeLike['Java'] | null {
+  return runtime.Java ?? JavaBridgeGlobal;
 }
 
 function buildEmptyCounters(): ThreadImageGraftCounters {
@@ -377,7 +387,7 @@ function log(runtime: RuntimeLike, message: string): void {
 
 function resolveAvailableMethodTargets(runtime: RuntimeLike): Record<string, string[]> {
   const methodsByClass: Record<string, string[]> = {};
-  const JavaBridge = runtime.Java;
+  const JavaBridge = resolveJavaBridge(runtime);
   if (JavaBridge == null) {
     return methodsByClass;
   }
@@ -416,7 +426,7 @@ function readSendingLogClassNameFromMethod(method: any, argumentIndex: number): 
 }
 
 function resolveSendingLogClassName(runtime: RuntimeLike): string | null {
-  const JavaBridge = runtime.Java;
+  const JavaBridge = resolveJavaBridge(runtime);
   if (JavaBridge == null) {
     return null;
   }
@@ -444,7 +454,7 @@ function resolveAvailableFieldTargets(
   sendingLogClassName: string | null,
 ): Record<string, string[]> {
   const fieldsByClass: Record<string, string[]> = {};
-  const JavaBridge = runtime.Java;
+  const JavaBridge = resolveJavaBridge(runtime);
   if (JavaBridge == null || sendingLogClassName == null) {
     return fieldsByClass;
   }
@@ -722,7 +732,7 @@ function fingerprintUris(values: any): string {
 // ─── 훅 설치 ────────────────────────────────────────────────────────────────
 
 function installBaseIntentFilterHook(runtime: RuntimeLike, health: ThreadImageGraftHealth): void {
-  const JavaBridge = runtime.Java;
+  const JavaBridge = resolveJavaBridge(runtime);
   if (JavaBridge == null) {
     return;
   }
@@ -770,7 +780,7 @@ function installBaseIntentFilterHook(runtime: RuntimeLike, health: ThreadImageGr
 }
 
 function installChatMediaSenderHooks(runtime: RuntimeLike, health: ThreadImageGraftHealth): void {
-  const JavaBridge = runtime.Java;
+  const JavaBridge = resolveJavaBridge(runtime);
   if (JavaBridge == null) {
     return;
   }
@@ -878,7 +888,7 @@ function installChatMediaSenderHooks(runtime: RuntimeLike, health: ThreadImageGr
 }
 
 function installSendingLogHook(runtime: RuntimeLike, health: ThreadImageGraftHealth): void {
-  const JavaBridge = runtime.Java;
+  const JavaBridge = resolveJavaBridge(runtime);
   if (JavaBridge == null) {
     return;
   }
@@ -916,7 +926,7 @@ function installSendingLogHook(runtime: RuntimeLike, health: ThreadImageGraftHea
 // ─── 공개 진입점 ────────────────────────────────────────────────────────────
 
 export function installThreadImageGraft(runtime: RuntimeLike = globalThis as RuntimeLike): boolean {
-  const JavaBridge = runtime.Java;
+  const JavaBridge = resolveJavaBridge(runtime);
   if (JavaBridge == null || typeof JavaBridge.perform !== 'function') {
     return false;
   }
@@ -954,6 +964,9 @@ export function installThreadImageGraft(runtime: RuntimeLike = globalThis as Run
   return true;
 }
 
-if ((globalThis as RuntimeLike).Java?.available) {
-  installThreadImageGraft();
+if (JavaBridgeGlobal?.available) {
+  installThreadImageGraft({
+    ...(globalThis as RuntimeLike),
+    Java: JavaBridgeGlobal,
+  });
 }
