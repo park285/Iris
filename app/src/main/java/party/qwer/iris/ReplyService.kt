@@ -19,6 +19,8 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 
+data class ReplyQueueKey(val chatId: Long, val threadId: Long?)
+
 // SendMsg : ye-seola/go-kdb
 
 class ReplyService(
