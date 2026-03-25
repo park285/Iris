@@ -28,17 +28,8 @@ interface MessageSender {
         msg: String,
     ): ReplyAdmissionResult
 
-    fun sendThreadMarkdown(
+    fun sendReplyMarkdown(
         room: Long,
         msg: String,
-        threadId: Long,
-        threadScope: Int,
-    ): ReplyAdmissionResult
-
-    fun sendThreadTextShare(
-        room: Long,
-        msg: String,
-        threadId: Long,
-        threadScope: Int,
     ): ReplyAdmissionResult
 }
