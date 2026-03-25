@@ -10,13 +10,14 @@ import (
 
 type realRuntime struct {
 	deviceID string
+	handler  MessageHandler
 	manager  *frida.DeviceManager
 	session  *frida.Session
 	script   *frida.Script
 }
 
-func NewRuntime(deviceID, _ string) Runtime {
-	return &realRuntime{deviceID: deviceID}
+func NewRuntime(deviceID, _ string, handler MessageHandler) Runtime {
+	return &realRuntime{deviceID: deviceID, handler: handler}
 }
 
 func (r *realRuntime) ensureManager() *frida.DeviceManager {
@@ -49,6 +50,10 @@ func (r *realRuntime) Attach(pid int, bundle string) error {
 	}
 
 	script.On("message", func(message string, _ []byte) {
+		if r.handler != nil {
+			r.handler(message)
+			return
+		}
 		fmt.Println(message)
 	})
 

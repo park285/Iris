@@ -6,7 +6,7 @@ import "errors"
 
 type unavailableRuntime struct{}
 
-func NewRuntime(_, _ string) Runtime {
+func NewRuntime(_, _ string, _ MessageHandler) Runtime {
 	return unavailableRuntime{}
 }
 
