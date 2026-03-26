@@ -299,6 +299,8 @@ func TestNextPollInterval(t *testing.T) {
 		{StateWarm, 30, 5 * time.Second},
 		{StateReady, 1, 1 * time.Second},
 		{StateBooting, 1, 1 * time.Second},
+		{StateReady, 0, 1 * time.Second},
+		{StateBooting, 0, 1 * time.Second},
 	}
 
 	for _, tt := range tests {

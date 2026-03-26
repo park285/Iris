@@ -73,7 +73,7 @@ func pidLookupTimeout(cfg Config) time.Duration {
 }
 
 func nextPollInterval(state ReadinessState, baseSeconds int) time.Duration {
-	base := time.Duration(baseSeconds) * time.Second
+	base := max(time.Duration(baseSeconds)*time.Second, 1*time.Second)
 
 	switch state {
 	case StateReady:
