@@ -1,13 +1,15 @@
 package fridaapi
 
 import (
-	"encoding/json"
 	"strconv"
+
+	json "github.com/goccy/go-json"
 )
 
 type Runtime interface {
 	Attach(pid int, bundle string) error
 	UnloadAndDetach() error
+	Available() bool
 }
 
 type MessageHandler func(message string)
@@ -30,19 +32,24 @@ func ParseHealthMessage(message string) (HealthMessage, bool) {
 	if err := json.Unmarshal([]byte(message), &envelope); err != nil {
 		return HealthMessage{}, false
 	}
+
 	if envelope.Type != "send" || len(envelope.Payload) == 0 {
 		return HealthMessage{}, false
 	}
 
 	var payloadString string
-	if err := json.Unmarshal(envelope.Payload, &payloadString); err != nil {
-		return HealthMessage{}, false
-	}
 
 	var payload map[string]any
-	if err := json.Unmarshal([]byte(payloadString), &payload); err != nil {
-		return HealthMessage{}, false
+	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+		if err := json.Unmarshal(envelope.Payload, &payloadString); err != nil {
+			return HealthMessage{}, false
+		}
+
+		if err := json.Unmarshal([]byte(payloadString), &payload); err != nil {
+			return HealthMessage{}, false
+		}
 	}
+
 	if rawType, _ := payload["type"].(string); rawType != "graft-health" {
 		return HealthMessage{}, false
 	}
@@ -73,6 +80,7 @@ func boolMapValue(value any) map[string]bool {
 	if !ok || len(source) == 0 {
 		return nil
 	}
+
 	result := make(map[string]bool, len(source))
 	for key, raw := range source {
 		switch typed := raw.(type) {
@@ -84,6 +92,7 @@ func boolMapValue(value any) map[string]bool {
 			}
 		}
 	}
+
 	return result
 }
 
@@ -92,10 +101,12 @@ func int64MapValue(value any) map[string]int64 {
 	if !ok || len(source) == 0 {
 		return nil
 	}
+
 	result := make(map[string]int64, len(source))
 	for key, raw := range source {
 		appendInt64MapValue(result, key, raw)
 	}
+
 	return result
 }
 
@@ -104,8 +115,10 @@ func appendInt64MapValue(result map[string]int64, prefix string, value any) {
 		for key, raw := range nested {
 			appendInt64MapValue(result, prefix+"."+key, raw)
 		}
+
 		return
 	}
+
 	result[prefix] = int64Value(value)
 }
 

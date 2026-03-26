@@ -17,3 +17,7 @@ func (unavailableRuntime) Attach(_ int, _ string) error {
 func (unavailableRuntime) UnloadAndDetach() error {
 	return nil
 }
+
+func (unavailableRuntime) Available() bool {
+	return false
+}

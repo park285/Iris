@@ -1,5 +1,6 @@
 //go:build frida_core
 
+//nolint:depguard // Raw frida-go bindings are intentionally isolated in this adapter.
 package fridaapi
 
 import (
@@ -28,11 +29,6 @@ func (r *realRuntime) ensureManager() *frida.DeviceManager {
 }
 
 func (r *realRuntime) Attach(pid int, bundle string) error {
-	manager := r.ensureManager()
-	if _, err := manager.EnumerateDevices(); err != nil {
-		return err
-	}
-
 	device, err := frida.DeviceByID(r.deviceID)
 	if err != nil {
 		return fmt.Errorf("get device by id: %w", err)
@@ -96,4 +92,8 @@ func (r *realRuntime) UnloadAndDetach() error {
 	}
 
 	return nil
+}
+
+func (*realRuntime) Available() bool {
+	return true
 }

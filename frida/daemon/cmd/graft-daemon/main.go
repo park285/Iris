@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -16,19 +17,25 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
 	workingDir, err := os.Getwd()
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("resolve working directory: %w", err)
 	}
 
 	repoRoot, err := app.ResolveRepoRoot(workingDir)
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("resolve repo root: %w", err)
 	}
 
 	cfg, err := app.ParseConfig(repoRoot, os.Args[1:])
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("parse config: %w", err)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -38,16 +45,22 @@ func main() {
 		HeartbeatTTL: time.Duration(cfg.HeartbeatTimeoutSeconds) * time.Second,
 	})
 	if _, err := app.StartReadinessServer(ctx, cfg.ReadinessAddr, readiness); err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("start readiness server: %w", err)
 	}
 
-	pidFinder := adb.Service{Runner: adb.ExecRunner{}}
+	pidFinder := adb.NewService()
 	bundler := agentbuild.NewBundler(cfg.FridaCoreDevkitDir)
-	reconciler := lifecycle.NewRunner(fridaapi.NewRuntime(cfg.DeviceID, cfg.FridaCoreDevkitDir, func(message string) {
+	runtime := fridaapi.NewRuntime(cfg.DeviceID, cfg.FridaCoreDevkitDir, func(message string) {
 		readiness.ObserveScriptMessage(message)
-	}), readiness)
+	})
+	if !runtime.Available() {
+		return fmt.Errorf("frida runtime backend is not available; rebuild with -tags frida_core")
+	}
+	reconciler := lifecycle.NewRunner(runtime, readiness)
 
 	if err := app.Run(ctx, cfg, pidFinder, bundler, reconciler); err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("run daemon: %w", err)
 	}
+
+	return nil
 }
