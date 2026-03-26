@@ -48,10 +48,15 @@ internal object ImageBridgeServer {
 
     private fun serve() {
         val serverSocket = LocalServerSocket(SOCKET_NAME)
-        Log.i(TAG, "bridge server listening on @$SOCKET_NAME")
-        while (running.get()) {
-            val client = serverSocket.accept()
-            handleClient(client)
+        try {
+            Log.i(TAG, "bridge server listening on @$SOCKET_NAME")
+            while (running.get()) {
+                val client = serverSocket.accept()
+                handleClient(client)
+            }
+        } finally {
+            runCatching { serverSocket.close() }
+            Log.i(TAG, "bridge server socket closed")
         }
     }
 

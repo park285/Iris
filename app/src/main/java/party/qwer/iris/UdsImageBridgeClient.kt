@@ -35,6 +35,7 @@ internal class UdsImageBridgeClient(
                     socketName,
                     LocalSocketAddress.Namespace.ABSTRACT,
                 ),
+                connectTimeoutMs,
             )
             socket.soTimeout = readTimeoutMs
 
