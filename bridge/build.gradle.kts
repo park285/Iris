@@ -32,12 +32,13 @@ android {
         abortOnError = true
         warningsAsErrors = true
         disable += setOf("PrivateApi", "SdCardPath")
-        disable += setOf(
-            "GradleDependency",
-            "NewerVersionAvailable",
-            "AndroidGradlePluginVersion",
-            "OldTargetApi",
-        )
+        disable +=
+            setOf(
+                "GradleDependency",
+                "NewerVersionAvailable",
+                "AndroidGradlePluginVersion",
+                "OldTargetApi",
+            )
     }
 }
 
