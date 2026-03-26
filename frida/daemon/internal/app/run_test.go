@@ -152,20 +152,11 @@ func (f *blockingPIDFinder) LookupPID(ctx context.Context, _ string) (int, error
 }
 
 type contextBoundPIDSession struct {
-	openCtx context.Context
-	calls   int
+	calls int
 }
 
 func (s *contextBoundPIDSession) LookupPID(context.Context) (int, error) {
 	s.calls++
-
-	if s.calls > 1 {
-		select {
-		case <-s.openCtx.Done():
-			return 0, errors.New("session context canceled")
-		default:
-		}
-	}
 
 	return 4321, nil
 }
@@ -178,10 +169,10 @@ type contextBoundPIDSessionFactory struct {
 	opens int
 }
 
-func (f *contextBoundPIDSessionFactory) Open(ctx context.Context, _ string) (adb.PIDSession, error) {
+func (f *contextBoundPIDSessionFactory) Open(_ context.Context, _ string) (adb.PIDSession, error) {
 	f.opens++
 
-	return &contextBoundPIDSession{openCtx: ctx}, nil
+	return &contextBoundPIDSession{}, nil
 }
 
 type fakeSourceVersioner struct {
