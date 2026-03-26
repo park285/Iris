@@ -157,10 +157,14 @@ type Config struct {
 ```
 
 CLI 플래그:
-- `--agent thread-image-graft` — embedded bundle 선택 (기존: `--agent generated/thread-image-graft.js`)
-- `--agent-override /path/to.js` — 파일에서 읽기 (신규)
+- `--agent thread-image-graft` — embedded bundle 선택 **(필수)**. 기존: `--agent generated/thread-image-graft.js`
+- `--agent-override /path/to.js` — 파일에서 읽기 **(선택)**. 지정 시 embed 대신 파일 사용
+
+**플래그 우선순위**: `--agent`는 항상 필수. `--agent-override`가 지정되면 embed 대신 파일을 읽되, `--agent` 값은 로그 식별자로 사용. 즉 `--agent-override`는 `--agent`를 대체하지 않고 bundle 소스만 override한다.
 
 **Breaking change**: `--agent` 의미가 경로에서 이름으로 변경. 단일 배포(KR host systemd unit)이므로 unit 파일 업데이트로 해결.
+
+**`ParseConfig` 변경**: `AgentProjectRoot`/`AgentEntryPoint` 제거에 따라 `repoRoot` 파라미터가 불필요해짐. `ResolveRepoRoot()` 함수와 `ParseConfig(repoRoot, args)` 시그니처를 `ParseConfig(args)` 로 단순화.
 
 ### main.go 와이어링
 
@@ -183,6 +187,7 @@ if cfg.AgentOverride != "" {
 
 log.Printf("agent=%s source=%s", cfg.AgentName, source)
 
+// ResolveRepoRoot 호출 제거 — AgentProjectRoot 불필요
 app.Run(ctx, cfg, pidFinder, reconciler, readiness.CurrentState, source)
 ```
 
@@ -298,8 +303,12 @@ func Run(ctx context.Context, cfg Config, pidFinder PIDFinder,
 | `bundleCache` struct + `get()` in `run.go` | ~30 | BundleSource로 대체 |
 | `BundleBuilder` interface in `run.go` | ~3 | BundleSource로 대체 |
 | `runWithSourceVersioner()` in `run.go` | ~70 | Run()으로 통합 |
+| `RunOnce()` in `run.go` | ~12 | BundleBuilder 의존, 사용처 없음 |
+| `ResolveRepoRoot()` in `config.go` | ~15 | AgentProjectRoot 제거로 불필요 |
 | `go.mod`: `fsnotify` | - | sourceVersioner 제거 |
-| **합계** | **~550+** | |
+| **합계** | **~580+** | |
+
+**참고**: `frida_core` / `!frida_core` build tag는 `agentbuild` 패키지에서만 제거됨. `fridaapi/client_real.go` 등 Runtime 관련 build tag는 유지 (frida-go CGO 바인딩용).
 
 ### Makefile
 
@@ -314,11 +323,17 @@ sync-bundles:
 	cp ../agent/generated/*.js $(BUNDLE_DIR)/
 
 .PHONY: build
-build: lint sync-bundles
+build: lint
+	GOWORK=off $(GO) build ./...
+
+.PHONY: build-fresh
+build-fresh: lint sync-bundles
 	GOWORK=off $(GO) build ./...
 ```
 
-- `sync-bundles`는 **개발 편의 도구**. `go build`는 커밋된 JS로 항상 성공.
+- `go build`/`make build`는 커밋된 JS로 **항상 성공** (sync-bundles 불필요).
+- `make build-fresh`는 agent 소스 변경 후 최신 JS를 동기화하여 빌드.
+- `sync-bundles`는 **개발 편의 도구**. CI/일반 빌드에서는 커밋된 JS 사용.
 - stale 파일 방지를 위해 복사 전 `rm -f`.
 - source 부재 시 명시적 실패.
 
@@ -347,12 +362,14 @@ systemd unit 플래그 변경:
   - `TestBundleCacheDoesNotReturnStaleBundleAfterBuildError`
 - `run_test.go`의 `TestRunRebuildsBundleAfterAgentSourceChanges`
 - `run_test.go`의 `fakeBundleBuilder`, `fakeSourceVersioner`
+- `run_test.go`의 `TestRunOnceBuildsBundleAndReconcilesPID` (`RunOnce` 제거)
+- `config_test.go`의 `TestResolveRepoRootWalksUpFromDaemonDir` (`ResolveRepoRoot` 제거)
+- `config_test.go`의 `TestParseConfigRejectsEscapingAgentPath` (경로 탈출 검증 불필요)
 
 ### 수정 대상 테스트
 
 - `run_test.go`: `fakeBundleBuilder` → `fakeBundleSource` (Bundle() + String())
 - `config_test.go`: `AgentProjectRoot`/`AgentEntryPoint` → `AgentName`/`AgentOverride`
-- `RunOnce` 제거 시 관련 테스트도 제거
 
 ### 신규 테스트
 
@@ -368,7 +385,10 @@ systemd unit 플래그 변경:
   - 연속 동일 에러 시 로그 suppression
 - `config_test.go`:
   - `--agent` + `--agent-override` 파싱
-  - `--agent-override` 단독 사용
+  - `--agent` 누락 시 에러 (필수 플래그)
+- `main.go` (또는 통합 테스트):
+  - `--agent-override` 파일 없음 시 startup 즉시 실패
+  - `--agent-override` 존재 시 embed 대신 파일 사용
 
 ## 의존성 방향
 
