@@ -135,9 +135,10 @@ func (f *fakePIDFinder) LookupPID(_ context.Context, _ string) (int, error) {
 }
 
 type blockingPIDFinder struct {
-	started  chan struct{}
-	timedOut chan struct{}
-	once     sync.Once
+	started      chan struct{}
+	timedOut     chan struct{}
+	once         sync.Once
+	timedOutOnce sync.Once
 }
 
 func (f *blockingPIDFinder) LookupPID(ctx context.Context, _ string) (int, error) {
@@ -146,7 +147,9 @@ func (f *blockingPIDFinder) LookupPID(ctx context.Context, _ string) (int, error
 	})
 
 	<-ctx.Done()
-	close(f.timedOut)
+	f.timedOutOnce.Do(func() {
+		close(f.timedOut)
+	})
 
 	return 0, fmt.Errorf("blocking pid finder canceled: %w", ctx.Err())
 }
@@ -282,6 +285,30 @@ func TestBundleCacheDoesNotReturnStaleBundleAfterBuildError(t *testing.T) {
 	}
 }
 
+func TestNextPollInterval(t *testing.T) {
+	tests := []struct {
+		state   ReadinessState
+		baseSec int
+		want    time.Duration
+	}{
+		{StateReady, 30, 30 * time.Second},
+		{StateBooting, 30, 5 * time.Second},
+		{StateHooking, 30, 2 * time.Second},
+		{StateDegraded, 30, 2 * time.Second},
+		{StateBlocked, 30, 10 * time.Second},
+		{StateWarm, 30, 5 * time.Second},
+		{StateReady, 1, 1 * time.Second},
+		{StateBooting, 1, 1 * time.Second},
+	}
+
+	for _, tt := range tests {
+		got := nextPollInterval(tt.state, tt.baseSec)
+		if got != tt.want {
+			t.Errorf("nextPollInterval(%q, %d) = %s, want %s", tt.state, tt.baseSec, got, tt.want)
+		}
+	}
+}
+
 func TestRunReturnsOnContextCancellationAfterShutdown(t *testing.T) {
 	agentRoot, entryPoint := writeTempAgentProject(t)
 
@@ -298,7 +325,7 @@ func TestRunReturnsOnContextCancellationAfterShutdown(t *testing.T) {
 	reconciler := &fakeReconciler{}
 	pidFinder := &fakePIDFinder{pid: 4321}
 
-	if err := Run(ctx, cfg, pidFinder, builder, reconciler); err != nil {
+	if err := Run(ctx, cfg, pidFinder, builder, reconciler, func() ReadinessState { return StateReady }); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
 
@@ -329,7 +356,7 @@ func TestRunRetriesAfterReconcileFailure(t *testing.T) {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- runWithSourceVersioner(ctx, cfg, pidFinder, builder, reconciler, &fakeSourceVersioner{version: 1})
+		done <- runWithSourceVersioner(ctx, cfg, pidFinder, builder, reconciler, &fakeSourceVersioner{version: 1}, func() ReadinessState { return StateReady })
 	}()
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -381,7 +408,7 @@ func TestRunUsesBoundedPIDLookupContext(t *testing.T) {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- runWithSourceVersioner(ctx, cfg, pidFinder, builder, reconciler, &fakeSourceVersioner{version: 1})
+		done <- runWithSourceVersioner(ctx, cfg, pidFinder, builder, reconciler, &fakeSourceVersioner{version: 1}, func() ReadinessState { return StateReady })
 	}()
 
 	select {
@@ -427,23 +454,6 @@ func TestLookupPIDWithTimeoutKeepsReusablePIDSessionAlive(t *testing.T) {
 	}
 }
 
-func TestWaitRetryZeroDelayStillYields(t *testing.T) {
-	timer := time.NewTimer(time.Hour)
-	if !timer.Stop() {
-		<-timer.C
-	}
-
-	start := time.Now()
-
-	if !waitRetry(t.Context(), 0, timer) {
-		t.Fatal("waitRetry returned false, want true")
-	}
-
-	if elapsed := time.Since(start); elapsed < 20*time.Millisecond {
-		t.Fatalf("waitRetry elapsed = %s, want at least 20ms yield", elapsed)
-	}
-}
-
 func TestRunRebuildsBundleAfterAgentSourceChanges(t *testing.T) {
 	agentRoot, entryPoint := writeTempAgentProject(t)
 
@@ -466,7 +476,7 @@ func TestRunRebuildsBundleAfterAgentSourceChanges(t *testing.T) {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- runWithSourceVersioner(ctx, cfg, pidFinder, builder, reconciler, sourceVersioner)
+		done <- runWithSourceVersioner(ctx, cfg, pidFinder, builder, reconciler, sourceVersioner, func() ReadinessState { return StateReady })
 	}()
 
 	deadline := time.Now().Add(2 * time.Second)

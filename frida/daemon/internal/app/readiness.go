@@ -2,15 +2,18 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"maps"
 	"net"
 	"net/http"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	json "github.com/goccy/go-json"
 
 	"github.com/park285/Iris/frida/daemon/internal/fridaapi"
 )
@@ -62,7 +65,16 @@ type ReadinessTracker struct {
 	pid           int
 	baseState     ReadinessState
 	lastHeartbeat time.Time
-	lastHealth    *fridaapi.HealthMessage
+	lastHealth    *readinessHealth
+}
+
+type readinessHealth struct {
+	event       string
+	ready       bool
+	hooks       map[string]bool
+	counters    map[string]int64
+	timestampMs int64
+	payload     map[string]any
 }
 
 func NewReadinessTracker(opts ReadinessOptions) *ReadinessTracker {
@@ -70,6 +82,7 @@ func NewReadinessTracker(opts ReadinessOptions) *ReadinessTracker {
 	if len(requiredHooks) == 0 {
 		requiredHooks = append([]string(nil), defaultRequiredHooks...)
 	}
+
 	sort.Strings(requiredHooks)
 
 	now := opts.Now
@@ -113,6 +126,7 @@ func (t *ReadinessTracker) ObserveDetach() {
 	t.pid = 0
 	t.baseState = StateBooting
 	t.lastHeartbeat = time.Time{}
+	t.lastHealth = nil
 }
 
 func (t *ReadinessTracker) Detached() {
@@ -129,7 +143,15 @@ func (t *ReadinessTracker) ObserveScriptMessage(message string) bool {
 	defer t.mu.Unlock()
 
 	t.lastHeartbeat = t.now()
-	t.lastHealth = &health
+	t.lastHealth = &readinessHealth{
+		event:       health.Event,
+		ready:       health.Ready,
+		hooks:       copyBoolMap(health.Hooks),
+		counters:    copyInt64Map(health.Counters),
+		timestampMs: health.TimestampMs,
+		payload:     copyAnyMap(health.Payload),
+	}
+
 	t.baseState = normalizeState(health.State)
 	if t.baseState == "" {
 		if health.Ready {
@@ -138,87 +160,103 @@ func (t *ReadinessTracker) ObserveScriptMessage(message string) bool {
 			t.baseState = StateWarm
 		}
 	}
+
 	return true
 }
 
+func (t *ReadinessTracker) CurrentState() ReadinessState {
+	return t.Snapshot().State
+}
+
 func (t *ReadinessTracker) Snapshot() ReadinessSnapshot {
+	return cloneReadinessSnapshot(buildReadinessSnapshot(t.snapshotInputs()))
+}
+
+type readinessSnapshotInputs struct {
+	attached      bool
+	pid           int
+	baseState     ReadinessState
+	lastHeartbeat time.Time
+	lastHealth    *readinessHealth
+	requiredHooks []string
+	now           func() time.Time
+	heartbeatTTL  time.Duration
+}
+
+func (t *ReadinessTracker) snapshotInputs() readinessSnapshotInputs {
 	t.mu.RLock()
-	attached := t.attached
-	pid := t.pid
-	baseState := t.baseState
-	lastHeartbeat := t.lastHeartbeat
-	var lastHealth *fridaapi.HealthMessage
-	if t.lastHealth != nil {
-		copyHealth := *t.lastHealth
-		lastHealth = &copyHealth
+
+	inputs := readinessSnapshotInputs{
+		attached:      t.attached,
+		pid:           t.pid,
+		baseState:     t.baseState,
+		lastHeartbeat: t.lastHeartbeat,
+		requiredHooks: append([]string(nil), t.requiredHooks...),
+		now:           t.now,
+		heartbeatTTL:  t.heartbeatTTL,
 	}
-	requiredHooks := append([]string(nil), t.requiredHooks...)
-	now := t.now
-	heartbeatTTL := t.heartbeatTTL
+
+	inputs.lastHealth = t.lastHealth
+
 	t.mu.RUnlock()
 
+	return inputs
+}
+
+func buildReadinessSnapshot(inputs readinessSnapshotInputs) ReadinessSnapshot {
 	snapshot := ReadinessSnapshot{
-		State:       baseState,
-		TimestampMs: now().UnixMilli(),
-		Attached:    attached,
-		PID:         pid,
+		State:       inputs.baseState,
+		TimestampMs: inputs.now().UnixMilli(),
+		Attached:    inputs.attached,
+		PID:         inputs.pid,
 	}
 
-	if !attached {
+	if !inputs.attached {
 		snapshot.State = StateBooting
 		snapshot.Detail = "waiting for Frida attach"
+
 		return snapshot
 	}
 
-	if lastHealth == nil {
+	if inputs.lastHealth == nil {
 		snapshot.State = StateHooking
-		snapshot.Detail = fmt.Sprintf("attached to pid %d; waiting for agent health", pid)
+		snapshot.Detail = fmt.Sprintf("attached to pid %d; waiting for agent health", inputs.pid)
+
 		return snapshot
 	}
 
-	snapshot.LastEvent = lastHealth.Event
-	snapshot.LastHeartbeatMs = unixMilli(lastHeartbeat)
-	snapshot.AgentTimestampMs = lastHealth.TimestampMs
-	snapshot.Hooks = copyBoolMap(lastHealth.Hooks)
-	snapshot.Counters = copyInt64Map(lastHealth.Counters)
-	snapshot.LastPayload = copyAnyMap(lastHealth.Payload)
+	populateSnapshotHealth(&snapshot, inputs)
 
-	if !lastHeartbeat.IsZero() {
-		snapshot.HeartbeatAgeMs = now().UnixMilli() - lastHeartbeat.UnixMilli()
-	}
+	missingHooks := populateSnapshotDerivedState(&snapshot, inputs)
 
-	missingHooks := missingRequiredHooks(requiredHooks, lastHealth.Hooks)
-	if len(missingHooks) > 0 {
-		snapshot.MissingHooks = missingHooks
-	}
-
-	if heartbeatTTL > 0 && !lastHeartbeat.IsZero() && now().Sub(lastHeartbeat) > heartbeatTTL {
+	if isHeartbeatStale(inputs, snapshot.HeartbeatAgeMs) {
 		snapshot.State = StateDegraded
 		snapshot.HeartbeatStale = true
 		snapshot.Detail = fmt.Sprintf("agent heartbeat stale for %dms", snapshot.HeartbeatAgeMs)
+
 		return snapshot
 	}
 
 	if len(missingHooks) > 0 {
-		if lastHealth.Ready || baseState == StateReady || baseState == StateBlocked {
-			snapshot.State = StateBlocked
-			snapshot.Detail = fmt.Sprintf("missing required hooks: %s", strings.Join(missingHooks, ", "))
-		} else {
-			snapshot.State = StateHooking
-			snapshot.Detail = fmt.Sprintf("waiting for required hooks: %s", strings.Join(missingHooks, ", "))
-		}
+		setMissingHooksDetail(&snapshot, inputs, missingHooks)
 		return snapshot
 	}
 
-	switch baseState {
+	return applyBaseStateDetail(snapshot, inputs)
+}
+
+func applyBaseStateDetail(snapshot ReadinessSnapshot, inputs readinessSnapshotInputs) ReadinessSnapshot {
+	switch inputs.baseState {
 	case StateReady:
-		snapshot.Ready = lastHealth.Ready
+		snapshot.Ready = inputs.lastHealth.ready
 		if snapshot.Ready {
 			snapshot.Detail = "agent heartbeat is fresh and all required hooks are installed"
 			return snapshot
 		}
+
 		snapshot.State = StateWarm
 		snapshot.Detail = "agent reported READY state without ready=true"
+
 		return snapshot
 	case StateBlocked:
 		snapshot.Detail = "agent reported blocked state"
@@ -233,16 +271,60 @@ func (t *ReadinessTracker) Snapshot() ReadinessSnapshot {
 		snapshot.Detail = "agent is still installing required hooks"
 		return snapshot
 	default:
-		if lastHealth.Ready {
+		if inputs.lastHealth.ready {
 			snapshot.State = StateReady
 			snapshot.Ready = true
 			snapshot.Detail = "agent heartbeat is fresh and all required hooks are installed"
+
 			return snapshot
 		}
+
 		snapshot.State = StateWarm
 		snapshot.Detail = "agent health received but readiness is still false"
+
 		return snapshot
 	}
+}
+
+func populateSnapshotHealth(snapshot *ReadinessSnapshot, inputs readinessSnapshotInputs) {
+	snapshot.LastEvent = inputs.lastHealth.event
+	snapshot.LastHeartbeatMs = unixMilli(inputs.lastHeartbeat)
+	snapshot.AgentTimestampMs = inputs.lastHealth.timestampMs
+	snapshot.Hooks = inputs.lastHealth.hooks
+	snapshot.Counters = inputs.lastHealth.counters
+	snapshot.LastPayload = inputs.lastHealth.payload
+
+	if !inputs.lastHeartbeat.IsZero() {
+		snapshot.HeartbeatAgeMs = inputs.now().UnixMilli() - inputs.lastHeartbeat.UnixMilli()
+	}
+}
+
+func populateSnapshotDerivedState(snapshot *ReadinessSnapshot, inputs readinessSnapshotInputs) []string {
+	missingHooks := missingRequiredHooks(inputs.requiredHooks, inputs.lastHealth.hooks)
+	if len(missingHooks) > 0 {
+		snapshot.MissingHooks = missingHooks
+	}
+
+	return missingHooks
+}
+
+func isHeartbeatStale(inputs readinessSnapshotInputs, heartbeatAgeMs int64) bool {
+	return inputs.heartbeatTTL > 0 &&
+		!inputs.lastHeartbeat.IsZero() &&
+		inputs.now().Sub(inputs.lastHeartbeat) > inputs.heartbeatTTL &&
+		heartbeatAgeMs >= 0
+}
+
+func setMissingHooksDetail(snapshot *ReadinessSnapshot, inputs readinessSnapshotInputs, missingHooks []string) {
+	if inputs.lastHealth.ready || inputs.baseState == StateReady || inputs.baseState == StateBlocked {
+		snapshot.State = StateBlocked
+		snapshot.Detail = fmt.Sprintf("missing required hooks: %s", strings.Join(missingHooks, ", "))
+
+		return
+	}
+
+	snapshot.State = StateHooking
+	snapshot.Detail = fmt.Sprintf("waiting for required hooks: %s", strings.Join(missingHooks, ", "))
 }
 
 type snapshotter interface {
@@ -257,38 +339,48 @@ func NewReadinessHandler(source snapshotter) http.Handler {
 		}
 
 		snapshot := source.Snapshot()
+
 		status := http.StatusOK
+
 		if !snapshot.Ready {
 			status = http.StatusServiceUnavailable
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
+
 		_ = json.NewEncoder(w).Encode(snapshot)
 	})
 }
 
 func StartReadinessServer(ctx context.Context, addr string, source snapshotter) (*http.Server, error) {
-	listener, err := net.Listen("tcp", addr)
+	listenConfig := net.ListenConfig{}
+
+	listener, err := listenConfig.Listen(ctx, "tcp", addr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("listen on %s: %w", addr, err)
 	}
 
 	mux := http.NewServeMux()
 	mux.Handle(DefaultReadinessPath, NewReadinessHandler(source))
 
-	server := &http.Server{Handler: mux}
+	server := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
 
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
+
 		_ = server.Shutdown(shutdownCtx)
 	}()
 
 	go func() {
 		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			// Server lifecycle is best-effort; main flow continues to fail closed via readiness=false.
+			log.Printf("readiness server stopped unexpectedly: %v", err)
 		}
 	}()
 
@@ -321,6 +413,7 @@ func missingRequiredHooks(required []string, hooks map[string]bool) []string {
 			missing = append(missing, hook)
 		}
 	}
+
 	return missing
 }
 
@@ -328,6 +421,7 @@ func unixMilli(ts time.Time) int64 {
 	if ts.IsZero() {
 		return 0
 	}
+
 	return ts.UnixMilli()
 }
 
@@ -335,10 +429,10 @@ func copyBoolMap(src map[string]bool) map[string]bool {
 	if len(src) == 0 {
 		return nil
 	}
+
 	dst := make(map[string]bool, len(src))
-	for key, value := range src {
-		dst[key] = value
-	}
+	maps.Copy(dst, src)
+
 	return dst
 }
 
@@ -346,10 +440,10 @@ func copyInt64Map(src map[string]int64) map[string]int64 {
 	if len(src) == 0 {
 		return nil
 	}
+
 	dst := make(map[string]int64, len(src))
-	for key, value := range src {
-		dst[key] = value
-	}
+	maps.Copy(dst, src)
+
 	return dst
 }
 
@@ -357,9 +451,18 @@ func copyAnyMap(src map[string]any) map[string]any {
 	if len(src) == 0 {
 		return nil
 	}
+
 	dst := make(map[string]any, len(src))
-	for key, value := range src {
-		dst[key] = value
-	}
+	maps.Copy(dst, src)
+
 	return dst
+}
+
+func cloneReadinessSnapshot(snapshot ReadinessSnapshot) ReadinessSnapshot {
+	snapshot.Hooks = copyBoolMap(snapshot.Hooks)
+	snapshot.Counters = copyInt64Map(snapshot.Counters)
+	snapshot.LastPayload = copyAnyMap(snapshot.LastPayload)
+	snapshot.MissingHooks = append([]string(nil), snapshot.MissingHooks...)
+
+	return snapshot
 }

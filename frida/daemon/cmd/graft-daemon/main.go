@@ -58,7 +58,7 @@ func run() error {
 	}
 	reconciler := lifecycle.NewRunner(runtime, readiness)
 
-	if err := app.Run(ctx, cfg, pidFinder, bundler, reconciler); err != nil {
+	if err := app.Run(ctx, cfg, pidFinder, bundler, reconciler, readiness.CurrentState); err != nil {
 		return fmt.Errorf("run daemon: %w", err)
 	}
 

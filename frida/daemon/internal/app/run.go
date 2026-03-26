@@ -61,28 +61,6 @@ func (c *bundleCache) get(ctx context.Context, cfg Config, builder BundleBuilder
 	return c.bundle, nil
 }
 
-func waitRetry(ctx context.Context, delay time.Duration, timer *time.Timer) bool {
-	if delay <= 0 {
-		delay = minRetryDelay
-	}
-
-	if !timer.Stop() {
-		select {
-		case <-timer.C:
-		default:
-		}
-	}
-
-	timer.Reset(delay)
-
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
-	}
-}
-
 func pidLookupTimeout(cfg Config) time.Duration {
 	pollInterval := time.Duration(cfg.PidPollIntervalSeconds) * time.Second
 	if pollInterval <= 0 {
@@ -92,6 +70,27 @@ func pidLookupTimeout(cfg Config) time.Duration {
 	timeout := pollInterval / 2
 
 	return min(max(timeout, minPIDLookupTimeout), maxPIDLookupTimeout)
+}
+
+func nextPollInterval(state ReadinessState, baseSeconds int) time.Duration {
+	base := time.Duration(baseSeconds) * time.Second
+
+	switch state {
+	case StateReady:
+		return base
+	case StateBooting:
+		return min(5*time.Second, base)
+	case StateHooking:
+		return min(2*time.Second, base)
+	case StateDegraded:
+		return min(2*time.Second, base)
+	case StateBlocked:
+		return min(10*time.Second, base)
+	case StateWarm:
+		return min(5*time.Second, base)
+	default:
+		return min(5*time.Second, base)
+	}
 }
 
 func lookupPIDWithTimeout(ctx context.Context, cfg Config, pidFinder PIDFinder) (int, error) {
@@ -119,7 +118,7 @@ func RunOnce(ctx context.Context, cfg Config, pid int, builder BundleBuilder, re
 	return nil
 }
 
-func Run(ctx context.Context, cfg Config, pidFinder PIDFinder, builder BundleBuilder, reconciler Reconciler) error {
+func Run(ctx context.Context, cfg Config, pidFinder PIDFinder, builder BundleBuilder, reconciler Reconciler, stateFunc func() ReadinessState) error {
 	versioner, err := newSourceVersioner(cfg.AgentProjectRoot)
 	if err != nil {
 		return fmt.Errorf("watch agent sources: %w", err)
@@ -138,7 +137,7 @@ func Run(ctx context.Context, cfg Config, pidFinder PIDFinder, builder BundleBui
 		}
 	}()
 
-	if err := runWithSourceVersioner(ctx, cfg, pidFinder, builder, reconciler, versioner); err != nil {
+	if err := runWithSourceVersioner(ctx, cfg, pidFinder, builder, reconciler, versioner, stateFunc); err != nil {
 		return fmt.Errorf("run with source versioner: %w", err)
 	}
 
@@ -152,72 +151,75 @@ func runWithSourceVersioner(
 	builder BundleBuilder,
 	reconciler Reconciler,
 	versioner sourceVersioner,
+	stateFunc func() ReadinessState,
 ) error {
-	ticker := time.NewTicker(time.Duration(cfg.PidPollIntervalSeconds) * time.Second)
-	defer ticker.Stop()
 	defer func() {
 		if err := reconciler.Shutdown(); err != nil {
 			log.Printf("reconciler shutdown failed: %v", err)
 		}
 	}()
 
-	retryDelay := time.Duration(cfg.RetryDelaySeconds) * time.Second
+	if stateFunc == nil {
+		stateFunc = func() ReadinessState { return StateBooting }
+	}
+
+	retryDelay := max(time.Duration(cfg.RetryDelaySeconds)*time.Second, minRetryDelay)
 
 	cache := &bundleCache{}
 
-	retryTimer := time.NewTimer(retryDelay)
-	if !retryTimer.Stop() {
-		<-retryTimer.C
-	}
+	pollTimer := time.NewTimer(0)
+	defer pollTimer.Stop()
 
-	defer retryTimer.Stop()
+	var lastPID int
+	var lastBundle string
+	lastState := ReadinessState("")
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		default:
+		case <-pollTimer.C:
 		}
 
 		pid, err := lookupPIDWithTimeout(ctx, cfg, pidFinder)
 		if err != nil {
 			log.Printf("pid lookup failed for device=%s: %v", cfg.DeviceID, err)
-
-			select {
-			case <-ctx.Done():
-				return nil
-			case <-ticker.C:
-				continue
-			}
+			pollTimer.Reset(retryDelay)
+			continue
 		}
 
 		bundle, bundleErr := cache.get(ctx, cfg, builder, versioner)
 		if bundleErr != nil {
 			log.Printf("bundle build failed for agent=%s: %v", cfg.AgentEntryPoint, bundleErr)
-
-			if !waitRetry(ctx, retryDelay, retryTimer) {
-				return nil
-			}
-
+			pollTimer.Reset(retryDelay)
 			continue
 		}
 
 		if runErr := reconciler.Reconcile(pid, bundle); runErr != nil {
 			log.Printf("reconcile failed for pid=%d agent=%s: %v", pid, cfg.AgentEntryPoint, runErr)
-
-			if !waitRetry(ctx, retryDelay, retryTimer) {
-				return nil
-			}
-
+			pollTimer.Reset(retryDelay)
 			continue
 		}
 
-		log.Printf("reconcile ok for pid=%d agent=%s", pid, cfg.AgentEntryPoint)
-
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
+		if pid != lastPID {
+			log.Printf("attached pid=%d agent=%s", pid, cfg.AgentEntryPoint)
+			lastPID = pid
+			lastBundle = bundle
+		} else if bundle != lastBundle {
+			log.Printf("reloaded bundle for pid=%d agent=%s", pid, cfg.AgentEntryPoint)
+			lastBundle = bundle
 		}
+
+		state := stateFunc()
+		if state != lastState {
+			if lastState == "" {
+				log.Printf("state=%s pid=%d", state, pid)
+			} else {
+				log.Printf("state %s -> %s pid=%d", lastState, state, pid)
+			}
+			lastState = state
+		}
+
+		pollTimer.Reset(nextPollInterval(state, cfg.PidPollIntervalSeconds))
 	}
 }
