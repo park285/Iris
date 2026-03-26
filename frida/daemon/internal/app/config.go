@@ -4,8 +4,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"os"
-	"path/filepath"
 )
 
 type Config struct {
@@ -49,19 +47,3 @@ func ParseConfig(args []string) (Config, error) {
 	}, nil
 }
 
-func ResolveRepoRoot(startDir string) (string, error) {
-	current := filepath.Clean(startDir)
-
-	for {
-		if _, err := os.Stat(filepath.Join(current, "settings.gradle.kts")); err == nil {
-			return current, nil
-		}
-
-		parent := filepath.Dir(current)
-		if parent == current {
-			return "", errors.New("repo root not found")
-		}
-
-		current = parent
-	}
-}

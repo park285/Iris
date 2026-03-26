@@ -1,9 +1,6 @@
 package app
 
-import (
-	"os"
-	"testing"
-)
+import "testing"
 
 func TestParseConfigSetsAgentName(t *testing.T) {
 	cfg, err := ParseConfig([]string{"--agent", "thread-image-graft"})
@@ -84,24 +81,3 @@ func TestParseConfigCarriesReadinessSettings(t *testing.T) {
 	}
 }
 
-func TestResolveRepoRootWalksUpFromDaemonDir(t *testing.T) {
-	root := t.TempDir()
-
-	deep := root + "/frida/daemon"
-	if err := os.MkdirAll(deep, 0o750); err != nil {
-		t.Fatalf("MkdirAll returned error: %v", err)
-	}
-
-	if err := os.WriteFile(root+"/settings.gradle.kts", []byte("rootProject.name = \"Iris\""), 0o600); err != nil {
-		t.Fatalf("WriteFile returned error: %v", err)
-	}
-
-	got, err := ResolveRepoRoot(deep)
-	if err != nil {
-		t.Fatalf("ResolveRepoRoot returned error: %v", err)
-	}
-
-	if got != root {
-		t.Fatalf("ResolveRepoRoot = %q, want %q", got, root)
-	}
-}

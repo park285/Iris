@@ -28,6 +28,22 @@ func run() error {
 		return fmt.Errorf("parse config: %w", err)
 	}
 
+	var source app.BundleSource
+	if cfg.AgentOverride != "" {
+		if _, err := os.Stat(cfg.AgentOverride); err != nil {
+			return fmt.Errorf("agent override file: %w", err)
+		}
+		source = app.NewFileBundleSource(cfg.AgentOverride)
+	} else {
+		s, err := agentbundle.Source(cfg.AgentName)
+		if err != nil {
+			return fmt.Errorf("resolve agent bundle: %w", err)
+		}
+		source = s
+	}
+
+	log.Printf("agent=%s source=%s", cfg.AgentName, source)
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -46,16 +62,6 @@ func run() error {
 		return fmt.Errorf("frida runtime backend is not available; rebuild with -tags frida_core")
 	}
 	reconciler := lifecycle.NewRunner(runtime, readiness)
-
-	var source app.BundleSource
-	if cfg.AgentOverride != "" {
-		source = app.NewFileBundleSource(cfg.AgentOverride)
-	} else {
-		source, err = agentbundle.Source(cfg.AgentName)
-		if err != nil {
-			return fmt.Errorf("resolve embedded bundle: %w", err)
-		}
-	}
 
 	if err := app.Run(ctx, cfg, pidFinder, reconciler, readiness.CurrentState, source); err != nil {
 		return fmt.Errorf("run daemon: %w", err)
