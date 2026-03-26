@@ -109,4 +109,5 @@ dependencies {
     implementation(libs.slf4j.nop)
 
     testImplementation(kotlin("test-junit"))
+    testImplementation(libs.org.json)
 }
