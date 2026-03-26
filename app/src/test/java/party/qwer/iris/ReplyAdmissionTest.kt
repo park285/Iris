@@ -7,7 +7,6 @@ import party.qwer.iris.model.ReplyType
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class ReplyAdmissionTest {
@@ -93,6 +92,41 @@ class ReplyAdmissionTest {
     }
 
     @Test
+    fun `reply image route only allows image types`() {
+        val error =
+            assertFailsWith<IllegalArgumentException> {
+                validateReplyImageType(ReplyType.TEXT)
+            }
+
+        assertEquals("reply-image replies require type=image or image_multiple", error.message)
+    }
+
+    @Test
+    fun `reply image route accepts room image without thread metadata`() {
+        assertEquals(null, validateReplyImageThreadScope(threadId = null, threadScope = null))
+    }
+
+    @Test
+    fun `reply image route requires explicit thread scope when thread id exists`() {
+        val error =
+            assertFailsWith<IllegalArgumentException> {
+                validateReplyImageThreadScope(threadId = 123L, threadScope = null)
+            }
+
+        assertEquals("reply-image threadId requires threadScope", error.message)
+    }
+
+    @Test
+    fun `reply image route restricts scope to thread detail variants`() {
+        val error =
+            assertFailsWith<IllegalArgumentException> {
+                validateReplyImageThreadScope(threadId = 123L, threadScope = 1)
+            }
+
+        assertEquals("reply-image threadScope must be 2 or 3", error.message)
+    }
+
+    @Test
     fun `rejects threaded image replies when graft daemon is not ready`() {
         val sender = RecordingMessageSender()
 
@@ -152,10 +186,11 @@ class ReplyAdmissionTest {
                     ReplyRequest(
                         type = ReplyType.IMAGE_MULTIPLE,
                         room = "123",
-                        data = kotlinx.serialization.json.buildJsonArray {
-                            add(JsonPrimitive("a"))
-                            add(JsonPrimitive("b"))
-                        },
+                        data =
+                            kotlinx.serialization.json.buildJsonArray {
+                                add(JsonPrimitive("a"))
+                                add(JsonPrimitive("b"))
+                            },
                         threadId = "456",
                         threadScope = 2,
                     ),
@@ -203,6 +238,20 @@ private class RecordingMessageSender : MessageSender {
         multiPhotoCalls += 1
         return ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
     }
+
+    override fun sendNativePhoto(
+        room: Long,
+        base64ImageDataString: String,
+        threadId: Long?,
+        threadScope: Int?,
+    ): ReplyAdmissionResult = ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
+
+    override fun sendNativeMultiplePhotos(
+        room: Long,
+        base64ImageDataStrings: List<String>,
+        threadId: Long?,
+        threadScope: Int?,
+    ): ReplyAdmissionResult = ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
 
     override fun sendTextShare(
         room: Long,

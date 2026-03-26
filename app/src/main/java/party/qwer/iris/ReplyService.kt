@@ -18,14 +18,44 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
-internal data class ReplyQueueKey(val chatId: Long, val threadId: Long?)
+internal data class ReplyQueueKey(
+    val chatId: Long,
+    val threadId: Long?,
+)
 
 // SendMsg : ye-seola/go-kdb
 
-class ReplyService(
+private const val IMAGE_SHARE_SESSION_PREFIX = "iris:"
+private const val EXTRA_IRIS_SESSION_ID = "party.qwer.iris.extra.SHARE_SESSION_ID"
+private const val EXTRA_IRIS_THREAD_ID = "party.qwer.iris.extra.THREAD_ID"
+private const val EXTRA_IRIS_THREAD_SCOPE = "party.qwer.iris.extra.THREAD_SCOPE"
+private const val EXTRA_IRIS_ROOM_ID = "party.qwer.iris.extra.ROOM_ID"
+private const val EXTRA_IRIS_CREATED_AT = "party.qwer.iris.extra.CREATED_AT"
+
+internal data class ImageShareIntentSpec(
+    val action: String,
+    val packageName: String,
+    val mimeType: String,
+    val sessionId: String,
+    val identifier: String,
+    val roomId: String,
+    val createdAt: Long,
+    val threadId: String?,
+    val threadScope: Int?,
+    val keyType: Int,
+    val fromDirectShare: Boolean,
+    val flags: Int,
+) {
+    val hasThreadMetadata: Boolean
+        get() = threadId != null && threadScope != null && threadScope >= 2
+}
+
+internal class ReplyService(
     private val config: ConfigProvider,
+    private val nativeImageReplySender: NativeImageReplySender = KakaoNativeImageReplySender(),
 ) : MessageSender {
     private companion object {
         private const val PER_WORKER_QUEUE_CAPACITY = 16
@@ -35,7 +65,6 @@ class ReplyService(
         private const val LOG_MESSAGE_PREVIEW_LENGTH = 30
         private val zeroWidthCharacters = setOf('\u200B', '\u200C', '\u200D', '\u2060', '\uFEFF')
         private const val zeroWidthNoBreakSpace = "\uFEFF"
-        private const val THREAD_HINT_PATH = "/data/local/tmp/iris-thread-hint.json"
     }
 
     private val workerRegistry = ConcurrentHashMap<ReplyQueueKey, ReplyWorkerState>()
@@ -219,6 +248,43 @@ class ReplyService(
         base64ImageDataStrings: List<String>,
         threadId: Long?,
         threadScope: Int?,
+    ): ReplyAdmissionResult =
+        enqueueImages(
+            room = room,
+            base64ImageDataStrings = base64ImageDataStrings,
+            threadId = threadId,
+            dispatch = { preparedImages ->
+                sendPreparedImages(preparedImages, threadId, threadScope)
+            },
+        )
+
+    override fun sendNativePhoto(
+        room: Long,
+        base64ImageDataString: String,
+        threadId: Long?,
+        threadScope: Int?,
+    ): ReplyAdmissionResult = sendNativeMultiplePhotos(room, listOf(base64ImageDataString), threadId, threadScope)
+
+    override fun sendNativeMultiplePhotos(
+        room: Long,
+        base64ImageDataStrings: List<String>,
+        threadId: Long?,
+        threadScope: Int?,
+    ): ReplyAdmissionResult =
+        enqueueImages(
+            room = room,
+            base64ImageDataStrings = base64ImageDataStrings,
+            threadId = threadId,
+            dispatch = { preparedImages ->
+                sendPreparedImagesNative(preparedImages, threadId, threadScope)
+            },
+        )
+
+    private fun enqueueImages(
+        room: Long,
+        base64ImageDataStrings: List<String>,
+        threadId: Long?,
+        dispatch: suspend (PreparedImages) -> Unit,
     ): ReplyAdmissionResult {
         val decodedImages =
             try {
@@ -241,6 +307,7 @@ class ReplyService(
                 private lateinit var preparedImages: PreparedImages
 
                 override suspend fun prepare() {
+                    IrisLogger.info("[ReplyService] preparing image reply room=$room threadId=$threadId imageCount=${decodedImages.size}")
                     ensureImageDir(imageDir)
                     val uris = ArrayList<Uri>(decodedImages.size)
                     val createdFiles = ArrayList<File>(decodedImages.size)
@@ -267,8 +334,8 @@ class ReplyService(
                 }
 
                 override suspend fun send() {
-                    writeThreadHint(room, threadId, threadScope)
-                    sendPreparedImages(preparedImages)
+                    IrisLogger.info("[ReplyService] dispatching image reply room=$room threadId=$threadId imageCount=${preparedImages.files.size}")
+                    dispatch(preparedImages)
                 }
             },
         )
@@ -408,37 +475,45 @@ class ReplyService(
         }
     }
 
-    private fun writeThreadHint(
-        room: Long,
+    private fun sendPreparedImages(
+        preparedImages: PreparedImages,
         threadId: Long?,
         threadScope: Int?,
     ) {
-        val hintFile = java.io.File(THREAD_HINT_PATH)
-        if (threadId != null && threadScope != null && threadScope >= 2) {
-            hintFile.writeText("{\"room\":\"$room\",\"threadId\":\"$threadId\",\"threadScope\":$threadScope}")
-            IrisLogger.debug("[ReplyService] thread hint written: room=$room threadId=$threadId scope=$threadScope")
-        } else {
-            if (hintFile.exists()) hintFile.delete()
-        }
-    }
-
-    private fun sendPreparedImages(preparedImages: PreparedImages) {
         val intent =
-            Intent(Intent.ACTION_SEND_MULTIPLE).apply {
-                setPackage("com.kakao.talk")
-                type = "image/*"
-                putParcelableArrayListExtra(Intent.EXTRA_STREAM, preparedImages.uris)
-                putExtra("key_id", preparedImages.room)
-                putExtra("key_type", 1)
-                putExtra("key_from_direct_share", true)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-            }
+            buildImageShareIntent(
+                room = preparedImages.room,
+                uris = preparedImages.uris,
+                threadId = threadId,
+                threadScope = threadScope,
+                sessionId = UUID.randomUUID().toString(),
+                createdAt = System.currentTimeMillis(),
+            )
 
         try {
             AndroidHiddenApi.startActivity(intent)
         } catch (e: Exception) {
             IrisLogger.error("Error starting activity for sending multiple photos: $e")
             cleanupPreparedImages(preparedImages)
+            throw e
+        }
+    }
+
+    private fun sendPreparedImagesNative(
+        preparedImages: PreparedImages,
+        threadId: Long?,
+        threadScope: Int?,
+    ) {
+        try {
+            IrisLogger.info("[ReplyService] sendPreparedImagesNative room=${preparedImages.room} threadId=$threadId scope=$threadScope uriCount=${preparedImages.uris.size}")
+            nativeImageReplySender.send(
+                roomId = preparedImages.room,
+                uris = preparedImages.uris,
+                threadId = threadId,
+                threadScope = threadScope,
+            )
+        } catch (e: Exception) {
+            IrisLogger.error("Error sending native reply-image: $e")
             throw e
         }
     }
@@ -505,6 +580,56 @@ private data class PreparedImages(
     val uris: ArrayList<Uri>,
     val files: ArrayList<File>,
 )
+
+internal fun buildImageShareIntent(
+    room: Long,
+    uris: ArrayList<Uri>,
+    threadId: Long?,
+    threadScope: Int?,
+    sessionId: String,
+    createdAt: Long,
+): Intent {
+    val spec = buildImageShareIntentSpec(room, threadId, threadScope, sessionId, createdAt)
+    return Intent(spec.action).apply {
+        setPackage(spec.packageName)
+        type = spec.mimeType
+        putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+        putExtra("key_id", room)
+        putExtra("key_type", spec.keyType)
+        putExtra("key_from_direct_share", spec.fromDirectShare)
+        putExtra(EXTRA_IRIS_SESSION_ID, spec.sessionId)
+        putExtra(EXTRA_IRIS_ROOM_ID, spec.roomId)
+        putExtra(EXTRA_IRIS_CREATED_AT, spec.createdAt)
+        setIdentifier(spec.identifier)
+        if (spec.hasThreadMetadata) {
+            putExtra(EXTRA_IRIS_THREAD_ID, spec.threadId)
+            putExtra(EXTRA_IRIS_THREAD_SCOPE, spec.threadScope)
+        }
+        addFlags(spec.flags)
+    }
+}
+
+internal fun buildImageShareIntentSpec(
+    room: Long,
+    threadId: Long?,
+    threadScope: Int?,
+    sessionId: String,
+    createdAt: Long,
+): ImageShareIntentSpec =
+    ImageShareIntentSpec(
+        action = Intent.ACTION_SEND_MULTIPLE,
+        packageName = "com.kakao.talk",
+        mimeType = "image/*",
+        sessionId = sessionId,
+        identifier = "$IMAGE_SHARE_SESSION_PREFIX$sessionId",
+        roomId = room.toString(),
+        createdAt = createdAt,
+        threadId = threadId?.toString(),
+        threadScope = threadScope?.takeIf { it >= 2 && threadId != null },
+        keyType = 1,
+        fromDirectShare = true,
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP,
+    )
 
 private fun ensureImageDir(imageDir: File) {
     if (imageDir.exists()) {

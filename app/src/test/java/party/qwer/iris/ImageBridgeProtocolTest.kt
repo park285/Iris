@@ -111,7 +111,10 @@ class ImageBridgeProtocolTest {
         val raw = buffer.toByteArray()
         val expectedPayload = json.toString().toByteArray(Charsets.UTF_8)
         val lengthBytes = raw.copyOfRange(0, 4)
-        val length = java.nio.ByteBuffer.wrap(lengthBytes).int
+        val length =
+            java.nio.ByteBuffer
+                .wrap(lengthBytes)
+                .int
         assertEquals(expectedPayload.size, length)
         val payload = raw.copyOfRange(4, raw.size)
         assertEquals(String(expectedPayload, Charsets.UTF_8), String(payload, Charsets.UTF_8))

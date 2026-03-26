@@ -34,6 +34,16 @@ import party.qwer.iris.model.ReplyType
 import java.security.MessageDigest
 import java.util.UUID
 
+internal const val NETTY_NO_NATIVE_PROPERTY = "io.netty.transport.noNative"
+
+internal fun enforceNettyNioTransport(): Boolean {
+    if (System.getProperty(NETTY_NO_NATIVE_PROPERTY) == "true") {
+        return false
+    }
+    System.setProperty(NETTY_NO_NATIVE_PROPERTY, "true")
+    return true
+}
+
 class IrisServer(
     private val chatLogRepo: ChatLogRepository,
     private val configManager: ConfigManager,
@@ -55,6 +65,10 @@ class IrisServer(
         if (server != null) {
             IrisLogger.debug("[IrisServer] startServer called while server is already running")
             return
+        }
+
+        if (enforceNettyNioTransport()) {
+            IrisLogger.info("[IrisServer] forcing Netty JVM NIO transport (io.netty.transport.noNative=true)")
         }
 
         server = createServer().also { it.start(wait = false) }
@@ -133,6 +147,7 @@ class IrisServer(
             configureHealthRoutes()
             configureConfigRoutes()
             configureReplyRoute()
+            configureReplyImageRoute()
             configureReplyMarkdownRoute()
             configureQueryRoute()
         }
@@ -205,6 +220,18 @@ class IrisServer(
 
             val replyRequest = call.receive<ReplyRequest>()
             val response = enqueueReplyMarkdown(replyRequest)
+            call.respond(HttpStatusCode.Accepted, response)
+        }
+    }
+
+    private fun Route.configureReplyImageRoute() {
+        post("/reply-image") {
+            if (!requireBotToken(call)) {
+                return@post
+            }
+
+            val replyRequest = call.receive<ReplyRequest>()
+            val response = enqueueReplyImage(replyRequest)
             call.respond(HttpStatusCode.Accepted, response)
         }
     }
@@ -300,6 +327,53 @@ class IrisServer(
         )
     }
 
+    private fun enqueueReplyImage(replyRequest: ReplyRequest): ReplyAcceptedResponse {
+        validateReplyImageType(replyRequest.type)
+
+        val roomId = replyRequest.room.toLongOrNull() ?: invalidRequest("room must be a numeric string")
+        val threadId =
+            replyRequest.threadId?.let {
+                it.toLongOrNull() ?: invalidRequest("threadId must be a numeric string")
+            }
+        val threadScope =
+            try {
+                validateReplyImageThreadScope(threadId, replyRequest.threadScope)
+            } catch (e: IllegalArgumentException) {
+                invalidRequest(e.message ?: "invalid reply-image thread metadata")
+            }
+
+        val admission =
+            when (replyRequest.type) {
+                ReplyType.IMAGE ->
+                    messageSender.sendNativePhoto(
+                        roomId,
+                        extractTextPayload(replyRequest),
+                        threadId,
+                        threadScope,
+                    )
+                ReplyType.IMAGE_MULTIPLE ->
+                    messageSender.sendNativeMultiplePhotos(
+                        roomId,
+                        extractImagePayloads(replyRequest),
+                        threadId,
+                        threadScope,
+                    )
+                else -> invalidRequest("reply-image replies require type=image or image_multiple")
+            }
+        if (admission.status != ReplyAdmissionStatus.ACCEPTED) {
+            requestRejected(
+                admission.message ?: "reply-image request rejected",
+                replyAdmissionHttpStatus(admission.status),
+            )
+        }
+
+        return ReplyAcceptedResponse(
+            requestId = "reply-image-${UUID.randomUUID()}",
+            room = replyRequest.room,
+            type = replyRequest.type,
+        )
+    }
+
     private suspend fun requireBotToken(call: ApplicationCall): Boolean {
         val expectedToken = configManager.botToken
         if (expectedToken.isBlank()) {
@@ -370,6 +444,25 @@ internal fun validateReplyThreadScope(
 
     require(supportsThreadReply(replyType)) { "threadId is only supported for text replies" }
     require(threadId != null || normalizedScope == 1) { "threadScope requires threadId unless scope is 1" }
+    return normalizedScope
+}
+
+internal fun validateReplyImageType(replyType: ReplyType) {
+    require(replyType == ReplyType.IMAGE || replyType == ReplyType.IMAGE_MULTIPLE) {
+        "reply-image replies require type=image or image_multiple"
+    }
+}
+
+internal fun validateReplyImageThreadScope(
+    threadId: Long?,
+    threadScope: Int?,
+): Int? {
+    if (threadId == null && threadScope == null) {
+        return null
+    }
+    require(threadId != null) { "reply-image threadScope requires threadId" }
+    val normalizedScope = threadScope ?: throw IllegalArgumentException("reply-image threadId requires threadScope")
+    require(normalizedScope == 2 || normalizedScope == 3) { "reply-image threadScope must be 2 or 3" }
     return normalizedScope
 }
 

@@ -1,14 +1,16 @@
 package party.qwer.iris
 
+import android.content.Intent
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.runBlocking
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ReplyServiceTest {
@@ -221,6 +223,7 @@ class ReplyServiceTest {
                 override val webhookToken = ""
                 override val dbPollingRate = 1000L
                 override val messageSendRate = 200L
+
                 override fun webhookEndpointFor(route: String) = ""
             }
         val service = ReplyService(slowConfig)
@@ -238,6 +241,67 @@ class ReplyServiceTest {
         val elapsed = System.currentTimeMillis() - startTime
         // 직렬이면 최소 200ms+ (첫 번째 워커의 rate limit delay), 병렬이면 거의 즉시
         assertTrue(elapsed < 150, "different key workers should not wait for each other's rate limit (took ${elapsed}ms)")
+        service.shutdown()
+    }
+
+    @Test
+    fun `buildImageShareIntentSpec adds session-chain extras for threaded image replies`() {
+        val spec =
+            buildImageShareIntentSpec(
+                room = 18478615493603057L,
+                threadId = 3804154209723703299L,
+                threadScope = 2,
+                sessionId = "session-123",
+                createdAt = 1_742_890_000_000L,
+            )
+
+        assertEquals(Intent.ACTION_SEND_MULTIPLE, spec.action)
+        assertEquals("com.kakao.talk", spec.packageName)
+        assertEquals("image/*", spec.mimeType)
+        assertEquals("iris:session-123", spec.identifier)
+        assertEquals("session-123", spec.sessionId)
+        assertEquals("3804154209723703299", spec.threadId)
+        assertEquals(2, spec.threadScope)
+        assertEquals("18478615493603057", spec.roomId)
+        assertEquals(1_742_890_000_000L, spec.createdAt)
+        assertEquals(1, spec.keyType)
+        assertTrue(spec.fromDirectShare)
+        assertEquals(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP, spec.flags)
+    }
+
+    @Test
+    fun `buildImageShareIntentSpec omits thread extras when no thread metadata exists`() {
+        val spec =
+            buildImageShareIntentSpec(
+                room = 18478615493603057L,
+                threadId = null,
+                threadScope = null,
+                sessionId = "session-456",
+                createdAt = 1_742_890_000_001L,
+            )
+
+        assertEquals("iris:session-456", spec.identifier)
+        assertEquals("session-456", spec.sessionId)
+        assertEquals("18478615493603057", spec.roomId)
+        assertNull(spec.threadId)
+        assertNull(spec.threadScope)
+        assertFalse(spec.hasThreadMetadata)
+    }
+
+    @Test
+    fun `sendNativePhoto rejects invalid payload before native bootstrap`() {
+        val service = ReplyService(testConfig)
+        service.start()
+
+        val result =
+            service.sendNativePhoto(
+                room = 18478615493603057L,
+                base64ImageDataString = "not-base64",
+                threadId = 3804154209723703299L,
+                threadScope = 2,
+            )
+
+        assertEquals(ReplyAdmissionStatus.INVALID_PAYLOAD, result.status)
         service.shutdown()
     }
 }
