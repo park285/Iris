@@ -5,17 +5,40 @@ import (
 	"testing"
 )
 
-func TestParseConfigUsesPinnedAgentProjectRoot(t *testing.T) {
-	cfg, err := ParseConfig("/repo", []string{"--agent", "thread-image-graft.ts"})
+func TestParseConfigSetsAgentName(t *testing.T) {
+	cfg, err := ParseConfig([]string{"--agent", "thread-image-graft"})
 	if err != nil {
 		t.Fatalf("ParseConfig returned error: %v", err)
 	}
-
-	if got, want := cfg.AgentProjectRoot, "/repo/frida/agent"; got != want {
-		t.Fatalf("AgentProjectRoot = %q, want %q", got, want)
+	if got, want := cfg.AgentName, "thread-image-graft"; got != want {
+		t.Fatalf("AgentName = %q, want %q", got, want)
 	}
-	if got, want := cfg.AgentEntryPoint, "/repo/frida/agent/thread-image-graft.ts"; got != want {
-		t.Fatalf("AgentEntryPoint = %q, want %q", got, want)
+	if cfg.AgentOverride != "" {
+		t.Fatalf("AgentOverride = %q, want empty", cfg.AgentOverride)
+	}
+}
+
+func TestParseConfigRejectsEmptyAgent(t *testing.T) {
+	_, err := ParseConfig([]string{})
+	if err == nil {
+		t.Fatal("expected error for missing --agent")
+	}
+}
+
+func TestParseConfigSetsAgentOverride(t *testing.T) {
+	cfg, err := ParseConfig([]string{"--agent", "thread-image-graft", "--agent-override", "/tmp/custom.js"})
+	if err != nil {
+		t.Fatalf("ParseConfig returned error: %v", err)
+	}
+	if got, want := cfg.AgentOverride, "/tmp/custom.js"; got != want {
+		t.Fatalf("AgentOverride = %q, want %q", got, want)
+	}
+}
+
+func TestParseConfigDefaults(t *testing.T) {
+	cfg, err := ParseConfig([]string{"--agent", "thread-image-graft"})
+	if err != nil {
+		t.Fatalf("ParseConfig returned error: %v", err)
 	}
 	if got, want := cfg.DeviceID, "emulator-5554"; got != want {
 		t.Fatalf("DeviceID = %q, want %q", got, want)
@@ -34,34 +57,25 @@ func TestParseConfigUsesPinnedAgentProjectRoot(t *testing.T) {
 	}
 }
 
-func TestParseConfigRejectsEscapingAgentPath(t *testing.T) {
-	_, err := ParseConfig("/repo", []string{"--agent", "../evil.ts"})
-	if err == nil {
-		t.Fatal("expected error for escaping agent path")
-	}
-}
-
-func TestParseConfigCarriesDevkitPathWhenProvided(t *testing.T) {
-	cfg, err := ParseConfig("/repo", []string{"--agent", "thread-image-graft.ts", "--frida-core-devkit", "/opt/frida/devkit"})
+func TestParseConfigCarriesDevkitPath(t *testing.T) {
+	cfg, err := ParseConfig([]string{"--agent", "thread-image-graft", "--frida-core-devkit", "/opt/devkit"})
 	if err != nil {
 		t.Fatalf("ParseConfig returned error: %v", err)
 	}
-
-	if got, want := cfg.FridaCoreDevkitDir, "/opt/frida/devkit"; got != want {
+	if got, want := cfg.FridaCoreDevkitDir, "/opt/devkit"; got != want {
 		t.Fatalf("FridaCoreDevkitDir = %q, want %q", got, want)
 	}
 }
 
 func TestParseConfigCarriesReadinessSettings(t *testing.T) {
-	cfg, err := ParseConfig("/repo", []string{
-		"--agent", "thread-image-graft.ts",
+	cfg, err := ParseConfig([]string{
+		"--agent", "thread-image-graft",
 		"--readiness-addr", "127.0.0.1:18999",
 		"--heartbeat-timeout", "17",
 	})
 	if err != nil {
 		t.Fatalf("ParseConfig returned error: %v", err)
 	}
-
 	if got, want := cfg.ReadinessAddr, "127.0.0.1:18999"; got != want {
 		t.Fatalf("ReadinessAddr = %q, want %q", got, want)
 	}
@@ -72,11 +86,13 @@ func TestParseConfigCarriesReadinessSettings(t *testing.T) {
 
 func TestResolveRepoRootWalksUpFromDaemonDir(t *testing.T) {
 	root := t.TempDir()
+
 	deep := root + "/frida/daemon"
-	if err := os.MkdirAll(deep, 0o755); err != nil {
+	if err := os.MkdirAll(deep, 0o750); err != nil {
 		t.Fatalf("MkdirAll returned error: %v", err)
 	}
-	if err := os.WriteFile(root+"/settings.gradle.kts", []byte("rootProject.name = \"Iris\""), 0o644); err != nil {
+
+	if err := os.WriteFile(root+"/settings.gradle.kts", []byte("rootProject.name = \"Iris\""), 0o600); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 
@@ -84,6 +100,7 @@ func TestResolveRepoRootWalksUpFromDaemonDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveRepoRoot returned error: %v", err)
 	}
+
 	if got != root {
 		t.Fatalf("ResolveRepoRoot = %q, want %q", got, root)
 	}

@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/park285/Iris/frida/daemon/internal/adb"
-	"github.com/park285/Iris/frida/daemon/internal/agentbuild"
+	"github.com/park285/Iris/frida/daemon/internal/agentbundle"
 	"github.com/park285/Iris/frida/daemon/internal/app"
 	"github.com/park285/Iris/frida/daemon/internal/fridaapi"
 	"github.com/park285/Iris/frida/daemon/internal/lifecycle"
@@ -23,17 +23,7 @@ func main() {
 }
 
 func run() error {
-	workingDir, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("resolve working directory: %w", err)
-	}
-
-	repoRoot, err := app.ResolveRepoRoot(workingDir)
-	if err != nil {
-		return fmt.Errorf("resolve repo root: %w", err)
-	}
-
-	cfg, err := app.ParseConfig(repoRoot, os.Args[1:])
+	cfg, err := app.ParseConfig(os.Args[1:])
 	if err != nil {
 		return fmt.Errorf("parse config: %w", err)
 	}
@@ -49,7 +39,6 @@ func run() error {
 	}
 
 	pidFinder := adb.NewService()
-	bundler := agentbuild.NewBundler(cfg.FridaCoreDevkitDir)
 	runtime := fridaapi.NewRuntime(cfg.DeviceID, cfg.FridaCoreDevkitDir, func(message string) {
 		readiness.ObserveScriptMessage(message)
 	})
@@ -58,7 +47,17 @@ func run() error {
 	}
 	reconciler := lifecycle.NewRunner(runtime, readiness)
 
-	if err := app.Run(ctx, cfg, pidFinder, bundler, reconciler, readiness.CurrentState); err != nil {
+	var source app.BundleSource
+	if cfg.AgentOverride != "" {
+		source = app.NewFileBundleSource(cfg.AgentOverride)
+	} else {
+		source, err = agentbundle.Source(cfg.AgentName)
+		if err != nil {
+			return fmt.Errorf("resolve embedded bundle: %w", err)
+		}
+	}
+
+	if err := app.Run(ctx, cfg, pidFinder, reconciler, readiness.CurrentState, source); err != nil {
 		return fmt.Errorf("run daemon: %w", err)
 	}
 

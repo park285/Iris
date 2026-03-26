@@ -13,10 +13,6 @@ const (
 	minRetryDelay       = 25 * time.Millisecond
 )
 
-type BundleBuilder interface {
-	Build(ctx context.Context, projectRoot, entryPoint string) (string, error)
-}
-
 type PIDFinder interface {
 	LookupPID(ctx context.Context, deviceID string) (int, error)
 }
@@ -24,41 +20,6 @@ type PIDFinder interface {
 type Reconciler interface {
 	Reconcile(pid int, bundle string) error
 	Shutdown() error
-}
-
-type bundleCache struct {
-	ready         bool
-	bundle        string
-	sourceVersion uint64
-	lastError     error
-	errorVersion  uint64
-}
-
-func (c *bundleCache) get(ctx context.Context, cfg Config, builder BundleBuilder, versioner sourceVersioner) (string, error) {
-	sourceVersion := versioner.Version()
-
-	if c.ready && c.sourceVersion == sourceVersion {
-		return c.bundle, nil
-	}
-
-	if c.lastError != nil && c.errorVersion == sourceVersion {
-		return "", c.lastError
-	}
-
-	bundle, err := builder.Build(ctx, cfg.AgentProjectRoot, cfg.AgentEntryPoint)
-	if err != nil {
-		c.lastError = fmt.Errorf("build agent bundle: %w", err)
-		c.errorVersion = sourceVersion
-		c.ready = false
-		return "", c.lastError
-	}
-
-	c.bundle = bundle
-	c.ready = true
-	c.sourceVersion = sourceVersion
-	c.lastError = nil
-
-	return c.bundle, nil
 }
 
 func pidLookupTimeout(cfg Config) time.Duration {
@@ -105,30 +66,10 @@ func lookupPIDWithTimeout(ctx context.Context, cfg Config, pidFinder PIDFinder) 
 	return pid, nil
 }
 
-func RunOnce(ctx context.Context, cfg Config, pid int, builder BundleBuilder, reconciler Reconciler) error {
-	bundle, err := builder.Build(ctx, cfg.AgentProjectRoot, cfg.AgentEntryPoint)
-	if err != nil {
-		return fmt.Errorf("build agent bundle: %w", err)
-	}
+func Run(ctx context.Context, cfg Config, pidFinder PIDFinder,
+	reconciler Reconciler, stateFunc func() ReadinessState,
+	source BundleSource) error {
 
-	if err := reconciler.Reconcile(pid, bundle); err != nil {
-		return fmt.Errorf("reconcile pid %d: %w", pid, err)
-	}
-
-	return nil
-}
-
-func Run(ctx context.Context, cfg Config, pidFinder PIDFinder, builder BundleBuilder, reconciler Reconciler, stateFunc func() ReadinessState) error {
-	versioner, err := newSourceVersioner(cfg.AgentProjectRoot)
-	if err != nil {
-		return fmt.Errorf("watch agent sources: %w", err)
-	}
-
-	defer func() {
-		if err := versioner.Close(); err != nil {
-			log.Printf("source versioner shutdown failed: %v", err)
-		}
-	}()
 	defer func() {
 		if closer, ok := pidFinder.(interface{ Close() error }); ok {
 			if err := closer.Close(); err != nil {
@@ -137,22 +78,6 @@ func Run(ctx context.Context, cfg Config, pidFinder PIDFinder, builder BundleBui
 		}
 	}()
 
-	if err := runWithSourceVersioner(ctx, cfg, pidFinder, builder, reconciler, versioner, stateFunc); err != nil {
-		return fmt.Errorf("run with source versioner: %w", err)
-	}
-
-	return nil
-}
-
-func runWithSourceVersioner(
-	ctx context.Context,
-	cfg Config,
-	pidFinder PIDFinder,
-	builder BundleBuilder,
-	reconciler Reconciler,
-	versioner sourceVersioner,
-	stateFunc func() ReadinessState,
-) error {
 	defer func() {
 		if err := reconciler.Shutdown(); err != nil {
 			log.Printf("reconciler shutdown failed: %v", err)
@@ -164,15 +89,13 @@ func runWithSourceVersioner(
 	}
 
 	retryDelay := max(time.Duration(cfg.RetryDelaySeconds)*time.Second, minRetryDelay)
-
-	cache := &bundleCache{}
-
 	pollTimer := time.NewTimer(0)
 	defer pollTimer.Stop()
 
 	var lastPID int
 	var lastBundle string
 	lastState := ReadinessState("")
+	var lastBundleErr string
 
 	for {
 		select {
@@ -188,25 +111,29 @@ func runWithSourceVersioner(
 			continue
 		}
 
-		bundle, bundleErr := cache.get(ctx, cfg, builder, versioner)
+		bundle, bundleErr := source.Bundle()
 		if bundleErr != nil {
-			log.Printf("bundle build failed for agent=%s: %v", cfg.AgentEntryPoint, bundleErr)
+			if msg := bundleErr.Error(); msg != lastBundleErr {
+				log.Printf("bundle read failed for %s: %v", source, bundleErr)
+				lastBundleErr = msg
+			}
 			pollTimer.Reset(retryDelay)
 			continue
 		}
+		lastBundleErr = ""
 
 		if runErr := reconciler.Reconcile(pid, bundle); runErr != nil {
-			log.Printf("reconcile failed for pid=%d agent=%s: %v", pid, cfg.AgentEntryPoint, runErr)
+			log.Printf("reconcile failed for pid=%d %s: %v", pid, source, runErr)
 			pollTimer.Reset(retryDelay)
 			continue
 		}
 
 		if pid != lastPID {
-			log.Printf("attached pid=%d agent=%s", pid, cfg.AgentEntryPoint)
+			log.Printf("attached pid=%d %s", pid, source)
 			lastPID = pid
 			lastBundle = bundle
 		} else if bundle != lastBundle {
-			log.Printf("reloaded bundle for pid=%d agent=%s", pid, cfg.AgentEntryPoint)
+			log.Printf("reloaded bundle for pid=%d %s", pid, source)
 			lastBundle = bundle
 		}
 

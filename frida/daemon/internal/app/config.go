@@ -3,14 +3,14 @@ package app
 import (
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 type Config struct {
-	AgentProjectRoot        string
-	AgentEntryPoint         string
+	AgentName               string
+	AgentOverride           string
 	DeviceID                string
 	FridaCoreDevkitDir      string
 	ReadinessAddr           string
@@ -19,9 +19,10 @@ type Config struct {
 	RetryDelaySeconds       int
 }
 
-func ParseConfig(repoRoot string, args []string) (Config, error) {
+func ParseConfig(args []string) (Config, error) {
 	fs := flag.NewFlagSet("graft-daemon", flag.ContinueOnError)
-	agent := fs.String("agent", "", "agent entry point relative to frida/agent")
+	agent := fs.String("agent", "", "agent bundle name")
+	agentOverride := fs.String("agent-override", "", "override bundle file path")
 	device := fs.String("device", "emulator-5554", "adb device id")
 	devkit := fs.String("frida-core-devkit", "", "frida core devkit directory")
 	readinessAddr := fs.String("readiness-addr", "127.0.0.1:17373", "local readiness endpoint bind address")
@@ -29,21 +30,16 @@ func ParseConfig(repoRoot string, args []string) (Config, error) {
 	pidPoll := fs.Int("pid-poll-interval", 30, "pid poll interval seconds")
 	retryDelay := fs.Int("retry-delay", 5, "retry delay seconds")
 	if err := fs.Parse(args); err != nil {
-		return Config{}, err
+		return Config{}, fmt.Errorf("parse graft-daemon flags: %w", err)
 	}
+
 	if *agent == "" {
 		return Config{}, errors.New("agent is required")
 	}
 
-	projectRoot := filepath.Join(repoRoot, "frida", "agent")
-	cleanAgent := filepath.Clean(*agent)
-	if strings.HasPrefix(cleanAgent, "..") || filepath.IsAbs(cleanAgent) {
-		return Config{}, errors.New("agent must stay within frida/agent")
-	}
-
 	return Config{
-		AgentProjectRoot:        projectRoot,
-		AgentEntryPoint:         filepath.Join(projectRoot, cleanAgent),
+		AgentName:               *agent,
+		AgentOverride:           *agentOverride,
 		DeviceID:                *device,
 		FridaCoreDevkitDir:      *devkit,
 		ReadinessAddr:           *readinessAddr,
@@ -55,14 +51,17 @@ func ParseConfig(repoRoot string, args []string) (Config, error) {
 
 func ResolveRepoRoot(startDir string) (string, error) {
 	current := filepath.Clean(startDir)
+
 	for {
 		if _, err := os.Stat(filepath.Join(current, "settings.gradle.kts")); err == nil {
 			return current, nil
 		}
+
 		parent := filepath.Dir(current)
 		if parent == current {
 			return "", errors.New("repo root not found")
 		}
+
 		current = parent
 	}
 }
