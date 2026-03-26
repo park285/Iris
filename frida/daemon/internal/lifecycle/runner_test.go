@@ -85,6 +85,52 @@ func TestRunnerReattachesWhenPIDChanges(t *testing.T) {
 	}
 }
 
+func TestRunnerReloadsWhenBundleChangesForSamePID(t *testing.T) {
+	rt := &fakeRuntime{}
+	observer := &fakeObserver{}
+	r := NewRunner(rt, observer)
+
+	if err := r.Reconcile(1234, "bundle-v1"); err != nil {
+		t.Fatalf("first Reconcile returned error: %v", err)
+	}
+
+	if err := r.Reconcile(1234, "bundle-v2"); err != nil {
+		t.Fatalf("second Reconcile returned error: %v", err)
+	}
+
+	want := []string{"attach", "create-script", "load", "unload", "detach", "attach", "create-script", "load"}
+	if !reflect.DeepEqual(rt.events, want) {
+		t.Fatalf("events = %v, want %v", rt.events, want)
+	}
+
+	if !reflect.DeepEqual(observer.events, []string{"attached", "detached", "attached"}) {
+		t.Fatalf("observer events = %v, want %v", observer.events, []string{"attached", "detached", "attached"})
+	}
+}
+
+func TestRunnerSkipsReconcileForSamePIDAndBundle(t *testing.T) {
+	rt := &fakeRuntime{}
+	observer := &fakeObserver{}
+	r := NewRunner(rt, observer)
+
+	if err := r.Reconcile(1234, "bundle-v1"); err != nil {
+		t.Fatalf("first Reconcile returned error: %v", err)
+	}
+
+	if err := r.Reconcile(1234, "bundle-v1"); err != nil {
+		t.Fatalf("second Reconcile returned error: %v", err)
+	}
+
+	want := []string{"attach", "create-script", "load"}
+	if !reflect.DeepEqual(rt.events, want) {
+		t.Fatalf("events = %v, want %v", rt.events, want)
+	}
+
+	if !reflect.DeepEqual(observer.events, []string{"attached"}) {
+		t.Fatalf("observer events = %v, want %v", observer.events, []string{"attached"})
+	}
+}
+
 func TestRunnerShutdownUsesUnloadThenDetach(t *testing.T) {
 	rt := &fakeRuntime{}
 	observer := &fakeObserver{}
