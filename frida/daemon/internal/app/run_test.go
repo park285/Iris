@@ -264,6 +264,110 @@ func TestRunUsesBoundedPIDLookupContext(t *testing.T) {
 	}
 }
 
+func TestRunPicksUpBundleSourceChanges(t *testing.T) {
+	cfg := Config{
+		AgentName:              "test",
+		DeviceID:               "emulator-5554",
+		PidPollIntervalSeconds: 1,
+		RetryDelaySeconds:      0,
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	source := &fakeBundleSource{bundle: "v1"}
+	pidFinder := &fakePIDFinder{pid: 4321}
+	reconciler := &fakeReconciler{}
+
+	done := make(chan error, 1)
+
+	go func() {
+		done <- Run(ctx, cfg, pidFinder, reconciler, func() ReadinessState { return StateReady }, source)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if reconciler.CallCount() >= 1 {
+			break
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	_, bundle1, _, _ := reconciler.Snapshot()
+	if bundle1 != "v1" {
+		t.Fatalf("first bundle = %q, want %q", bundle1, "v1")
+	}
+
+	source.mu.Lock()
+	source.bundle = "v2"
+	source.mu.Unlock()
+
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		_, b, _, _ := reconciler.Snapshot()
+		if b == "v2" {
+			cancel()
+			break
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := <-done; err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	_, bundle2, _, _ := reconciler.Snapshot()
+	if bundle2 != "v2" {
+		t.Fatalf("bundle after change = %q, want %q", bundle2, "v2")
+	}
+}
+
+func TestRunSuppressesDuplicateBundleErrors(t *testing.T) {
+	cfg := Config{
+		AgentName:              "test",
+		DeviceID:               "emulator-5554",
+		PidPollIntervalSeconds: 1,
+		RetryDelaySeconds:      0,
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	source := &fakeBundleSource{err: errors.New("read failed")}
+	pidFinder := &fakePIDFinder{pid: 4321}
+	reconciler := &fakeReconciler{}
+
+	done := make(chan error, 1)
+
+	go func() {
+		done <- Run(ctx, cfg, pidFinder, reconciler, func() ReadinessState { return StateReady }, source)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if source.CallCount() >= 3 {
+			cancel()
+			break
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := <-done; err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	if source.CallCount() < 3 {
+		t.Fatalf("Bundle calls = %d, want at least 3", source.CallCount())
+	}
+
+	if reconciler.CallCount() != 0 {
+		t.Fatalf("Reconcile calls = %d, want 0 (bundle errors should prevent reconcile)", reconciler.CallCount())
+	}
+}
+
 func TestLookupPIDWithTimeoutKeepsReusablePIDSessionAlive(t *testing.T) {
 	factory := &contextBoundPIDSessionFactory{}
 	service := &adb.Service{Factory: factory}
