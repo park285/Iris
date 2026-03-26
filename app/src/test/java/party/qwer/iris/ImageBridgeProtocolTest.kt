@@ -8,6 +8,8 @@ import java.io.EOFException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class ImageBridgeProtocolTest {
@@ -101,10 +103,47 @@ class ImageBridgeProtocolTest {
     }
 
     @Test
+    fun `frame wire format is 4-byte big-endian length plus UTF-8 JSON`() {
+        val json = JSONObject().apply { put("key", "value") }
+        val buffer = ByteArrayOutputStream()
+        ImageBridgeProtocol.writeFrame(buffer, json)
+
+        val raw = buffer.toByteArray()
+        val expectedPayload = json.toString().toByteArray(Charsets.UTF_8)
+        val lengthBytes = raw.copyOfRange(0, 4)
+        val length = java.nio.ByteBuffer.wrap(lengthBytes).int
+        assertEquals(expectedPayload.size, length)
+        val payload = raw.copyOfRange(4, raw.size)
+        assertEquals(String(expectedPayload, Charsets.UTF_8), String(payload, Charsets.UTF_8))
+        assertEquals(4 + expectedPayload.size, raw.size)
+    }
+
+    @Test
+    fun `success response has no error field`() {
+        val response = ImageBridgeProtocol.buildSuccessResponse()
+        assertEquals("sent", response.getString("status"))
+        assertFalse(response.has("error"))
+    }
+
+    @Test
     fun `buildFailureResponse carries error message`() {
         val response = ImageBridgeProtocol.buildFailureResponse("room not found")
         assertEquals("failed", response.getString("status"))
         assertEquals("room not found", response.getString("error"))
+    }
+
+    @Test
+    fun `failure response with empty error message`() {
+        val response = ImageBridgeProtocol.buildFailureResponse("")
+        assertEquals("failed", response.getString("status"))
+        assertEquals("", response.getString("error"))
+    }
+
+    @Test
+    fun `response without status field defaults gracefully`() {
+        val malformed = JSONObject().apply { put("unexpected", "data") }
+        val status = malformed.optString("status", "")
+        assertNotEquals("sent", status)
     }
 
     @Test
