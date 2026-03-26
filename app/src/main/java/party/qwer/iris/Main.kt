@@ -21,7 +21,7 @@ class Main {
                 val configManager = ConfigManager()
                 val graftReadinessClient = GraftReadinessClient()
 
-                val replyService = ReplyService(configManager)
+                val replyService = ReplyService(configManager, UdsImageReplySender())
                 configManager.onMessageSendRateChanged = { replyService.restart() }
                 replyService.start()
                 IrisLogger.info("Message sender thread started")
