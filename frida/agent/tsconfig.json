@@ -1,15 +1,24 @@
 {
   "compilerOptions": {
-    "target": "ES2022",
+    "target": "ESNext",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,
     "noEmit": true,
     "allowJs": false,
-    "lib": ["ES2022"],
+    "lib": ["ESNext"],
+    "exactOptionalPropertyTypes": true,
+    "moduleDetection": "force",
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
-    "types": ["frida-gum", "node"]
+    "types": ["frida-gum", "node"],
+    "verbatimModuleSyntax": true
   },
   "include": [
     "./**/*.ts"

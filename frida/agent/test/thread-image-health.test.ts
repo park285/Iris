@@ -53,7 +53,7 @@ function createFakeJavaClass(
 }
 
 function createBlockedRuntime() {
-  const sent: string[] = [];
+  const sent: unknown[] = [];
   const sendingLogClassName = 'com.kakao.talk.db.model.chatlog.ChatSendingLog';
   const classes = new Map<string, Record<string, { overloads: FakeOverload[] }>>([
     [BASE_INTENT_FILTER_TARGET.className, createFakeJavaClass([BASE_INTENT_FILTER_TARGET.captureMethod])],
@@ -102,7 +102,7 @@ function createBlockedRuntime() {
         return klass;
       },
     },
-    send(message: string) {
+    send(message: unknown) {
       sent.push(message);
     },
   };
@@ -215,25 +215,43 @@ test('snapshotThreadImageGraftHealth includes per-hook status counters and last-
   });
 });
 
-test('installThreadImageGraft emits JSON string health payloads and stays blocked when the field gate fails', async () => {
+test('installThreadImageGraft emits structured health payloads and stays blocked when the field gate fails', async () => {
   const graft = await import('../thread-image-graft.js');
   const { runtime, sent } = createBlockedRuntime();
 
   graft.installThreadImageGraft(runtime);
 
   const structuredMessages = sent
-    .filter((message) => message.startsWith('{'))
-    .map((message) => JSON.parse(message));
+    .map((message) => {
+      if (typeof message === 'string') {
+        return message.startsWith('{') ? JSON.parse(message) : null;
+      }
+
+      return message;
+    })
+    .filter(
+      (message): message is Record<string, any> =>
+        message != null && !Array.isArray(message) && typeof message === 'object',
+    );
 
   assert.ok(structuredMessages.length >= 2);
-  assert.equal(structuredMessages[0].type, 'graft-health');
-  assert.equal(structuredMessages.at(-1)?.event, 'heartbeat');
-  assert.equal(structuredMessages.at(-1)?.state, 'BLOCKED');
-  assert.equal(structuredMessages.at(-1)?.ready, false);
-  assert.equal(structuredMessages.at(-1)?.hooks.A.installed, false);
-  assert.equal(structuredMessages.at(-1)?.hooks.b6.installed, false);
-  assert.match(structuredMessages.at(-1)?.hooks.A.missingReason ?? '', /threadId field/i);
-  assert.ok(sent.every((message) => typeof message === 'string'));
+  const firstMessage = structuredMessages[0];
+  const lastMessage = structuredMessages.at(-1);
+
+  assert.equal(firstMessage?.type, 'graft-health');
+  assert.equal(lastMessage?.event, 'heartbeat');
+  assert.equal(lastMessage?.state, 'BLOCKED');
+  assert.equal(lastMessage?.ready, false);
+  assert.equal(lastMessage?.hooks.A.installed, false);
+  assert.equal(lastMessage?.hooks.b6.installed, false);
+  assert.match(lastMessage?.hooks.A.missingReason ?? '', /threadId field/i);
+  assert.ok(
+    sent.every(
+      (message) =>
+        typeof message === 'string' ||
+        (message != null && !Array.isArray(message) && typeof message === 'object'),
+    ),
+  );
 });
 
 test('installThreadImageGraft schedules a periodic heartbeat timer', async () => {
