@@ -42,8 +42,6 @@ internal class KakaoClassRegistry(
             val function0 = stableClass(classLoader, "kotlin.jvm.functions.Function0")
             val function1 = stableClass(classLoader, "kotlin.jvm.functions.Function1")
             val masterDb = stableClass(classLoader, "com.kakao.talk.database.MasterDatabase")
-            val writeType = stableClass(classLoader, "com.kakao.talk.manager.send.ChatSendingLogRequest\$c")
-            val listener = stableClass(classLoader, "com.kakao.talk.manager.send.m")
 
             val messageType =
                 discoverClass(
@@ -142,6 +140,22 @@ internal class KakaoClassRegistry(
                     "ChatMediaSender multi send not found: expected 9-param (List,MessageType,...) on ${chatMediaSender.name}",
                 )
 
+            val writeType =
+                multiSend.parameterTypes[5].also { derived ->
+                    check(derived.isEnum) {
+                        "WriteType derived from multiSend param[5] is not an enum: ${derived.name}"
+                    }
+                    Log.i(TAG, "WriteType derived from multiSend signature: ${derived.name}")
+                }
+
+            val listener =
+                multiSend.parameterTypes[8].also { derived ->
+                    check(derived.isInterface) {
+                        "Listener derived from multiSend param[8] is not an interface: ${derived.name}"
+                    }
+                    Log.i(TAG, "Listener derived from multiSend signature: ${derived.name}")
+                }
+
             val mediaItemCtor =
                 mediaItem.getConstructor(
                     String::class.java,
@@ -190,6 +204,8 @@ internal class KakaoClassRegistry(
                 "KakaoClassRegistry.discover complete — " +
                     "ChatMediaSender=${chatMediaSender.name}, " +
                     "MessageType=${messageType.name}, " +
+                    "WriteType=${writeType.name}, " +
+                    "Listener=${listener.name}, " +
                     "ChatRoomManager=${chatRoomManager.name}, " +
                     "ChatRoom=${chatRoom.name}",
             )
