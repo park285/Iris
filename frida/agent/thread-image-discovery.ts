@@ -6,6 +6,12 @@ import {
   type IntentSnapshot,
   type SessionMeta,
 } from './shared/session.js';
+import { fingerprintUriStrings, mergeSessionMeta } from './shared/fingerprint-store.js';
+import {
+  readAttachmentText,
+  readChatRoomId,
+  rewriteAttachmentText,
+} from './shared/chatlog-reflection.js';
 import { isPhotoMessageType, removeCallingPkgFromAttachment } from './shared/message.js';
 
 type RuntimeLike = {
@@ -26,15 +32,27 @@ const MEDIA_BATCH_WORKER = 'Fp.N';
 const NESTED_SEND_INTENT_KEYS = ['EXTRA_SEND_INTENT', 'ConnectManager.ACTION_SEND_INTENT'] as const;
 const THREAD_KEYS = ['intent_key_join_thread_id', 'BUNDLE_KEY_THREAD_CHATLOG_ID', 'BUNDLE_KEY_CHAT_ROOM_ID'] as const;
 const DUPLICATE_TTL_MS = 60_000;
+const ENABLE_THREAD_IMAGE_DISCOVERY = false;
 const DISCOVERY_BRIDGE_EXTRAS = true;
+const ENABLE_DISCOVERY_LOGS = true;
 
 const seenSendingLogs = new Map<string, number>();
 const sessionByFingerprint = new Map<string, SessionMeta>();
 let dumpedChatMediaSenderClass = false;
 let currentChatMediaSenderSession: SessionMeta | null = null;
 
-function log(runtime: RuntimeLike, message: string): void {
-  runtime.send?.(`[discovery] ${message}`);
+function log(runtime: RuntimeLike, message: string | (() => string)): void {
+  if (!ENABLE_DISCOVERY_LOGS) {
+    return;
+  }
+
+  const send = runtime.send;
+  if (send == null) {
+    return;
+  }
+
+  const resolvedMessage = typeof message === 'function' ? message() : message;
+  send(`[discovery] ${resolvedMessage}`);
 }
 
 function trimText(value: string | null | undefined, maxLength = 240): string {
@@ -61,26 +79,6 @@ function cleanupFingerprintSessions(now = Date.now()): void {
       sessionByFingerprint.delete(fingerprint);
     }
   }
-}
-
-function mergeSessionMeta(previous: SessionMeta | null, next: SessionMeta | null): SessionMeta | null {
-  if (previous == null) {
-    return next;
-  }
-  if (next == null) {
-    return previous;
-  }
-
-  return {
-    sessionId: previous.sessionId,
-    threadId: previous.threadId ?? next.threadId,
-    threadScope: previous.threadScope > 0 ? previous.threadScope : next.threadScope,
-    roomId: previous.roomId ?? next.roomId,
-    createdAt:
-      previous.createdAt > 0 && previous.createdAt <= next.createdAt
-        ? previous.createdAt
-        : next.createdAt,
-  };
 }
 
 function rememberSendingLog(key: string | null, now = Date.now()): boolean {
@@ -199,9 +197,9 @@ function applySessionExtras(runtime: RuntimeLike, targetIntent: any, sourceInten
         // Best effort only.
       }
     }
-    log(runtime, `${label} bridged session=${trimText(identifier ?? null, 64)}`);
+    log(runtime, () => `${label} bridged session=${trimText(identifier ?? null, 64)}`);
   } catch (error) {
-    log(runtime, `${label} bridge failed error=${String(error)}`);
+    log(runtime, () => `${label} bridge failed error=${String(error)}`);
   }
 }
 
@@ -329,11 +327,7 @@ function readUriStrings(values: any): string[] {
 }
 
 function fingerprintUris(values: any): string {
-  const uris = readUriStrings(values);
-  if (uris.length === 0) {
-    return 'empty';
-  }
-  return `${uris.length}:${uris.join('|')}`;
+  return fingerprintUriStrings(readUriStrings(values));
 }
 
 function formatSession(intent: any): string {
@@ -360,18 +354,6 @@ function logIntent(runtime: RuntimeLike, label: string, intent: any): void {
 function readMessageType(sendingLog: any): string | null {
   try {
     return String(sendingLog.w0());
-  } catch {
-    return null;
-  }
-}
-
-function readChatRoomId(runtime: RuntimeLike, sendingLog: any): string | null {
-  try {
-    const JavaBridge = runtime.Java;
-    if (JavaBridge == null) {
-      return null;
-    }
-    return JavaBridge.use('java.lang.String').valueOf(sendingLog.getChatRoomId());
   } catch {
     return null;
   }
@@ -409,49 +391,6 @@ function readForwardState(sendingLog: any): string | null {
   } catch {
     return null;
   }
-}
-
-function readAttachmentText(sendingLog: any): string | null {
-  try {
-    const cls = sendingLog.getClass();
-    const attachmentField = cls.getDeclaredField(KAKAO_IMAGE_GRAFT_TARGET.attachmentField);
-    attachmentField.setAccessible(true);
-    const attachment = attachmentField.get(sendingLog);
-    return attachment == null ? null : String(attachment);
-  } catch {
-    return null;
-  }
-}
-
-function rewriteAttachmentText(sendingLog: any, newText: string): boolean {
-  try {
-    const cls = sendingLog.getClass();
-    const attachmentField = cls.getDeclaredField(KAKAO_IMAGE_GRAFT_TARGET.attachmentField);
-    attachmentField.setAccessible(true);
-    const attachment = attachmentField.get(sendingLog);
-    if (attachment == null) {
-      return false;
-    }
-
-    const attachmentClass = attachment.getClass();
-    const fields = attachmentClass.getDeclaredFields();
-    for (const field of fields) {
-      field.setAccessible(true);
-      if (field.getType().getName() !== 'java.lang.String') {
-        continue;
-      }
-
-      const value = field.get(attachment);
-      if (value != null && String(value).includes('callingPkg')) {
-        field.set(attachment, newText);
-        return true;
-      }
-    }
-  } catch {
-    return false;
-  }
-
-  return false;
 }
 
 function installBaseIntentFilterDiscovery(runtime: RuntimeLike): void {
@@ -684,18 +623,18 @@ function installChatMediaSenderDiscovery(runtime: RuntimeLike): void {
       for (let paramIndex = 0; paramIndex < parameterTypes.length; paramIndex += 1) {
         params.push(String(parameterTypes[paramIndex].getName()));
       }
-      log(runtime, `ChatMediaSender.method name=${String(method.getName())} params=${params.join(',')}`);
+      log(runtime, () => `ChatMediaSender.method name=${String(method.getName())} params=${params.join(',')}`);
     }
   } catch (error) {
-    log(runtime, `ChatMediaSender.method-dump failed error=${String(error)}`);
+    log(runtime, () => `ChatMediaSender.method-dump failed error=${String(error)}`);
   }
 
-  const logState = (label: string, self: any, args: any[]) => {
-    log(
-      runtime,
-      `${label} args=${args.map((arg) => trimText(arg?.toString?.() ?? null, 180)).join(' | ')}`,
-    );
+  const logState = (label: string, _self: any, args: any[]) => {
+    log(runtime, () => `${label} args=${args.map((arg) => trimText(arg?.toString?.() ?? null, 180)).join(' | ')}`);
   };
+
+  const LongClass = JavaBridge.use('java.lang.Long');
+  const StringClass = JavaBridge.use('java.lang.String');
 
   for (const overload of ChatMediaSender.o.overloads) {
     overload.implementation = function (...args: any[]) {
@@ -712,7 +651,7 @@ function installChatMediaSenderDiscovery(runtime: RuntimeLike): void {
 
       log(
         runtime,
-        `ChatMediaSender.o type=${trimText(messageType?.toString?.() ?? null, 96)} uris=${countCollection(uriList)} fp=${trimText(fingerprint, 200)} writeType=${trimText(writeType?.toString?.() ?? null, 64)} shareOriginal=${String(shareOriginal)} highQuality=${String(needHighQualityVideo)} message=${trimText(message?.toString?.() ?? null, 96)} attachment=${trimText(attachment?.toString?.() ?? null, 240)} forwardExtra=${trimText(forwardExtra?.toString?.() ?? null, 240)} session=${session?.sessionId ?? 'none'}`,
+        () => `ChatMediaSender.o type=${trimText(messageType?.toString?.() ?? null, 96)} uris=${countCollection(uriList)} fp=${trimText(fingerprint, 200)} writeType=${trimText(writeType?.toString?.() ?? null, 64)} shareOriginal=${String(shareOriginal)} highQuality=${String(needHighQualityVideo)} message=${trimText(message?.toString?.() ?? null, 96)} attachment=${trimText(attachment?.toString?.() ?? null, 240)} forwardExtra=${trimText(forwardExtra?.toString?.() ?? null, 240)} session=${session?.sessionId ?? 'none'}`,
       );
       currentChatMediaSenderSession = session;
       try {
@@ -766,30 +705,27 @@ function installChatMediaSenderDiscovery(runtime: RuntimeLike): void {
       const writeType = args[1];
       const session = currentChatMediaSenderSession;
       if (session != null) {
-        const roomId = readChatRoomId(runtime, sendingLog);
+        const roomId = readChatRoomId(runtime.Java, sendingLog);
         if (roomId === session.roomId && session.threadId != null && session.threadScope > 0) {
           try {
             const JavaBridge = runtime.Java;
             if (JavaBridge != null) {
               sendingLog.H1(session.threadScope);
               sendingLog.J1(
-                JavaBridge.use('java.lang.Long').valueOf(
-                  JavaBridge.use('java.lang.String').valueOf(session.threadId),
+                LongClass.valueOf(
+                  StringClass.valueOf(session.threadId),
                 ),
               );
-              log(
-                runtime,
-                `ChatMediaSender.A injected session=${session.sessionId} room=${roomId} threadId=${session.threadId} scope=${session.threadScope}`,
-              );
+              log(runtime, () => `ChatMediaSender.A injected session=${session.sessionId} room=${roomId} threadId=${session.threadId} scope=${session.threadScope}`);
             }
           } catch (error) {
-            log(runtime, `ChatMediaSender.A injection-failed session=${session.sessionId} error=${String(error)}`);
+            log(runtime, () => `ChatMediaSender.A injection-failed session=${session.sessionId} error=${String(error)}`);
           }
         }
       }
       log(
         runtime,
-        `ChatMediaSender.A session=${session?.sessionId ?? 'none'} writeType=${trimText(writeType?.toString?.() ?? null, 64)} room=${readChatRoomId(runtime, sendingLog) ?? 'none'} threadId=${readThreadId(sendingLog) ?? 'none'} scope=${readThreadScope(sendingLog) ?? 'none'} attachment=${trimText(readAttachmentText(sendingLog), 240)}`,
+        () => `ChatMediaSender.A session=${session?.sessionId ?? 'none'} writeType=${trimText(writeType?.toString?.() ?? null, 64)} room=${readChatRoomId(runtime.Java, sendingLog) ?? 'none'} threadId=${readThreadId(sendingLog) ?? 'none'} scope=${readThreadScope(sendingLog) ?? 'none'} attachment=${trimText(readAttachmentText(sendingLog, KAKAO_IMAGE_GRAFT_TARGET.attachmentField), 240)}`,
       );
       return overload.apply(this, args);
     };
@@ -801,7 +737,7 @@ function installChatMediaSenderDiscovery(runtime: RuntimeLike): void {
       const writeType = args[2];
       log(
         runtime,
-        `ChatMediaSender.B session=${currentChatMediaSenderSession?.sessionId ?? 'none'} writeType=${trimText(writeType?.toString?.() ?? null, 64)} room=${readChatRoomId(runtime, sendingLog) ?? 'none'} threadId=${readThreadId(sendingLog) ?? 'none'} scope=${readThreadScope(sendingLog) ?? 'none'} attachment=${trimText(readAttachmentText(sendingLog), 240)}`,
+        () => `ChatMediaSender.B session=${currentChatMediaSenderSession?.sessionId ?? 'none'} writeType=${trimText(writeType?.toString?.() ?? null, 64)} room=${readChatRoomId(runtime.Java, sendingLog) ?? 'none'} threadId=${readThreadId(sendingLog) ?? 'none'} scope=${readThreadScope(sendingLog) ?? 'none'} attachment=${trimText(readAttachmentText(sendingLog, KAKAO_IMAGE_GRAFT_TARGET.attachmentField), 240)}`,
       );
       return overload.apply(this, args);
     };
@@ -822,7 +758,7 @@ function installSendingLogDiscovery(runtime: RuntimeLike): void {
     overload.implementation = function (...args: any[]) {
       const sendingLog = args[1];
       const messageType = readMessageType(sendingLog);
-      const roomId = readChatRoomId(runtime, sendingLog);
+      const roomId = readChatRoomId(runtime.Java, sendingLog);
       const clientMessageId = readClientMessageId(sendingLog);
       const identityHash = Number(System.identityHashCode(sendingLog));
       const dedupeKey = buildSendingLogDedupeKey({
@@ -836,16 +772,16 @@ function installSendingLogDiscovery(runtime: RuntimeLike): void {
       if (firstSeen) {
         log(
           runtime,
-          `u.observe key=${dedupeKey ?? 'none'} type=${messageType ?? 'none'} room=${roomId ?? 'none'} client=${clientMessageId ?? 'none'} threadId=${readThreadId(sendingLog) ?? 'none'} scope=${readThreadScope(sendingLog) ?? 'none'} t=${trimText(readForwardState(sendingLog), 240)}`,
+          () => `u.observe key=${dedupeKey ?? 'none'} type=${messageType ?? 'none'} room=${roomId ?? 'none'} client=${clientMessageId ?? 'none'} threadId=${readThreadId(sendingLog) ?? 'none'} scope=${readThreadScope(sendingLog) ?? 'none'} t=${trimText(readForwardState(sendingLog), 240)}`,
         );
       }
 
       if (firstSeen && isPhotoMessageType(messageType)) {
-        const attachmentText = readAttachmentText(sendingLog);
+        const attachmentText = readAttachmentText(sendingLog, KAKAO_IMAGE_GRAFT_TARGET.attachmentField);
         const cleanedAttachment = removeCallingPkgFromAttachment(attachmentText);
         if (cleanedAttachment != null && cleanedAttachment !== attachmentText) {
-          if (rewriteAttachmentText(sendingLog, cleanedAttachment)) {
-            log(runtime, `u.observe callingPkg-removed key=${dedupeKey ?? 'none'} attachment=${trimText(cleanedAttachment)}`);
+          if (rewriteAttachmentText(sendingLog, KAKAO_IMAGE_GRAFT_TARGET.attachmentField, cleanedAttachment)) {
+            log(runtime, () => `u.observe callingPkg-removed key=${dedupeKey ?? 'none'} attachment=${trimText(cleanedAttachment)}`);
           }
         }
       }
@@ -875,6 +811,6 @@ export function installThreadImageDiscovery(runtime: RuntimeLike = globalThis as
   return true;
 }
 
-if ((globalThis as RuntimeLike).Java?.available) {
+if (ENABLE_THREAD_IMAGE_DISCOVERY && (globalThis as RuntimeLike).Java?.available) {
   installThreadImageDiscovery();
 }

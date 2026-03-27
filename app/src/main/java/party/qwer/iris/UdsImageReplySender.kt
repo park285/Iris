@@ -11,11 +11,7 @@ internal class UdsImageReplySender(
         threadId: Long?,
         threadScope: Int?,
     ) {
-        val paths =
-            uris.map { uri ->
-                uri.path
-                    ?: error("image URI has no file path: $uri")
-            }
+        val paths = uris.map(::requireFilePath)
         IrisLogger.info(
             "[UdsImageReplySender] sending ${paths.size} image(s) to bridge" +
                 " room=$roomId threadId=$threadId scope=$threadScope",
@@ -26,4 +22,9 @@ internal class UdsImageReplySender(
         }
         IrisLogger.info("[UdsImageReplySender] bridge send completed room=$roomId")
     }
+
+    private fun requireFilePath(uri: Uri): String =
+        requireNotNull(uri.path?.takeIf { uri.scheme.equals("file", ignoreCase = true) }) {
+            "unsupported image URI, only file:// URIs are allowed: $uri"
+        }
 }

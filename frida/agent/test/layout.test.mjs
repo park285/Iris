@@ -59,6 +59,7 @@ test('frida task 1 layout preserves legacy assets and locks toolchain boundaries
   const jsOutsideLegacy = listJsFiles(fridaRoot).filter(
     (relativePath) =>
       !relativePath.startsWith('frida/legacy/') &&
+      !relativePath.startsWith('frida/daemon/internal/agentbundle/bundles/') &&
       !relativePath.startsWith('frida/agent/generated/') &&
       !relativePath.startsWith('frida/agent/node_modules/'),
   );

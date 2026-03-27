@@ -1,6 +1,8 @@
 import { KAKAO_MARKDOWN_GRAFT_TARGET } from './shared/kakao.js';
 
 export const DEFAULT_MARKDOWN_GRAFT_MARKER = 'FRIDA_GRAFT';
+const ENABLE_THREAD_MARKDOWN_GRAFT = false;
+const ENABLE_MARKDOWN_GRAFT_LOGS = false;
 
 type RuntimeLike = {
   Java?: any;
@@ -46,6 +48,9 @@ export function getThreadMarkdownGraftEntrypoint() {
 }
 
 function log(runtime: RuntimeLike, message: string): void {
+  if (!ENABLE_MARKDOWN_GRAFT_LOGS) {
+    return;
+  }
   runtime.send?.(message);
 }
 
@@ -70,6 +75,8 @@ export function installThreadMarkdownGraftHook(
 
   JavaBridge.perform(() => {
     const RequestCompanion = JavaBridge.use(KAKAO_MARKDOWN_GRAFT_TARGET.className);
+    const LongClass = JavaBridge.use('java.lang.Long');
+    const StringClass = JavaBridge.use('java.lang.String');
     const overloads = RequestCompanion[KAKAO_MARKDOWN_GRAFT_TARGET.methodName].overloads;
     for (const overload of overloads) {
       overload.implementation = function (...args: any[]) {
@@ -87,8 +94,8 @@ export function installThreadMarkdownGraftHook(
           threadField.setAccessible(true);
           threadField.set(
             sendingLog,
-            JavaBridge.use('java.lang.Long').valueOf(
-              JavaBridge.use('java.lang.String').valueOf(plan.injection.threadId),
+            LongClass.valueOf(
+              StringClass.valueOf(plan.injection.threadId),
             ),
           );
 
@@ -107,6 +114,6 @@ export function installThreadMarkdownGraftHook(
   return true;
 }
 
-if ((globalThis as RuntimeLike).Java?.available) {
+if (ENABLE_THREAD_MARKDOWN_GRAFT && (globalThis as RuntimeLike).Java?.available) {
   installThreadMarkdownGraftHook();
 }

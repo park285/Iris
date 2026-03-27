@@ -24,6 +24,7 @@ class IrisBridgeModule : IXposedHookLoadPackage {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     val app = param.thisObject as Application
                     Log.i(TAG, "Application.onCreate — starting image bridge server")
+                    BridgeDiscovery.install(lpparam.classLoader)
                     ImageBridgeServer.start(app, lpparam.classLoader)
                 }
             },

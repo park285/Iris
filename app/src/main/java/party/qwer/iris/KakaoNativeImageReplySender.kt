@@ -1,3 +1,5 @@
+@file:Suppress("DEPRECATION", "PLATFORM_CLASS_MAPPED_TO_KOTLIN")
+
 package party.qwer.iris
 
 import android.annotation.SuppressLint

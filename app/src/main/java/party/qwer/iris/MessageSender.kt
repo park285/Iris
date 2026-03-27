@@ -23,6 +23,20 @@ interface MessageSender {
         threadScope: Int? = null,
     ): ReplyAdmissionResult
 
+    fun sendNativePhoto(
+        room: Long,
+        base64ImageDataString: String,
+        threadId: Long? = null,
+        threadScope: Int? = null,
+    ): ReplyAdmissionResult
+
+    fun sendNativeMultiplePhotos(
+        room: Long,
+        base64ImageDataStrings: List<String>,
+        threadId: Long? = null,
+        threadScope: Int? = null,
+    ): ReplyAdmissionResult
+
     fun sendTextShare(
         room: Long,
         msg: String,

@@ -213,7 +213,7 @@ class KakaoDB(
                     updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?)
                 """.trimIndent(),
-                arrayOf(
+                arrayOf<Any?>(
                     identity.stableId,
                     identity.displayName,
                     identity.roomName,

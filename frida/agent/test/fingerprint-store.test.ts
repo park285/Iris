@@ -40,9 +40,24 @@ test('store round-trips a session by fingerprint', () => {
 });
 
 test('store evicts entries beyond TTL', () => {
-  const store = new FingerprintSessionStore(100);
+  const store = new FingerprintSessionStore(100, 32, 0);
   store.set('fp1', session({ createdAt: Date.now() - 200 }));
   assert.equal(store.get('fp1'), null);
+});
+
+test('store returns null for expired entries even before a deferred sweep', () => {
+  const store = new FingerprintSessionStore(100, 32, 1_000);
+  store.set('fp1', session({ createdAt: Date.now() - 200 }));
+  assert.equal(store.get('fp1'), null);
+});
+
+test('store does not merge a fresh session with an expired entry for the same fingerprint', () => {
+  const store = new FingerprintSessionStore(100, 32, 1_000);
+  store.set('fp1', session({ sessionId: 'expired', createdAt: Date.now() - 200 }));
+  store.set('fp1', session({ sessionId: 'fresh' }));
+  const result = store.get('fp1');
+  assert.notEqual(result, null);
+  assert.equal(result?.sessionId, 'fresh');
 });
 
 test('store evicts oldest entries beyond maxSize', () => {

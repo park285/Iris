@@ -29,6 +29,8 @@ local.properties
 .tasklists/
 .cursor/
 .aider*
+CLAUDE.md
+AGENTS.md
 
 # Serena MCP
 .serena/
@@ -43,6 +45,11 @@ docs/current-staging-split.md
 *.backup
 *.bak
 *~
+
+# Local binary artifacts
+*.xapk
+*.zip
+image.png
 
 # Build artifacts
 frida/agent/node_modules/

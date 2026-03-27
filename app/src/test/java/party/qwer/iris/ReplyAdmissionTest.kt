@@ -1,42 +1,19 @@
 package party.qwer.iris
 
 import io.ktor.http.HttpStatusCode
-import kotlinx.serialization.json.JsonPrimitive
-import party.qwer.iris.model.ReplyRequest
 import party.qwer.iris.model.ReplyType
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class ReplyAdmissionTest {
-    private val threadReady =
-        GraftReadinessChecker {
-            GraftReadinessSnapshot(
-                ready = true,
-                state = GraftDaemonState.READY,
-                checkedAtMs = 1711280000L,
-            )
-        }
-
-    private val threadBlocked =
-        GraftReadinessChecker {
-            GraftReadinessSnapshot(
-                ready = false,
-                state = GraftDaemonState.BLOCKED,
-                checkedAtMs = 1711280000L,
-                detail = "hook targets missing",
-            )
-        }
-
     @Test
     fun `maps reply admission statuses to expected http codes`() {
         assertEquals(HttpStatusCode.Accepted, replyAdmissionHttpStatus(ReplyAdmissionStatus.ACCEPTED))
         assertEquals(HttpStatusCode.TooManyRequests, replyAdmissionHttpStatus(ReplyAdmissionStatus.QUEUE_FULL))
         assertEquals(HttpStatusCode.ServiceUnavailable, replyAdmissionHttpStatus(ReplyAdmissionStatus.SHUTDOWN))
         assertEquals(HttpStatusCode.BadRequest, replyAdmissionHttpStatus(ReplyAdmissionStatus.INVALID_PAYLOAD))
-        assertEquals(HttpStatusCode.ServiceUnavailable, replyAdmissionHttpStatus(ReplyAdmissionStatus.GRAFT_NOT_READY))
     }
 
     @Test
@@ -93,82 +70,38 @@ class ReplyAdmissionTest {
     }
 
     @Test
-    fun `rejects threaded image replies when graft daemon is not ready`() {
-        val sender = RecordingMessageSender()
+    fun `reply image route only allows image types`() {
+        val error =
+            assertFailsWith<IllegalArgumentException> {
+                validateReplyImageType(ReplyType.TEXT)
+            }
 
-        val result =
-            admitReply(
-                replyRequest =
-                    ReplyRequest(
-                        type = ReplyType.IMAGE,
-                        room = "123",
-                        data = JsonPrimitive("base64"),
-                        threadId = "456",
-                        threadScope = 2,
-                    ),
-                roomId = 123L,
-                notificationReferer = "Iris",
-                threadId = 456L,
-                threadScope = 2,
-                messageSender = sender,
-                graftReadinessChecker = threadBlocked,
-            )
-
-        assertEquals(ReplyAdmissionStatus.GRAFT_NOT_READY, result.status)
-        assertEquals(0, sender.photoCalls)
+        assertEquals("reply-image replies require type=image or image_multiple", error.message)
     }
 
     @Test
-    fun `allows plain image replies even when graft daemon is blocked`() {
-        val sender = RecordingMessageSender()
-
-        val result =
-            admitReply(
-                replyRequest =
-                    ReplyRequest(
-                        type = ReplyType.IMAGE,
-                        room = "123",
-                        data = JsonPrimitive("base64"),
-                    ),
-                roomId = 123L,
-                notificationReferer = "Iris",
-                threadId = null,
-                threadScope = null,
-                messageSender = sender,
-                graftReadinessChecker = threadBlocked,
-            )
-
-        assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
-        assertEquals(1, sender.photoCalls)
+    fun `reply image route accepts room image without thread metadata`() {
+        assertEquals(null, validateReplyImageThreadScope(threadId = null, threadScope = null))
     }
 
     @Test
-    fun `allows threaded image replies when graft daemon is ready`() {
-        val sender = RecordingMessageSender()
+    fun `reply image route requires explicit thread scope when thread id exists`() {
+        val error =
+            assertFailsWith<IllegalArgumentException> {
+                validateReplyImageThreadScope(threadId = 123L, threadScope = null)
+            }
 
-        val result =
-            admitReply(
-                replyRequest =
-                    ReplyRequest(
-                        type = ReplyType.IMAGE_MULTIPLE,
-                        room = "123",
-                        data = kotlinx.serialization.json.buildJsonArray {
-                            add(JsonPrimitive("a"))
-                            add(JsonPrimitive("b"))
-                        },
-                        threadId = "456",
-                        threadScope = 2,
-                    ),
-                roomId = 123L,
-                notificationReferer = "Iris",
-                threadId = 456L,
-                threadScope = 2,
-                messageSender = sender,
-                graftReadinessChecker = threadReady,
-            )
+        assertEquals("reply-image threadId requires threadScope", error.message)
+    }
 
-        assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
-        assertEquals(1, sender.multiPhotoCalls)
+    @Test
+    fun `reply image route restricts scope to thread detail variants`() {
+        val error =
+            assertFailsWith<IllegalArgumentException> {
+                validateReplyImageThreadScope(threadId = 123L, threadScope = 1)
+            }
+
+        assertEquals("reply-image threadScope must be 2 or 3", error.message)
     }
 }
 
@@ -203,6 +136,20 @@ private class RecordingMessageSender : MessageSender {
         multiPhotoCalls += 1
         return ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
     }
+
+    override fun sendNativePhoto(
+        room: Long,
+        base64ImageDataString: String,
+        threadId: Long?,
+        threadScope: Int?,
+    ): ReplyAdmissionResult = ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
+
+    override fun sendNativeMultiplePhotos(
+        room: Long,
+        base64ImageDataStrings: List<String>,
+        threadId: Long?,
+        threadScope: Int?,
+    ): ReplyAdmissionResult = ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
 
     override fun sendTextShare(
         room: Long,

@@ -3,6 +3,9 @@
 
     <application
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@drawable/ic_bridge"
         android:label="Iris Image Bridge">
         <meta-data
             android:name="xposedmodule"

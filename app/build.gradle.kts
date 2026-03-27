@@ -12,7 +12,7 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        minSdk = 35
+        minSdk = 33
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
@@ -23,7 +23,8 @@ android {
             multiDexEnabled = false
         }
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
@@ -35,7 +36,7 @@ android {
         abortOnError = true
         warningsAsErrors = true
         // 설계상 의도된 패턴
-        disable += setOf("PrivateApi", "SdCardPath")
+        disable += setOf("PrivateApi", "DiscouragedPrivateApi", "SdCardPath")
         // 버전 업데이트 알림 비활성화
         disable += setOf("GradleDependency", "NewerVersionAvailable", "AndroidGradlePluginVersion", "OldTargetApi")
     }
@@ -62,6 +63,9 @@ android {
 
 kotlin {
     jvmToolchain(21)
+    compilerOptions {
+        allWarningsAsErrors.set(true)
+    }
 }
 
 private fun registerAssembleOutputCopyTask(variantName: String) {
@@ -99,6 +103,7 @@ ktlint {
 }
 
 dependencies {
+    implementation(project(":imagebridge-protocol"))
     implementation(libs.kotlinx.serialization.json)
 
     implementation(libs.ktor.server.netty)

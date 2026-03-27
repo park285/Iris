@@ -11,7 +11,7 @@ android {
 
     defaultConfig {
         applicationId = "party.qwer.iris.bridge"
-        minSdk = 35
+        minSdk = 33
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
@@ -19,7 +19,12 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 
@@ -44,6 +49,9 @@ android {
 
 kotlin {
     jvmToolchain(21)
+    compilerOptions {
+        allWarningsAsErrors.set(true)
+    }
 }
 
 private fun registerAssembleOutputCopyTask(variantName: String) {
@@ -64,6 +72,11 @@ private fun registerAssembleOutputCopyTask(variantName: String) {
 registerAssembleOutputCopyTask("debug")
 registerAssembleOutputCopyTask("release")
 
+tasks.matching { it.name == "assembleRelease" }.configureEach {
+    dependsOn("ktlintCheck")
+    dependsOn("lint")
+}
+
 ktlint {
     android.set(true)
     outputToConsole.set(true)
@@ -71,5 +84,9 @@ ktlint {
 }
 
 dependencies {
+    implementation(project(":imagebridge-protocol"))
     compileOnly(libs.xposed.api)
+
+    testImplementation(kotlin("test-junit"))
+    testImplementation(libs.org.json)
 }

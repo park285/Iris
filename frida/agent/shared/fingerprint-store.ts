@@ -2,6 +2,7 @@ import { type SessionMeta } from './session.js';
 
 const DEFAULT_TTL_MS = 60_000;
 const DEFAULT_MAX_SIZE = 32;
+const DEFAULT_SWEEP_INTERVAL_MS = 5_000;
 
 export function fingerprintUriStrings(uris: string[]): string {
   if (uris.length === 0) {
@@ -40,36 +41,74 @@ export class FingerprintSessionStore {
   private readonly entries = new Map<string, SessionMeta>();
   private readonly ttlMs: number;
   private readonly maxSize: number;
+  private readonly sweepIntervalMs: number;
+  private lastSweepAt = 0;
 
-  constructor(ttlMs = DEFAULT_TTL_MS, maxSize = DEFAULT_MAX_SIZE) {
+  constructor(
+    ttlMs = DEFAULT_TTL_MS,
+    maxSize = DEFAULT_MAX_SIZE,
+    sweepIntervalMs = DEFAULT_SWEEP_INTERVAL_MS,
+  ) {
     this.ttlMs = ttlMs;
     this.maxSize = maxSize;
+    this.sweepIntervalMs = sweepIntervalMs;
   }
 
   set(fingerprint: string, session: SessionMeta): void {
-    this.cleanup();
+    const now = Date.now();
+    this.maybeCleanup(now);
 
-    const existing = this.entries.get(fingerprint) ?? null;
+    const existing = this.getLiveEntry(fingerprint, now);
     this.entries.set(fingerprint, mergeSessionMeta(existing, session)!);
     this.evictOldest();
   }
 
   get(fingerprint: string): SessionMeta | null {
-    this.cleanup();
+    const now = Date.now();
+    this.maybeCleanup(now);
 
-    return this.entries.get(fingerprint) ?? null;
+    return this.getLiveEntry(fingerprint, now);
   }
 
   get size(): number {
     return this.entries.size;
   }
 
+  sweep(now = Date.now()): void {
+    this.cleanup(now);
+  }
+
+  private maybeCleanup(now = Date.now()): void {
+    if (now - this.lastSweepAt < this.sweepIntervalMs) {
+      return;
+    }
+    this.cleanup(now);
+  }
+
   private cleanup(now = Date.now()): void {
+    this.lastSweepAt = now;
     for (const [fingerprint, session] of this.entries) {
-      if (now - session.createdAt > this.ttlMs) {
+      if (this.isExpired(session, now)) {
         this.entries.delete(fingerprint);
       }
     }
+  }
+
+  private getLiveEntry(fingerprint: string, now: number): SessionMeta | null {
+    const entry = this.entries.get(fingerprint) ?? null;
+    if (entry == null) {
+      return null;
+    }
+    if (!this.isExpired(entry, now)) {
+      return entry;
+    }
+
+    this.entries.delete(fingerprint);
+    return null;
+  }
+
+  private isExpired(session: SessionMeta, now: number): boolean {
+    return now - session.createdAt > this.ttlMs;
   }
 
   private evictOldest(): void {

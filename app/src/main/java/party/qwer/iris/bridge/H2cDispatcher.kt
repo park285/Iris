@@ -1,5 +1,6 @@
 package party.qwer.iris.bridge
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -11,25 +12,15 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
-import okhttp3.Call
-import okhttp3.Callback
 import okhttp3.ConnectionPool
 import okhttp3.Dispatcher
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.Response
 import party.qwer.iris.CommandParser
 import party.qwer.iris.ConfigProvider
 import party.qwer.iris.IrisLogger
 import java.io.Closeable
-import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 
 class H2cDispatcher internal constructor(
     private val config: ConfigProvider,
@@ -70,6 +61,8 @@ class H2cDispatcher internal constructor(
             sharedDispatcher,
             sharedConnectionPool,
         )
+    private val requestFactory = WebhookRequestFactory(config)
+    private val deliveryClient = WebhookDeliveryClient(clientFactory)
     private val routeDispatchers = RouteDispatchRegistry(::createRouteDispatchState)
 
     @Volatile
@@ -198,68 +191,82 @@ class H2cDispatcher internal constructor(
 
     private suspend fun processQueuedDelivery(delivery: QueuedDelivery) {
         val routeState = routeDispatchers.get(delivery.route)
-        var attempt = 0
+        val outcome =
+            try {
+                dispatchAttempt(delivery, delivery.attempt)
+            } catch (e: Exception) {
+                IrisLogger.error(
+                    "[H2cDispatcher] Dispatch worker error: route=${delivery.route}, " +
+                        "messageId=${delivery.messageId}, attempt=${delivery.attempt + 1}: ${e.message}",
+                )
+                DeliveryOutcome.RETRY_LATER
+            }
 
-        while (true) {
-            val outcome =
-                try {
-                    dispatchAttempt(delivery, attempt)
-                } catch (e: Exception) {
-                    IrisLogger.error(
-                        "[H2cDispatcher] Dispatch worker error: route=${delivery.route}, " +
-                            "messageId=${delivery.messageId}, attempt=${attempt + 1}: ${e.message}",
-                    )
-                    DeliveryOutcome.RETRY_LATER
+        when (outcome) {
+            DeliveryOutcome.SUCCESS,
+            DeliveryOutcome.DROP,
+            -> {
+                routeState.queuedMessageIds.remove(delivery.messageId)
+                when (outcome) {
+                    DeliveryOutcome.SUCCESS ->
+                        IrisLogger.debug(
+                            "[H2cDispatcher] Delivery completed: route=${delivery.route}, messageId=${delivery.messageId}",
+                        )
+                    else ->
+                        IrisLogger.error(
+                            "[H2cDispatcher] Delivery dropped: route=${delivery.route}, messageId=${delivery.messageId}",
+                        )
                 }
+                return
+            }
 
-            when (outcome) {
-                DeliveryOutcome.SUCCESS,
-                DeliveryOutcome.DROP,
-                -> {
+            DeliveryOutcome.RETRY_LATER -> {
+                when (
+                    val retrySchedule =
+                        nextDeliveryRetrySchedule(
+                            attempt = delivery.attempt,
+                            maxDeliveryAttempts = maxDeliveryAttempts,
+                            backoffDelayProvider = backoffDelayProvider,
+                        )
+                ) {
+                    is DeliveryRetrySchedule.RetryAttempt -> {
+                        IrisLogger.error(
+                            "[H2cDispatcher] Delivery retry scheduled: route=${delivery.route}, " +
+                                "messageId=${delivery.messageId}, " +
+                                "nextAttempt=${retrySchedule.nextAttempt + 1}/$maxDeliveryAttempts, " +
+                                "delayMs=${retrySchedule.delayMs}",
+                        )
+                        scheduleRetry(delivery.copy(attempt = retrySchedule.nextAttempt), retrySchedule.delayMs)
+                    }
+
+                    is DeliveryRetrySchedule.Exhausted -> {
+                        IrisLogger.error(
+                            "[H2cDispatcher] Exhausted retries: route=${delivery.route}, " +
+                                "messageId=${delivery.messageId}",
+                        )
+                        routeState.queuedMessageIds.remove(delivery.messageId)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun scheduleRetry(
+        delivery: QueuedDelivery,
+        delayMs: Long,
+    ) {
+        coroutineScope.launch {
+            try {
+                delay(delayMs)
+                val routeState = routeDispatchers.get(delivery.route)
+                if (!submitDelivery(delivery, routeState)) {
                     routeState.queuedMessageIds.remove(delivery.messageId)
-                    when (outcome) {
-                        DeliveryOutcome.SUCCESS ->
-                            IrisLogger.debug(
-                                "[H2cDispatcher] Delivery completed: route=${delivery.route}, messageId=${delivery.messageId}",
-                            )
-                        else ->
-                            IrisLogger.error(
-                                "[H2cDispatcher] Delivery dropped: route=${delivery.route}, messageId=${delivery.messageId}",
-                            )
-                    }
-                    return
+                    IrisLogger.error(
+                        "[H2cDispatcher] Failed to re-enqueue retry: route=${delivery.route}, messageId=${delivery.messageId}",
+                    )
                 }
-
-                DeliveryOutcome.RETRY_LATER -> {
-                    when (
-                        val retrySchedule =
-                            nextDeliveryRetrySchedule(
-                                attempt = attempt,
-                                maxDeliveryAttempts = maxDeliveryAttempts,
-                                backoffDelayProvider = backoffDelayProvider,
-                            )
-                    ) {
-                        is DeliveryRetrySchedule.RetryAttempt -> {
-                            IrisLogger.error(
-                                "[H2cDispatcher] Delivery retry scheduled: route=${delivery.route}, " +
-                                    "messageId=${delivery.messageId}, " +
-                                    "nextAttempt=${retrySchedule.nextAttempt + 1}/$maxDeliveryAttempts, " +
-                                    "delayMs=${retrySchedule.delayMs}",
-                            )
-                            attempt = retrySchedule.nextAttempt
-                            delay(retrySchedule.delayMs)
-                        }
-
-                        is DeliveryRetrySchedule.Exhausted -> {
-                            IrisLogger.error(
-                                "[H2cDispatcher] Exhausted retries: route=${delivery.route}, " +
-                                    "messageId=${delivery.messageId}",
-                            )
-                            routeState.queuedMessageIds.remove(delivery.messageId)
-                            return
-                        }
-                    }
-                }
+            } catch (_: CancellationException) {
+                routeDispatchers.get(delivery.route).queuedMessageIds.remove(delivery.messageId)
             }
         }
     }
@@ -281,21 +288,8 @@ class H2cDispatcher internal constructor(
                 "[H2cDispatcher] Dispatch attempt started: route=${delivery.route}, url=${delivery.url}, " +
                     "messageId=${delivery.messageId}, attempt=$attemptLabel",
             )
-            val request =
-                Request
-                    .Builder()
-                    .url(delivery.url)
-                    .post(delivery.payloadJson.toRequestBody(APPLICATION_JSON.toMediaType()))
-                    .header(HEADER_IRIS_MESSAGE_ID, delivery.messageId)
-                    .header(HEADER_IRIS_ROUTE, delivery.route)
-                    .apply {
-                        val webhookToken = config.webhookToken
-                        if (webhookToken.isNotBlank()) {
-                            header(HEADER_IRIS_TOKEN, webhookToken)
-                        }
-                    }.build()
-
-            val statusCode = executeRequest(request, delivery.url)
+            val request = requestFactory.create(delivery)
+            val statusCode = deliveryClient.execute(request, delivery.url)
             classifyResponse(delivery, attemptLabel, statusCode)
         } catch (e: Exception) {
             IrisLogger.error(
@@ -305,42 +299,6 @@ class H2cDispatcher internal constructor(
                     "causeClass=${e.cause?.javaClass?.name ?: NONE}, causeMessage=${e.cause?.message ?: NONE}",
             )
             DeliveryOutcome.RETRY_LATER
-        }
-
-    private suspend fun executeRequest(
-        request: Request,
-        webhookUrl: String,
-    ): Int =
-        suspendCancellableCoroutine { continuation ->
-            val call = clientFactory.clientFor(webhookUrl).newCall(request)
-            continuation.invokeOnCancellation {
-                call.cancel()
-            }
-            call.enqueue(
-                object : Callback {
-                    override fun onFailure(
-                        call: Call,
-                        e: IOException,
-                    ) {
-                        if (!continuation.isActive) {
-                            return
-                        }
-                        continuation.resumeWithException(e)
-                    }
-
-                    override fun onResponse(
-                        call: Call,
-                        response: Response,
-                    ) {
-                        response.use {
-                            if (!continuation.isActive) {
-                                return
-                            }
-                            continuation.resume(it.code)
-                        }
-                    }
-                },
-            )
         }
 
     private fun classifyResponse(
@@ -387,6 +345,7 @@ class H2cDispatcher internal constructor(
             messageId = messageId,
             route = route,
             payloadJson = buildWebhookPayload(command, route, messageId),
+            attempt = 0,
         )
     }
 
@@ -405,10 +364,6 @@ class H2cDispatcher internal constructor(
         private const val KEEP_ALIVE_DURATION_MS = 30_000L
         internal const val MAX_DELIVERY_ATTEMPTS = 6
 
-        private const val HEADER_IRIS_TOKEN = "X-Iris-Token"
-        private const val HEADER_IRIS_MESSAGE_ID = "X-Iris-Message-Id"
-        private const val HEADER_IRIS_ROUTE = "X-Iris-Route"
-        private const val APPLICATION_JSON = "application/json"
         private const val NONE = "<none>"
     }
 }
@@ -432,9 +387,4 @@ private data class RouteDispatchState(
 
 internal fun shouldRetryStatus(statusCode: Int): Boolean = statusCode == 408 || statusCode == 429 || statusCode >= 500
 
-private data class QueuedDelivery(
-    val url: String,
-    val messageId: String,
-    val route: String,
-    val payloadJson: String,
-)
+private typealias QueuedDelivery = WebhookDelivery

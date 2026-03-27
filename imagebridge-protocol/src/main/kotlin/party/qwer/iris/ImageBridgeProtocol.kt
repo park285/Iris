@@ -7,11 +7,13 @@ import java.io.DataOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 
-internal object ImageBridgeProtocol {
+object ImageBridgeProtocol {
     const val SOCKET_NAME = "iris-image-bridge"
     const val ACTION_SEND_IMAGE = "send_image"
+    const val ACTION_HEALTH = "health"
     const val STATUS_SENT = "sent"
     const val STATUS_FAILED = "failed"
+    const val STATUS_OK = "ok"
     const val MAX_FRAME_SIZE = 1_048_576
 
     fun writeFrame(
@@ -46,6 +48,11 @@ internal object ImageBridgeProtocol {
             put("imagePaths", JSONArray(imagePaths))
             if (threadId != null) put("threadId", threadId)
             if (threadScope != null) put("threadScope", threadScope)
+        }
+
+    fun buildHealthRequest(): JSONObject =
+        JSONObject().apply {
+            put("action", ACTION_HEALTH)
         }
 
     fun buildSuccessResponse(): JSONObject =

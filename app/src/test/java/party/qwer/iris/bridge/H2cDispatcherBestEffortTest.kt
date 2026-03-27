@@ -152,7 +152,46 @@ class H2cDispatcherBestEffortTest {
                 assertEquals(RoutingResult.ACCEPTED, routeAccepted(dispatcher, 2L))
 
                 assertTrue(requestLatch.await(10, TimeUnit.SECONDS))
-                assertEquals(List(3) { firstMessageId } + secondMessageId, messageOrder)
+                assertEquals(listOf(firstMessageId, secondMessageId, firstMessageId, firstMessageId), messageOrder)
+            }
+        } finally {
+            server.stop(0)
+            (server.executor as? java.util.concurrent.ExecutorService)?.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `retry backoff does not block later same-route deliveries`() {
+        val port = reservePort()
+        val endpoint = "http://127.0.0.1:$port/webhook/iris"
+        config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, endpoint)
+
+        val messageOrder = CopyOnWriteArrayList<String>()
+        val requestLatch = CountDownLatch(3)
+        val firstMessageId = "kakao-log-1-hololive"
+        val secondMessageId = "kakao-log-2-hololive"
+        val server =
+            HttpServer.create(InetSocketAddress("127.0.0.1", port), 0).apply {
+                createContext(
+                    "/webhook/iris",
+                    RetryThenSuccessHandler(firstMessageId, messageOrder, requestLatch),
+                )
+                executor = Executors.newSingleThreadExecutor()
+                start()
+            }
+
+        try {
+            H2cDispatcher(
+                config,
+                transportOverride = "http1",
+                maxDeliveryAttemptsOverride = 2,
+                backoffDelayProviderOverride = { 200L },
+            ).use { dispatcher ->
+                assertEquals(RoutingResult.ACCEPTED, routeAccepted(dispatcher, 1L))
+                assertEquals(RoutingResult.ACCEPTED, routeAccepted(dispatcher, 2L))
+
+                assertTrue(requestLatch.await(5, TimeUnit.SECONDS))
+                assertEquals(listOf(firstMessageId, secondMessageId, firstMessageId), messageOrder)
             }
         } finally {
             server.stop(0)
@@ -217,6 +256,28 @@ class H2cDispatcherBestEffortTest {
             messageOrder.add(messageId)
             val statusCode =
                 if (messageId == firstMessageId && firstMessageAttempts.incrementAndGet() <= 3) {
+                    500
+                } else {
+                    204
+                }
+            requestLatch.countDown()
+            exchange.sendResponseHeaders(statusCode, -1)
+            exchange.close()
+        }
+    }
+
+    private class RetryThenSuccessHandler(
+        private val firstMessageId: String,
+        private val messageOrder: MutableList<String>,
+        private val requestLatch: CountDownLatch,
+    ) : HttpHandler {
+        private val firstMessageAttempts = AtomicInteger(0)
+
+        override fun handle(exchange: HttpExchange) {
+            val messageId = exchange.requestHeaders.getFirst("X-Iris-Message-Id").orEmpty()
+            messageOrder.add(messageId)
+            val statusCode =
+                if (messageId == firstMessageId && firstMessageAttempts.incrementAndGet() == 1) {
                     500
                 } else {
                     204
