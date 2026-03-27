@@ -60,18 +60,12 @@ internal class KakaoClassRegistry(
                     lastKnownNames = arrayOf("bh.c"),
                     label = "ChatMediaSender",
                 ) { clazz ->
-                    clazz.constructors.any { ctor ->
-                        ctor.parameterTypes.size == 4 &&
-                            ctor.parameterTypes[1] == java.lang.Long::class.java &&
-                            ctor.parameterTypes[2] == function0 &&
-                            ctor.parameterTypes[3] == function1
-                    } &&
-                        clazz.declaredMethods.any { m ->
-                            !Modifier.isStatic(m.modifiers) &&
-                                m.parameterTypes.size == 2 &&
-                                m.parameterTypes[0] == mediaItem &&
-                                m.parameterTypes[1] == Boolean::class.javaPrimitiveType
-                        }
+                    matchesChatMediaSenderClass(
+                        clazz = clazz,
+                        mediaItemClass = mediaItem,
+                        function0Class = function0,
+                        function1Class = function1,
+                    )
                 }
 
             val chatRoomManager =
@@ -95,49 +89,40 @@ internal class KakaoClassRegistry(
                 }
 
             val broadResolver =
-                chatRoomManager.declaredMethods.firstOrNull { m ->
-                    !Modifier.isStatic(m.modifiers) &&
-                        m.parameterTypes.contentEquals(
-                            arrayOf(
-                                Long::class.javaPrimitiveType,
-                                Boolean::class.javaPrimitiveType,
-                                Boolean::class.javaPrimitiveType,
-                            ),
-                        )
-                } ?: error(
-                    "ChatRoomManager broad resolver not found: expected (long,boolean,boolean) on ${chatRoomManager.name}",
+                selectMethodCandidate(
+                    label = "ChatRoomManager broad resolver on ${chatRoomManager.name}",
+                    candidates =
+                        chatRoomManager.declaredMethods.filter { m ->
+                            !Modifier.isStatic(m.modifiers) &&
+                                m.parameterTypes.contentEquals(
+                                    arrayOf(
+                                        Long::class.javaPrimitiveType,
+                                        Boolean::class.javaPrimitiveType,
+                                        Boolean::class.javaPrimitiveType,
+                                    ),
+                                )
+                        },
                 )
             val chatRoom = broadResolver.returnType
             Log.i(TAG, "ChatRoom derived as ${chatRoom.name}")
 
             val directResolver =
-                chatRoomManager.declaredMethods.firstOrNull { m ->
-                    m != broadResolver &&
-                        !Modifier.isStatic(m.modifiers) &&
-                        m.parameterTypes.contentEquals(arrayOf(Long::class.javaPrimitiveType)) &&
-                        chatRoom.isAssignableFrom(m.returnType)
-                } ?: error(
-                    "ChatRoomManager direct resolver not found: expected (long)->ChatRoom on ${chatRoomManager.name}",
+                selectMethodCandidate(
+                    label = "ChatRoomManager direct resolver on ${chatRoomManager.name}",
+                    candidates =
+                        chatRoomManager.declaredMethods.filter { m ->
+                            m != broadResolver &&
+                                !Modifier.isStatic(m.modifiers) &&
+                                m.parameterTypes.contentEquals(arrayOf(Long::class.javaPrimitiveType)) &&
+                                chatRoom.isAssignableFrom(m.returnType)
+                        },
                 )
 
-            val singleSend =
-                chatMediaSender.declaredMethods.firstOrNull { m ->
-                    !Modifier.isStatic(m.modifiers) &&
-                        m.parameterTypes.size == 2 &&
-                        m.parameterTypes[0] == mediaItem &&
-                        m.parameterTypes[1] == Boolean::class.javaPrimitiveType
-                } ?: error(
-                    "ChatMediaSender single send not found: expected (MediaItem,boolean) on ${chatMediaSender.name}",
-                )
-
-            val multiSend =
-                chatMediaSender.declaredMethods.firstOrNull { m ->
-                    !Modifier.isStatic(m.modifiers) &&
-                        m.parameterCount == 9 &&
-                        m.parameterTypes[0] == List::class.java &&
-                        m.parameterTypes[1] == messageType
-                } ?: error(
-                    "ChatMediaSender multi send not found: expected 9-param (List,MessageType,...) on ${chatMediaSender.name}",
+            val (singleSend, multiSend) =
+                resolveChatMediaSendMethods(
+                    chatMediaSenderClass = chatMediaSender,
+                    mediaItemClass = mediaItem,
+                    messageTypeClass = messageType,
                 )
 
             val writeType =
@@ -163,49 +148,55 @@ internal class KakaoClassRegistry(
                 )
 
             val masterDbField =
-                masterDb.declaredFields
-                    .firstOrNull { field ->
-                        Modifier.isStatic(field.modifiers) && field.type == masterDb
-                    }?.apply { isAccessible = true }
-                    ?: error("MasterDatabase singleton field not found on ${masterDb.name}")
+                selectFieldCandidate(
+                    label = "MasterDatabase singleton field on ${masterDb.name}",
+                    candidates =
+                        masterDb.declaredFields.filter { field ->
+                            Modifier.isStatic(field.modifiers) && field.type == masterDb
+                        },
+                ).apply { isAccessible = true }
 
             val roomDao =
-                masterDb.methods.firstOrNull { m ->
-                    !Modifier.isStatic(m.modifiers) &&
-                        m.parameterCount == 0 &&
-                        m.returnType != Void.TYPE &&
-                        m.returnType != masterDb &&
-                        m.returnType != Any::class.java &&
-                        m.returnType.methods.any { daoMethod ->
-                            !Modifier.isStatic(daoMethod.modifiers) &&
-                                daoMethod.parameterTypes.contentEquals(arrayOf(Long::class.javaPrimitiveType)) &&
-                                !daoMethod.returnType.isPrimitive &&
-                                daoMethod.returnType != Void.TYPE &&
-                                daoMethod.returnType != Any::class.java &&
-                                daoMethod.returnType != java.lang.Integer::class.java &&
-                                daoMethod.returnType != java.lang.Long::class.java &&
-                                daoMethod.returnType != java.lang.Boolean::class.java &&
-                                daoMethod.returnType != String::class.java
-                        }
-                } ?: error(
-                    "MasterDatabase roomDao accessor not found: expected 0-param method returning DAO on ${masterDb.name}",
+                selectMethodCandidate(
+                    label = "MasterDatabase roomDao accessor on ${masterDb.name}",
+                    candidates =
+                        masterDb.methods.filter { m ->
+                            !Modifier.isStatic(m.modifiers) &&
+                                m.parameterCount == 0 &&
+                                m.returnType != Void.TYPE &&
+                                m.returnType != masterDb &&
+                                m.returnType != Any::class.java &&
+                                m.returnType.methods.any { daoMethod ->
+                                    !Modifier.isStatic(daoMethod.modifiers) &&
+                                        daoMethod.parameterTypes.contentEquals(arrayOf(Long::class.javaPrimitiveType)) &&
+                                        !daoMethod.returnType.isPrimitive &&
+                                        daoMethod.returnType != Void.TYPE &&
+                                        daoMethod.returnType != Any::class.java &&
+                                        daoMethod.returnType != java.lang.Integer::class.java &&
+                                        daoMethod.returnType != java.lang.Long::class.java &&
+                                        daoMethod.returnType != java.lang.Boolean::class.java &&
+                                        daoMethod.returnType != String::class.java
+                                }
+                        },
                 )
 
             val daoClass = roomDao.returnType
             val entityLookup =
-                daoClass.methods.firstOrNull { m ->
-                    !Modifier.isStatic(m.modifiers) &&
-                        m.parameterTypes.contentEquals(arrayOf(Long::class.javaPrimitiveType)) &&
-                        !m.returnType.isPrimitive &&
-                        m.returnType != Void.TYPE &&
-                        m.returnType != daoClass &&
-                        m.returnType != Any::class.java &&
-                        m.returnType != java.lang.Integer::class.java &&
-                        m.returnType != java.lang.Long::class.java &&
-                        m.returnType != java.lang.Boolean::class.java &&
-                        m.returnType != String::class.java
-                } ?: error(
-                    "RoomDao entity lookup not found: expected (long)->entity on ${daoClass.name}",
+                selectMethodCandidate(
+                    label = "RoomDao entity lookup on ${daoClass.name}",
+                    candidates =
+                        daoClass.methods.filter { m ->
+                            !Modifier.isStatic(m.modifiers) &&
+                                m.parameterTypes.contentEquals(arrayOf(Long::class.javaPrimitiveType)) &&
+                                !m.returnType.isPrimitive &&
+                                m.returnType != Void.TYPE &&
+                                m.returnType != daoClass &&
+                                m.returnType != Any::class.java &&
+                                m.returnType != java.lang.Integer::class.java &&
+                                m.returnType != java.lang.Long::class.java &&
+                                m.returnType != java.lang.Boolean::class.java &&
+                                m.returnType != String::class.java
+                        },
                 )
 
             val photoConst = requireEnumConstant(messageType, "Photo")
@@ -253,6 +244,42 @@ internal class KakaoClassRegistry(
             name: String,
         ): Class<*> = Class.forName(name, true, loader)
 
+        internal fun selectMethodCandidateForTest(
+            label: String,
+            candidates: List<Method>,
+        ): Method = selectMethodCandidate(label, candidates)
+
+        internal fun selectChatMediaSenderCandidateForTest(
+            candidates: List<Class<*>>,
+            mediaItemClass: Class<*>,
+            function0Class: Class<*>,
+            function1Class: Class<*>,
+        ): Class<*> =
+            selectClassCandidate(
+                label = "ChatMediaSender",
+                candidates =
+                    candidates.filter { candidate ->
+                        matchesChatMediaSenderClass(
+                            clazz = candidate,
+                            mediaItemClass = mediaItemClass,
+                            function0Class = function0Class,
+                            function1Class = function1Class,
+                        )
+                    },
+                preferredNames = emptySet(),
+            )
+
+        internal fun resolveChatMediaSenderMethodsForTest(
+            chatMediaSenderClass: Class<*>,
+            mediaItemClass: Class<*>,
+            messageTypeClass: Class<*>,
+        ): Pair<Method, Method> =
+            resolveChatMediaSendMethods(
+                chatMediaSenderClass = chatMediaSenderClass,
+                mediaItemClass = mediaItemClass,
+                messageTypeClass = messageTypeClass,
+            )
+
         private fun discoverClass(
             classLoader: ClassLoader,
             scanner: DexClassScanner,
@@ -260,20 +287,172 @@ internal class KakaoClassRegistry(
             label: String,
             signatureMatcher: (Class<*>) -> Boolean,
         ): Class<*> {
+            val knownMatches =
+                lastKnownNames.mapNotNull { name ->
+                    runCatching {
+                        Class.forName(name, false, classLoader)
+                    }.getOrNull()?.takeIf(signatureMatcher)
+                }
+            val knownConcrete = knownMatches.filter(::isConcreteClass).distinctBy { clazz -> clazz.name }
+            if (knownConcrete.size == 1) {
+                val selected = knownConcrete.single()
+                Log.i(TAG, "$label found at known concrete name: ${selected.name}")
+                return selected
+            }
             for (name in lastKnownNames) {
                 val clazz =
                     runCatching {
                         Class.forName(name, false, classLoader)
                     }.getOrNull()
                 if (clazz != null && signatureMatcher(clazz)) {
-                    Log.i(TAG, "$label found at known name: $name")
-                    return clazz
+                    Log.i(TAG, "$label matched known name candidate: $name")
                 }
             }
-            Log.w(TAG, "$label not found at known names ${lastKnownNames.toList()}, starting DEX scan")
-            return scanner.find(signatureMatcher)
-                ?: error("$label not found by signature (last known: ${lastKnownNames.toList()})")
+            if (knownMatches.isEmpty()) {
+                Log.w(TAG, "$label not found at known names ${lastKnownNames.toList()}, starting DEX scan")
+            } else {
+                Log.w(
+                    TAG,
+                    "$label known-name candidates were insufficient ${knownMatches.map { candidate -> candidate.name }}, starting DEX scan",
+                )
+            }
+            val scannedMatches = scanner.findAll(signatureMatcher)
+            return selectClassCandidate(
+                label = label,
+                candidates = (knownMatches + scannedMatches).distinctBy { clazz -> clazz.name },
+                preferredNames = lastKnownNames.toSet(),
+            )
         }
+
+        private fun isConcreteClass(clazz: Class<*>): Boolean = !Modifier.isAbstract(clazz.modifiers) && !clazz.isInterface
+
+        private fun matchesChatMediaSenderClass(
+            clazz: Class<*>,
+            mediaItemClass: Class<*>,
+            function0Class: Class<*>,
+            function1Class: Class<*>,
+        ): Boolean =
+            isConcreteClass(clazz) &&
+                clazz.constructors.any { ctor ->
+                    ctor.parameterTypes.size == 4 &&
+                        ctor.parameterTypes[1] == java.lang.Long::class.java &&
+                        ctor.parameterTypes[2] == function0Class &&
+                        ctor.parameterTypes[3] == function1Class
+                } &&
+                clazz.methods.any { method ->
+                    !Modifier.isStatic(method.modifiers) &&
+                        method.parameterTypes.size == 2 &&
+                        method.parameterTypes[0] == mediaItemClass &&
+                        method.parameterTypes[1] == Boolean::class.javaPrimitiveType
+                }
+
+        private fun resolveChatMediaSendMethods(
+            chatMediaSenderClass: Class<*>,
+            mediaItemClass: Class<*>,
+            messageTypeClass: Class<*>,
+        ): Pair<Method, Method> {
+            val singleSend =
+                selectMethodCandidate(
+                    label = "ChatMediaSender single send on ${chatMediaSenderClass.name}",
+                    candidates =
+                        chatMediaSenderClass.methods.filter { method ->
+                            !Modifier.isStatic(method.modifiers) &&
+                                method.parameterTypes.size == 2 &&
+                                method.parameterTypes[0] == mediaItemClass &&
+                                method.parameterTypes[1] == Boolean::class.javaPrimitiveType
+                        },
+                )
+            val multiSend =
+                selectMethodCandidate(
+                    label = "ChatMediaSender multi send on ${chatMediaSenderClass.name}",
+                    candidates =
+                        chatMediaSenderClass.methods.filter { method ->
+                            !Modifier.isStatic(method.modifiers) &&
+                                method.parameterCount == 9 &&
+                                method.parameterTypes[0] == List::class.java &&
+                                method.parameterTypes[1] == messageTypeClass
+                        },
+                )
+            return singleSend to multiSend
+        }
+
+        private fun selectClassCandidate(
+            label: String,
+            candidates: List<Class<*>>,
+            preferredNames: Set<String>,
+        ): Class<*> {
+            val uniqueCandidates = candidates.distinctBy { clazz -> clazz.name }
+            check(uniqueCandidates.isNotEmpty()) {
+                "$label not found by signature"
+            }
+            val preferredKnownConcrete =
+                uniqueCandidates.filter { candidate ->
+                    candidate.name in preferredNames && isConcreteClass(candidate)
+                }
+            if (preferredKnownConcrete.size == 1) return preferredKnownConcrete.single()
+
+            val preferredConcrete = uniqueCandidates.filter(::isConcreteClass)
+            if (preferredConcrete.size == 1) return preferredConcrete.single()
+
+            val preferredKnown = uniqueCandidates.filter { candidate -> candidate.name in preferredNames }
+            if (preferredKnown.size == 1) return preferredKnown.single()
+
+            val ambiguousCandidates =
+                when {
+                    preferredKnownConcrete.isNotEmpty() -> preferredKnownConcrete
+                    preferredConcrete.isNotEmpty() -> preferredConcrete
+                    preferredKnown.isNotEmpty() -> preferredKnown
+                    else -> uniqueCandidates
+                }
+            check(ambiguousCandidates.size == 1) {
+                "$label is ambiguous: ${ambiguousCandidates.joinToString { candidate -> candidate.name }}"
+            }
+            return ambiguousCandidates.single()
+        }
+
+        private fun selectMethodCandidate(
+            label: String,
+            candidates: List<Method>,
+        ): Method =
+            chooseUniqueCandidate(
+                label = label,
+                candidates = candidates.distinctBy(::methodSignature),
+                preference = { method ->
+                    !Modifier.isAbstract(method.modifiers) && !method.isBridge && !method.isSynthetic
+                },
+                describe = ::methodSignature,
+            )
+
+        private fun selectFieldCandidate(
+            label: String,
+            candidates: List<Field>,
+        ): Field =
+            chooseUniqueCandidate(
+                label = label,
+                candidates = candidates.distinctBy { field -> "${field.declaringClass.name}.${field.name}:${field.type.name}" },
+                preference = { field -> !field.isSynthetic },
+                describe = { field -> "${field.declaringClass.name}.${field.name}:${field.type.name}" },
+            )
+
+        private fun <T> chooseUniqueCandidate(
+            label: String,
+            candidates: List<T>,
+            preference: (T) -> Boolean,
+            describe: (T) -> String,
+        ): T {
+            check(candidates.isNotEmpty()) { "$label not found" }
+            val preferred = candidates.filter(preference).ifEmpty { candidates }
+            check(preferred.size == 1) {
+                "$label is ambiguous: ${preferred.joinToString { candidate -> describe(candidate) }}"
+            }
+            return preferred.single()
+        }
+
+        private fun methodSignature(method: Method): String =
+            method.parameterTypes.joinToString(
+                prefix = "${method.declaringClass.name}.${method.name}(",
+                postfix = "):${method.returnType.name}",
+            ) { parameterType -> parameterType.name }
 
         private fun hasEnumConstants(
             clazz: Class<*>,

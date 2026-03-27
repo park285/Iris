@@ -9,12 +9,14 @@ internal data class ImageSendRequest(
     val imagePaths: List<String>,
     val threadId: Long?,
     val threadScope: Int?,
+    val requestId: String?,
 )
 
 internal class ImageBridgeRequestHandler(
     private val imageSender: (ImageSendRequest) -> Unit,
     private val healthProvider: () -> ImageBridgeHealthSnapshot,
     private val serialExecutor: RoomThreadSerialExecutor = RoomThreadSerialExecutor(),
+    private val pathValidator: BridgeImagePathValidator = BridgeImagePathValidator(),
     private val logError: (String, String, Throwable) -> Unit = { tag, message, error -> Log.e(tag, message, error) },
 ) {
     fun handle(request: JSONObject): JSONObject =
@@ -38,11 +40,14 @@ internal class ImageBridgeRequestHandler(
             ImageSendRequest(
                 roomId = request.getLong("roomId"),
                 imagePaths =
-                    request.getJSONArray("imagePaths").let { paths ->
-                        (0 until paths.length()).map(paths::getString)
-                    },
+                    pathValidator.validate(
+                        request.getJSONArray("imagePaths").let { paths ->
+                            (0 until paths.length()).map(paths::getString)
+                        },
+                    ),
                 threadId = request.optLongOrNull("threadId"),
                 threadScope = request.optIntOrNull("threadScope"),
+                requestId = request.optString("requestId").ifBlank { null },
             )
         health.discoverySnapshot.sendBlockReason(imageRequest.imagePaths.size)?.let { reason ->
             error(reason)
@@ -63,8 +68,9 @@ internal class ImageBridgeRequestHandler(
     ) {
         val action = request.optString("action", "<missing>")
         val roomId = request.opt("roomId")?.toString() ?: "<missing>"
+        val requestId = request.optString("requestId").ifBlank { "<missing>" }
         runCatching {
-            logError(TAG, "request handling failed action=$action roomId=$roomId", error)
+            logError(TAG, "request handling failed action=$action roomId=$roomId requestId=$requestId", error)
         }
     }
 

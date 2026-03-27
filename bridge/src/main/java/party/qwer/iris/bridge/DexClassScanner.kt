@@ -31,15 +31,20 @@ internal class DexClassScanner(
     private val classNames: List<String> by lazy { enumerateClassNames() }
 
     fun find(predicate: (Class<*>) -> Boolean): Class<*>? {
+        return findAll(predicate).firstOrNull()
+    }
+
+    fun findAll(predicate: (Class<*>) -> Boolean): List<Class<*>> {
+        val matches = mutableListOf<Class<*>>()
         for (name in classNames) {
             if (SKIP_PREFIXES.any { name.startsWith(it) }) continue
             val clazz =
                 runCatching {
                     Class.forName(name, false, classLoader)
                 }.getOrNull() ?: continue
-            if (predicate(clazz)) return clazz
+            if (predicate(clazz)) matches += clazz
         }
-        return null
+        return matches
     }
 
     private fun enumerateClassNames(): List<String> =

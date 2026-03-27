@@ -7,6 +7,7 @@ import org.json.JSONObject
 import java.io.File
 import java.lang.reflect.Constructor
 import java.lang.reflect.Proxy
+import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
 
 internal class KakaoSendInvocationFactory(
@@ -83,13 +84,67 @@ internal class KakaoSendInvocationFactory(
             }
         val constructor =
             senderConstructorCache.computeIfAbsent(chatRoom.javaClass) { chatRoomClass ->
-                registry.chatMediaSenderClass.getConstructor(
-                    chatRoomClass,
-                    java.lang.Long::class.java,
-                    registry.function0Class,
-                    registry.function1Class,
-                )
+                resolveSenderConstructor(chatRoomClass)
             }
         return constructor.newInstance(chatRoom, threadId, sendWithThreadProxy, attachmentDecoratorProxy)
+    }
+
+    private fun resolveSenderConstructor(chatRoomClass: Class<*>): Constructor<*> {
+        val candidates =
+            registry.chatMediaSenderClass.constructors.filter { constructor ->
+                val parameterTypes = constructor.parameterTypes
+                parameterTypes.size == 4 &&
+                    parameterTypes[0].isAssignableFrom(chatRoomClass) &&
+                    parameterTypes[1] == java.lang.Long::class.java &&
+                    parameterTypes[2] == registry.function0Class &&
+                    parameterTypes[3] == registry.function1Class
+            }
+        check(candidates.isNotEmpty()) {
+            "ChatMediaSender constructor not found for chatRoom=${chatRoomClass.name}"
+        }
+        val bestDistance = candidates.minOf { constructor -> typeDistance(chatRoomClass, constructor.parameterTypes[0]) }
+        val bestCandidates =
+            candidates.filter { constructor ->
+                typeDistance(chatRoomClass, constructor.parameterTypes[0]) == bestDistance
+            }
+        check(bestCandidates.size == 1) {
+            val signatures =
+                bestCandidates.joinToString { constructor ->
+                    constructor.parameterTypes.joinToString(
+                        prefix = "${constructor.declaringClass.name}(",
+                        postfix = ")",
+                    ) { parameterType -> parameterType.name }
+                }
+            "ChatMediaSender constructor is ambiguous for chatRoom=${chatRoomClass.name}: $signatures"
+        }
+        return bestCandidates.single()
+    }
+
+    private fun typeDistance(
+        actualType: Class<*>,
+        candidateType: Class<*>,
+    ): Int {
+        if (actualType == candidateType) return 0
+        if (!candidateType.isAssignableFrom(actualType)) return Int.MAX_VALUE
+
+        val visited = linkedSetOf<Class<*>>(actualType)
+        val queue = ArrayDeque<Pair<Class<*>, Int>>()
+        queue += actualType to 0
+        while (queue.isNotEmpty()) {
+            val (current, distance) = queue.removeFirst()
+            if (current == candidateType) return distance
+
+            current.superclass?.let { superclass ->
+                if (visited.add(superclass)) {
+                    queue += superclass to distance + 1
+                }
+            }
+            current.interfaces.forEach { iface ->
+                if (visited.add(iface)) {
+                    queue += iface to distance + 1
+                }
+            }
+        }
+        return Int.MAX_VALUE
     }
 }
