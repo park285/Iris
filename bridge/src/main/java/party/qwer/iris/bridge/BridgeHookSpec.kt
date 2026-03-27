@@ -1,10 +1,7 @@
-@file:Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
-
 package party.qwer.iris.bridge
 
 import org.json.JSONArray
 import org.json.JSONObject
-import java.lang.reflect.Modifier
 
 internal data class BridgeSpecCheck(
     val name: String,
@@ -27,118 +24,47 @@ internal data class ImageBridgeHealthSnapshot(
 )
 
 internal class BridgeHookSpecVerifier(
-    private val classLookup: (String) -> Class<*>,
+    private val registry: KakaoClassRegistry?,
+    private val registryError: String? = null,
 ) {
     fun verify(): BridgeSpecStatus {
         val checks = mutableListOf<BridgeSpecCheck>()
-        val masterDatabaseClass = checkClass(checks, "class MasterDatabase", "com.kakao.talk.database.MasterDatabase")
-        val chatRoomClass = checkClass(checks, "class hp.t", "hp.t")
-        val managerClass = checkClass(checks, "class hp.J0", "hp.J0")
-        val mediaSenderClass = checkClass(checks, "class bh.c", "bh.c")
-        val mediaItemClass = checkClass(checks, "class MediaItem", "com.kakao.talk.model.media.MediaItem")
-        val function0Class = checkClass(checks, "class Function0", "kotlin.jvm.functions.Function0")
-        val function1Class = checkClass(checks, "class Function1", "kotlin.jvm.functions.Function1")
-        val writeTypeClass = checkClass(checks, "class ChatSendingLogRequest\$c", "com.kakao.talk.manager.send.ChatSendingLogRequest\$c")
-        val listenerClass = checkClass(checks, "class listener", "com.kakao.talk.manager.send.m")
-        val messageTypeClass =
-            try {
-                classLookup("Op.EnumC16810c").also {
-                    checks += BridgeSpecCheck("class Op.EnumC16810c", ok = true)
-                }
-            } catch (_: Throwable) {
-                checkClass(checks, "class Op.c", "Op.c")
-            }
 
-        masterDatabaseClass?.let { klass ->
+        if (registry == null) {
             checks +=
-                verify("MasterDatabase singleton field") {
-                    klass.declaredFields.firstOrNull { field ->
-                        Modifier.isStatic(field.modifiers) && field.type == klass
-                    } ?: error("singleton field not found")
-                }
-            checks +=
-                verify("MasterDatabase.O()") {
-                    klass.getMethod("O")
-                }
+                BridgeSpecCheck(
+                    "KakaoClassRegistry",
+                    ok = false,
+                    detail = registryError ?: "not initialized",
+                )
+            return BridgeSpecStatus(
+                ready = false,
+                checkedAtEpochMs = System.currentTimeMillis(),
+                checks = checks,
+            )
         }
 
-        managerClass?.let { klass ->
-            checks +=
-                verify("hp.J0 accessor") {
-                    klass.methods.firstOrNull { method ->
-                        method.name == "j" && method.parameterCount == 0 && method.returnType == klass
-                    } ?: klass.methods.firstOrNull { method ->
-                        Modifier.isStatic(method.modifiers) && method.parameterCount == 0 && method.returnType == klass
-                    } ?: error("manager accessor not found")
-                }
-        }
-
-        chatRoomClass?.let { klass ->
-            checks +=
-                verify("hp.t has resolver surface") {
-                    val hasCompanionResolver =
-                        klass.declaredFields.any { field ->
-                            Modifier.isStatic(field.modifiers)
-                        }
-                    val hasSingleArgConstructor =
-                        klass.declaredConstructors.any { constructor ->
-                            constructor.parameterTypes.size == 1
-                        }
-                    check(hasCompanionResolver || hasSingleArgConstructor) { "chat room resolver surface missing" }
-                }
-        }
-
-        if (mediaSenderClass != null && mediaItemClass != null) {
-            checks +=
-                verify("MediaItem(String,long)") {
-                    mediaItemClass.getConstructor(String::class.java, Long::class.javaPrimitiveType)
-                }
-            checks +=
-                verify("ChatMediaSender.n(...)") {
-                    mediaSenderClass.getMethod("n", mediaItemClass, Boolean::class.javaPrimitiveType)
-                }
-        }
-
-        if (mediaSenderClass != null && messageTypeClass != null && writeTypeClass != null && listenerClass != null) {
-            checks +=
-                verify("ChatMediaSender.p(...)") {
-                    mediaSenderClass.getMethod(
-                        "p",
-                        List::class.java,
-                        messageTypeClass,
-                        String::class.java,
-                        JSONObject::class.java,
-                        JSONObject::class.java,
-                        writeTypeClass,
-                        Boolean::class.javaPrimitiveType,
-                        Boolean::class.javaPrimitiveType,
-                        listenerClass,
-                    )
-                }
-        }
-
-        if (mediaSenderClass != null && function0Class != null && function1Class != null) {
-            checks +=
-                verify("ChatMediaSender ctor") {
-                    mediaSenderClass.declaredConstructors.firstOrNull { constructor ->
-                        constructor.parameterTypes.size == 4 &&
-                            constructor.parameterTypes[1] == java.lang.Long::class.java &&
-                            constructor.parameterTypes[2] == function0Class &&
-                            constructor.parameterTypes[3] == function1Class
-                    } ?: error("sender constructor not found")
-                }
-        }
-
-        messageTypeClass?.let { klass ->
-            checks +=
-                verify("message type Photo") { requireEnumConstant(klass, "Photo") }
-            checks +=
-                verify("message type MultiPhoto") { requireEnumConstant(klass, "MultiPhoto") }
-        }
-        writeTypeClass?.let { klass ->
-            checks +=
-                verify("write type None") { requireEnumConstant(klass, "None") }
-        }
+        checks += checkField("class ChatMediaSender") { registry.chatMediaSenderClass.name }
+        checks += checkField("class MessageType") { registry.messageTypeClass.name }
+        checks += checkField("class ChatRoomManager") { registry.chatRoomManagerClass.name }
+        checks += checkField("class ChatRoom") { registry.chatRoomClass.name }
+        checks += checkField("class MasterDatabase") { registry.masterDatabaseClass.name }
+        checks += checkField("class MediaItem") { registry.mediaItemClass.name }
+        checks += checkField("class Function0") { registry.function0Class.name }
+        checks += checkField("class Function1") { registry.function1Class.name }
+        checks += checkField("class WriteType") { registry.writeTypeClass.name }
+        checks += checkField("class Listener") { registry.listenerClass.name }
+        checks += checkField("MasterDatabase singleton field") { registry.masterDbSingletonField.name }
+        checks += checkField("MasterDatabase#roomDao") { registry.roomDaoMethod.name }
+        checks += checkField("RoomDao#entityLookup") { registry.entityLookupMethod.name }
+        checks += checkField("ChatMediaSender#sendSingle") { registry.singleSendMethod.name }
+        checks += checkField("ChatMediaSender#sendMultiple") { registry.multiSendMethod.name }
+        checks += checkField("MediaItem(String,long)") { registry.mediaItemConstructor.toString() }
+        checks += checkField("ChatRoomManager#broadResolve") { registry.broadRoomResolverMethod.name }
+        checks += checkField("ChatRoomManager#directResolve") { registry.directRoomResolverMethod.name }
+        checks += checkField("message type Photo") { registry.photoType.toString() }
+        checks += checkField("message type MultiPhoto") { registry.multiPhotoType.toString() }
+        checks += checkField("write type None") { registry.writeTypeNone.toString() }
 
         return BridgeSpecStatus(
             ready = checks.all { it.ok },
@@ -147,38 +73,16 @@ internal class BridgeHookSpecVerifier(
         )
     }
 
-    private fun checkClass(
-        checks: MutableList<BridgeSpecCheck>,
+    private fun checkField(
         name: String,
-        className: String,
-    ): Class<*>? =
-        try {
-            classLookup(className).also {
-                checks += BridgeSpecCheck(name, ok = true)
-            }
-        } catch (error: Throwable) {
-            checks += BridgeSpecCheck(name, ok = false, detail = error.message ?: error.javaClass.name)
-            null
-        }
-
-    private fun verify(
-        name: String,
-        block: () -> Any,
+        accessor: () -> String,
     ): BridgeSpecCheck =
         try {
-            block()
-            BridgeSpecCheck(name, ok = true)
+            val detail = accessor()
+            BridgeSpecCheck(name, ok = true, detail = detail)
         } catch (error: Throwable) {
             BridgeSpecCheck(name, ok = false, detail = error.message ?: error.javaClass.name)
         }
-
-    private fun requireEnumConstant(
-        enumClass: Class<*>,
-        name: String,
-    ): Any =
-        enumClass.enumConstants?.firstOrNull { constant ->
-            (constant as Enum<*>).name == name
-        } ?: error("enum constant $name not found")
 }
 
 internal fun ImageBridgeHealthSnapshot.toJson(): JSONObject =
