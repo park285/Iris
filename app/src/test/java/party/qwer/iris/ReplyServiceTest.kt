@@ -370,7 +370,15 @@ class ReplyServiceTest {
 
         assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
         assertTrue(latch.await(5, TimeUnit.SECONDS))
-        assertEquals("handoff_completed", service.replyStatusOrNull(requestId)?.state)
+        var finalState = service.replyStatusOrNull(requestId)?.state
+        repeat(20) {
+            if (finalState == "handoff_completed") {
+                return@repeat
+            }
+            Thread.sleep(50)
+            finalState = service.replyStatusOrNull(requestId)?.state
+        }
+        assertEquals("handoff_completed", finalState)
         service.shutdown()
     }
 }
