@@ -9,7 +9,6 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -193,21 +192,9 @@ class KakaoSendInvocationFactoryTest {
     @Test
     fun `sendSingle caches reflection classes across invocations`() {
         FakeMediaSender.reset()
-        val lookupCounts = linkedMapOf<String, Int>()
-        val classMap =
-            mapOf(
-                "bh.c" to FakeMediaSender::class.java,
-                "com.kakao.talk.model.media.MediaItem" to FakeMediaItem::class.java,
-                "kotlin.jvm.functions.Function0" to kotlin.jvm.functions.Function0::class.java,
-                "kotlin.jvm.functions.Function1" to kotlin.jvm.functions.Function1::class.java,
-            )
         val factory =
             KakaoSendInvocationFactory(
-                loader = javaClass.classLoader!!,
-                classLookup = { name ->
-                    lookupCounts[name] = (lookupCounts[name] ?: 0) + 1
-                    classMap[name] ?: error("unexpected class lookup: $name")
-                },
+                registry = buildFakeRegistry(),
             )
         val chatRoom = FakeChatRoom()
 
@@ -224,10 +211,6 @@ class KakaoSendInvocationFactoryTest {
             threadScope = null,
         )
 
-        assertEquals(1, lookupCounts.getValue("bh.c"))
-        assertEquals(1, lookupCounts.getValue("com.kakao.talk.model.media.MediaItem"))
-        assertEquals(1, lookupCounts.getValue("kotlin.jvm.functions.Function0"))
-        assertEquals(1, lookupCounts.getValue("kotlin.jvm.functions.Function1"))
         assertEquals(listOf("/tmp/first.png", "/tmp/second.png"), FakeMediaSender.sentPaths)
         assertEquals(listOf(true, false), FakeMediaSender.threadFlags)
     }
@@ -236,8 +219,7 @@ class KakaoSendInvocationFactoryTest {
     fun `sendSingle rejects missing image path`() {
         val factory =
             KakaoSendInvocationFactory(
-                loader = javaClass.classLoader!!,
-                classLookup = { error("should not load classes") },
+                registry = buildFakeRegistry(),
             )
 
         assertFailsWith<IllegalArgumentException> {
@@ -255,19 +237,7 @@ class KakaoSendInvocationFactoryTest {
         FakeMediaSender.reset()
         val factory =
             KakaoSendInvocationFactory(
-                loader = javaClass.classLoader!!,
-                classLookup = { name ->
-                    when (name) {
-                        "bh.c" -> FakeMediaSender::class.java
-                        "com.kakao.talk.model.media.MediaItem" -> FakeMediaItem::class.java
-                        "kotlin.jvm.functions.Function0" -> kotlin.jvm.functions.Function0::class.java
-                        "kotlin.jvm.functions.Function1" -> kotlin.jvm.functions.Function1::class.java
-                        "Op.EnumC16810c" -> FakeMessageType::class.java
-                        "com.kakao.talk.manager.send.ChatSendingLogRequest\$c" -> FakeWriteType::class.java
-                        "com.kakao.talk.manager.send.m" -> FakeListener::class.java
-                        else -> error("unexpected class lookup: $name")
-                    }
-                },
+                registry = buildFakeRegistry(),
                 pathArgumentFactory = { path -> "uri:$path" },
             )
 
@@ -286,30 +256,16 @@ class KakaoSendInvocationFactoryTest {
 
 class ChatRoomResolverTest {
     @Test
-    fun `resolve uses database path and caches class lookups`() {
+    fun `resolve uses database path with registry`() {
         FakeChatRuntime.reset()
-        val lookupCounts = linkedMapOf<String, AtomicInteger>()
-        val resolver =
-            ChatRoomResolver(
-                loader = javaClass.classLoader!!,
-                classLookup = { name ->
-                    lookupCounts.getOrPut(name) { AtomicInteger(0) }.incrementAndGet()
-                    when (name) {
-                        "com.kakao.talk.database.MasterDatabase" -> FakeMasterDatabase::class.java
-                        "hp.t" -> FakeChatRoomModel::class.java
-                        "hp.J0" -> FakeChatRoomManager::class.java
-                        else -> error("unexpected class lookup: $name")
-                    }
-                },
-            )
+        val registry = buildFakeRegistry()
+        val resolver = ChatRoomResolver(registry = registry)
 
         val first = resolver.resolve(101L)
         val second = resolver.resolve(102L)
 
         assertNotNull(first)
         assertNotNull(second)
-        assertEquals(1, lookupCounts.getValue("com.kakao.talk.database.MasterDatabase").get())
-        assertEquals(1, lookupCounts.getValue("hp.t").get())
         assertEquals(listOf(101L, 102L), FakeChatRuntime.resolvedRoomIds)
     }
 }

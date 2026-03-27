@@ -8,24 +8,13 @@ import java.lang.reflect.Modifier
 import java.util.concurrent.ConcurrentHashMap
 
 internal class ChatRoomResolver(
-    private val loader: ClassLoader,
-    private val classLookup: (String) -> Class<*> = { className -> Class.forName(className, true, loader) },
+    private val registry: KakaoClassRegistry,
 ) {
     companion object {
         private const val TAG = "IrisBridge"
     }
 
-    private val classCache = ConcurrentHashMap<String, Class<*>>()
-    private val roomDaoAccessorCache = ConcurrentHashMap<Class<*>, Method>()
-    private val roomEntityLookupCache = ConcurrentHashMap<Class<*>, Method>()
     private val roomEntityResolverCache = ConcurrentHashMap<Class<*>, RoomEntityResolver>()
-    private val managerBroadResolverCache = ConcurrentHashMap<Class<*>, Method>()
-    private val managerDirectResolverCache = ConcurrentHashMap<Class<*>, Method>()
-
-    private val masterDatabaseClass by lazy { loadClass("com.kakao.talk.database.MasterDatabase") }
-    private val masterDatabaseInstanceField by lazy { masterDatabaseClass.findSingletonField() }
-    private val chatRoomClass by lazy { loadClass("hp.t") }
-    private val managerClass by lazy { loadClass("hp.J0") }
     private val managerAccessor by lazy { resolveManagerAccessor() }
 
     fun resolve(roomId: Long): Any? {
@@ -35,7 +24,7 @@ internal class ChatRoomResolver(
             ?.let { return it }
 
         runCatching { resolveFromManager(roomId) }
-            .onFailure { Log.e(TAG, "hp.J0 resolver failed: ${it.message}", it) }
+            .onFailure { Log.e(TAG, "manager resolver failed: ${it.message}", it) }
             .getOrNull()
             ?.let { return it }
 
@@ -43,17 +32,11 @@ internal class ChatRoomResolver(
     }
 
     private fun resolveFromDatabase(roomId: Long): Any? {
-        val database = masterDatabaseInstanceField.get(null) ?: error("MasterDatabase not initialized")
-        val roomDao =
-            roomDaoAccessorCache
-                .computeIfAbsent(database.javaClass) { dbClass ->
-                    dbClass.getMethod("O")
-                }.invoke(database)
-        val entity =
-            roomEntityLookupCache
-                .computeIfAbsent(roomDao.javaClass) { daoClass ->
-                    daoClass.getMethod("h", Long::class.javaPrimitiveType)
-                }.invoke(roomDao, roomId) ?: return null
+        val database =
+            registry.masterDbSingletonField.get(null)
+                ?: error("MasterDatabase not initialized")
+        val roomDao = registry.roomDaoMethod.invoke(database)
+        val entity = registry.entityLookupMethod.invoke(roomDao, roomId) ?: return null
         val resolver =
             roomEntityResolverCache.computeIfAbsent(entity.javaClass) { entityClass ->
                 resolveRoomEntityResolver(entityClass)
@@ -63,59 +46,43 @@ internal class ChatRoomResolver(
 
     private fun resolveFromManager(roomId: Long): Any? {
         val manager = managerAccessor()
-        val broadResolver =
-            managerBroadResolverCache.computeIfAbsent(manager.javaClass) { managerRuntimeClass ->
-                managerRuntimeClass.getMethod(
-                    "e0",
-                    Long::class.javaPrimitiveType,
-                    Boolean::class.javaPrimitiveType,
-                    Boolean::class.javaPrimitiveType,
-                )
-            }
-        val broadResult = broadResolver.invoke(manager, roomId, true, true)
-        if (broadResult != null) {
-            return broadResult
-        }
-        val directResolver =
-            managerDirectResolverCache.computeIfAbsent(manager.javaClass) { managerRuntimeClass ->
-                managerRuntimeClass.getMethod("d0", Long::class.javaPrimitiveType)
-            }
-        return directResolver.invoke(manager, roomId)
+        val broadResult = registry.broadRoomResolverMethod.invoke(manager, roomId, true, true)
+        if (broadResult != null) return broadResult
+        return registry.directRoomResolverMethod.invoke(manager, roomId)
     }
 
     private fun resolveRoomEntityResolver(entityClass: Class<*>): RoomEntityResolver {
-        chatRoomClass.declaredFields
+        registry.chatRoomClass.declaredFields
             .asSequence()
             .filter { Modifier.isStatic(it.modifiers) }
             .mapNotNull { field -> field.readStaticValue() }
             .firstOrNull { candidate ->
                 candidate.javaClass.methods.any { method ->
-                    method.name == "c" &&
-                        method.parameterCount == 1 &&
-                        chatRoomClass.isAssignableFrom(method.returnType) &&
+                    method.parameterCount == 1 &&
+                        registry.chatRoomClass.isAssignableFrom(method.returnType) &&
                         method.parameterTypes[0].isAssignableFrom(entityClass)
                 }
             }?.let { companion ->
                 val resolverMethod =
                     companion.javaClass.methods.first { method ->
-                        method.name == "c" &&
-                            method.parameterCount == 1 &&
-                            chatRoomClass.isAssignableFrom(method.returnType) &&
+                        method.parameterCount == 1 &&
+                            registry.chatRoomClass.isAssignableFrom(method.returnType) &&
                             method.parameterTypes[0].isAssignableFrom(entityClass)
                     }
                 return CompanionRoomEntityResolver(companion, resolverMethod)
             }
 
         val constructor =
-            chatRoomClass.declaredConstructors.firstOrNull { candidate ->
+            registry.chatRoomClass.declaredConstructors.firstOrNull { candidate ->
                 candidate.parameterTypes.size == 1 &&
                     candidate.parameterTypes[0].isAssignableFrom(entityClass)
-            } ?: error("hp.t companion/constructor resolver not found")
+            } ?: error("ChatRoom companion/constructor resolver not found for ${entityClass.name}")
         constructor.isAccessible = true
         return ConstructorRoomEntityResolver(constructor)
     }
 
     private fun resolveManagerAccessor(): () -> Any {
+        val managerClass = registry.chatRoomManagerClass
         val companion =
             managerClass.declaredFields
                 .asSequence()
@@ -123,27 +90,23 @@ internal class ChatRoomResolver(
                 .mapNotNull { field -> field.readStaticValue() }
                 .firstOrNull { candidate ->
                     candidate.javaClass.methods.any { method ->
-                        method.name == "j" &&
-                            method.parameterCount == 0 &&
-                            method.returnType == managerClass
+                        method.parameterCount == 0 && method.returnType == managerClass
                     }
                 }
         if (companion != null) {
             val accessor =
                 companion.javaClass.methods.first { method ->
-                    method.name == "j" &&
-                        method.parameterCount == 0 &&
-                        method.returnType == managerClass
+                    method.parameterCount == 0 && method.returnType == managerClass
                 }
-            return { accessor.invoke(companion) ?: error("hp.J0 companion j() returned null") }
+            return { accessor.invoke(companion) ?: error("ChatRoomManager companion accessor returned null") }
         }
         val staticAccessor =
             managerClass.methods.firstOrNull { method ->
                 Modifier.isStatic(method.modifiers) &&
                     method.parameterCount == 0 &&
                     method.returnType == managerClass
-            } ?: error("hp.J0 singleton accessor not found")
-        return { staticAccessor.invoke(null) ?: error("hp.J0 static accessor returned null") }
+            } ?: error("ChatRoomManager singleton accessor not found")
+        return { staticAccessor.invoke(null) ?: error("ChatRoomManager static accessor returned null") }
     }
 
     private fun Field.readStaticValue(): Any? =
@@ -151,20 +114,6 @@ internal class ChatRoomResolver(
             isAccessible = true
             get(null)
         }.getOrNull()
-
-    private fun Class<*>.findSingletonField(): Field {
-        val field =
-            declaredFields.firstOrNull { candidate ->
-                Modifier.isStatic(candidate.modifiers) && candidate.type == this
-            } ?: error("$name instance field not found")
-        field.isAccessible = true
-        return field
-    }
-
-    private fun loadClass(className: String): Class<*> =
-        classCache.computeIfAbsent(className) { name ->
-            classLookup(name)
-        }
 
     private fun interface RoomEntityResolver {
         fun resolve(entity: Any): Any?
