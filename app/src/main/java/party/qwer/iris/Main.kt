@@ -27,7 +27,22 @@ class Main {
                 IrisLogger.info("Message sender thread started")
 
                 val kakaoDb = KakaoDB(configManager)
-                val observerHelper = ObserverHelper(kakaoDb, configManager)
+                val memberRepo =
+                    MemberRepository(
+                        executeQuery = kakaoDb::executeQuery,
+                        decrypt = KakaoDecrypt.Companion::decrypt,
+                        botId = configManager.botId,
+                    )
+                val sseEventBus = SseEventBus(bufferSize = 100)
+                val snapshotManager = RoomSnapshotManager()
+                val observerHelper =
+                    ObserverHelper(
+                        kakaoDb,
+                        configManager,
+                        memberRepo = memberRepo,
+                        snapshotManager = snapshotManager,
+                        sseEventBus = sseEventBus,
+                    )
 
                 val dbObserver = DBObserver(observerHelper, configManager)
                 dbObserver.startPolling()
@@ -55,6 +70,8 @@ class Main {
                             replyService,
                             bridgeHealthProvider = bridgeClient::queryHealth,
                             replyStatusProvider = replyService::replyStatusOrNull,
+                            memberRepo = memberRepo,
+                            sseEventBus = sseEventBus,
                         ).also {
                             it.startServer()
                             IrisLogger.info("Iris Server started")
