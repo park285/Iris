@@ -1,6 +1,5 @@
 package party.qwer.iris
 
-import android.content.Intent
 import kotlinx.coroutines.delay
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
@@ -8,9 +7,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ReplyServiceTest {
@@ -278,50 +275,6 @@ class ReplyServiceTest {
     }
 
     @Test
-    fun `buildImageShareIntentSpec adds session-chain extras for threaded image replies`() {
-        val spec =
-            buildImageShareIntentSpec(
-                room = 18478615493603057L,
-                threadId = 3804154209723703299L,
-                threadScope = 2,
-                sessionId = "session-123",
-                createdAt = 1_742_890_000_000L,
-            )
-
-        assertEquals(Intent.ACTION_SEND_MULTIPLE, spec.action)
-        assertEquals("com.kakao.talk", spec.packageName)
-        assertEquals("image/*", spec.mimeType)
-        assertEquals("iris:session-123", spec.identifier)
-        assertEquals("session-123", spec.sessionId)
-        assertEquals("3804154209723703299", spec.threadId)
-        assertEquals(2, spec.threadScope)
-        assertEquals("18478615493603057", spec.roomId)
-        assertEquals(1_742_890_000_000L, spec.createdAt)
-        assertEquals(1, spec.keyType)
-        assertTrue(spec.fromDirectShare)
-        assertEquals(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP, spec.flags)
-    }
-
-    @Test
-    fun `buildImageShareIntentSpec omits thread extras when no thread metadata exists`() {
-        val spec =
-            buildImageShareIntentSpec(
-                room = 18478615493603057L,
-                threadId = null,
-                threadScope = null,
-                sessionId = "session-456",
-                createdAt = 1_742_890_000_001L,
-            )
-
-        assertEquals("iris:session-456", spec.identifier)
-        assertEquals("session-456", spec.sessionId)
-        assertEquals("18478615493603057", spec.roomId)
-        assertNull(spec.threadId)
-        assertNull(spec.threadScope)
-        assertFalse(spec.hasThreadMetadata)
-    }
-
-    @Test
     fun `sendNativePhoto rejects invalid payload before native bootstrap`() {
         val service = ReplyService(testConfig)
         service.start()
@@ -384,6 +337,103 @@ class ReplyServiceTest {
             finalState = service.replyStatusOrNull(requestId)?.state
         }
         assertEquals("handoff_completed", finalState)
+        service.shutdown()
+    }
+
+    @Test
+    fun `threaded text replies use share graft lane instead of notification reply lane`() {
+        val notificationStarts = AtomicInteger(0)
+        val shareStarts = AtomicInteger(0)
+        val latch = CountDownLatch(1)
+        val service =
+            ReplyService(
+                testConfig,
+                notificationReplySender = { _, _, _, _, _ ->
+                    notificationStarts.incrementAndGet()
+                },
+                sharedTextReplySender = { _, _, _, _ ->
+                    shareStarts.incrementAndGet()
+                    latch.countDown()
+                },
+            )
+        service.start()
+
+        val result =
+            service.sendMessage(
+                referer = "ref",
+                chatId = 18478615493603057L,
+                msg = "**thread text**",
+                threadId = 3805486995143352321L,
+                threadScope = 2,
+            )
+
+        assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
+        assertTrue(latch.await(5, TimeUnit.SECONDS), "threaded text should use share/graft lane")
+        assertEquals(0, notificationStarts.get())
+        assertEquals(1, shareStarts.get())
+        service.shutdown()
+    }
+
+    @Test
+    fun `room text replies keep notification reply lane`() {
+        val notificationStarts = AtomicInteger(0)
+        val shareStarts = AtomicInteger(0)
+        val latch = CountDownLatch(1)
+        val service =
+            ReplyService(
+                testConfig,
+                notificationReplySender = { _, _, _, _, _ ->
+                    notificationStarts.incrementAndGet()
+                    latch.countDown()
+                },
+                sharedTextReplySender = { _, _, _, _ ->
+                    shareStarts.incrementAndGet()
+                },
+            )
+        service.start()
+
+        val result =
+            service.sendMessage(
+                referer = "ref",
+                chatId = 18478615493603057L,
+                msg = "plain room text",
+                threadId = null,
+                threadScope = null,
+            )
+
+        assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
+        assertTrue(latch.await(5, TimeUnit.SECONDS), "room text should keep notification reply lane")
+        assertEquals(1, notificationStarts.get())
+        assertEquals(0, shareStarts.get())
+        service.shutdown()
+    }
+
+    @Test
+    fun `threaded text replies default share graft scope to two when omitted`() {
+        val capturedScope = AtomicInteger(-1)
+        val latch = CountDownLatch(1)
+        val service =
+            ReplyService(
+                testConfig,
+                sharedTextReplySender = { _, _, _, threadScope ->
+                    capturedScope.set(threadScope ?: -1)
+                    latch.countDown()
+                },
+            )
+        service.start()
+
+        val result =
+            service.sendMessage(
+                referer = "ref",
+                chatId = 18478615493603057L,
+                msg = "thread scope default",
+                threadId = 3805486995143352321L,
+                threadScope = null,
+            )
+
+        assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
+        assertTrue(latch.await(5, TimeUnit.SECONDS))
+        assertEquals(2, capturedScope.get())
         service.shutdown()
     }
 }

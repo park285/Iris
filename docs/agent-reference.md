@@ -45,21 +45,28 @@ POST /reply -> IrisServer -> Replier -> Android hidden API
 - Android lint runs through AGP with `./gradlew lint`.
 - Commit messages use Korean. Conventional commit format is available when it helps readability.
 
-## Frida Agent
+## Image Bridge
 
-session-chain 4-hook 아키텍처로 KakaoTalk process 안에 threadId/scope를 주입한다.
+image reply는 앱 프로세스에서 직접 Kakao sender를 건드리지 않고, 로컬 UDS를 통해 LSPosed bridge module로 넘긴다.
 
-- URI fingerprint 기반 session correlation: `FingerprintSessionStore`, TTL 60s, max 32
-- Admission checks confirm session, `threadScope`, `roomId`, and room match before injection
-- Obfuscated field mapping follows the active KakaoTalk version
+- `ReplyService`는 이미지 payload를 파일로 준비한 뒤 `UdsImageReplySender`로 위임한다.
+- `UdsImageBridgeClient`는 로컬 소켓으로 room/thread metadata와 image path를 bridge에 전달한다.
+- bridge module은 KakaoTalk process 안에서 runtime class discovery 후 sender entry method를 호출한다.
+- 현재 실측 기준 `threadScope=2`는 thread-only, `threadScope=3`은 thread + room 같이 보내기 의미로 사용한다.
+
+## Markdown Reply
+
+markdown reply는 `/reply-markdown` route가 Kakao share intent를 열고, LSPosed/Xposed hook이 `ChatSendingLogRequest$a.u(...)` 단계에서 필요한 thread metadata를 graft한다.
+
+- out-thread markdown은 Kakao share path 그대로 전송된다.
+- in-thread markdown은 Iris extras로 전달된 `roomId/threadId/threadScope`를 bridge가 캡처한 뒤 request dispatch 직전에 `sendingLog`에 주입한다.
+- `/reply`의 in-thread text도 현재는 같은 share/graft lane을 사용한다.
+- `/reply-markdown`은 markdown attachment를 강제로 켜는 호환 alias로 유지된다.
 
 ### Directory Layout
 
-- `frida/agent/` — TS agent 정본
-- `frida/daemon/` — Go watchdog
-- `frida/legacy/` — Python daemon + JS agent rollback 경로
-- `frida-modern/` — staging workspace. 동기화 후 `frida/`가 정본 역할을 가진다
-- `node_modules/`, `generated/` — generated/runtime artifacts
+- `app/` — HTTP admission, queueing, UDS client, webhook dispatch
+- `bridge/` — LSPosed/Xposed image bridge module and in-process Kakao sender integration
 
 ## Testing Conventions
 

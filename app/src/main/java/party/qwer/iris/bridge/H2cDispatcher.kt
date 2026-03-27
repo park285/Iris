@@ -12,6 +12,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.ConnectionPool
 import okhttp3.Dispatcher
@@ -27,12 +28,14 @@ class H2cDispatcher internal constructor(
     transportOverride: String? = null,
     queueCapacityOverride: Int? = null,
     maxDeliveryAttemptsOverride: Int? = null,
+    routeConcurrencyOverride: Int? = null,
     backoffDelayProviderOverride: (Int) -> Long = ::nextBackoffDelayMs,
 ) : Closeable {
     private val scopeJob = SupervisorJob()
     private val coroutineScope = CoroutineScope(scopeJob + Dispatchers.IO)
     private val routeQueueCapacity = queueCapacityOverride ?: DISPATCH_QUEUE_CAPACITY
     private val maxDeliveryAttempts = maxDeliveryAttemptsOverride ?: MAX_DELIVERY_ATTEMPTS
+    private val routeConcurrency = (routeConcurrencyOverride ?: DEFAULT_ROUTE_CONCURRENCY).also { require(it > 0) { "routeConcurrency must be positive, got $it" } }
     private val backoffDelayProvider = backoffDelayProviderOverride
     private val transport = resolveWebhookTransport(transportOverride)
 
@@ -73,8 +76,16 @@ class H2cDispatcher internal constructor(
         val queuedMessageIds = ConcurrentHashMap.newKeySet<String>()
         val workerJob =
             coroutineScope.launch {
+                val concurrencyLimit = Semaphore(routeConcurrency)
                 for (delivery in dispatchChannel) {
-                    processQueuedDelivery(delivery)
+                    concurrencyLimit.acquire()
+                    launch {
+                        try {
+                            processQueuedDelivery(delivery)
+                        } finally {
+                            concurrencyLimit.release()
+                        }
+                    }
                 }
             }
 
@@ -274,10 +285,7 @@ class H2cDispatcher internal constructor(
     private suspend fun dispatchAttempt(
         delivery: QueuedDelivery,
         attempt: Int,
-    ): DeliveryOutcome {
-        val attemptLabel = "${attempt + 1}/$maxDeliveryAttempts"
-        return attemptDispatch(delivery, attemptLabel)
-    }
+    ): DeliveryOutcome = attemptDispatch(delivery, "${attempt + 1}/$maxDeliveryAttempts")
 
     private suspend fun attemptDispatch(
         delivery: QueuedDelivery,
@@ -363,6 +371,7 @@ class H2cDispatcher internal constructor(
         private const val MAX_IDLE_CONNECTIONS = 4
         private const val KEEP_ALIVE_DURATION_MS = 30_000L
         internal const val MAX_DELIVERY_ATTEMPTS = 6
+        private const val DEFAULT_ROUTE_CONCURRENCY = 4
 
         private const val NONE = "<none>"
     }

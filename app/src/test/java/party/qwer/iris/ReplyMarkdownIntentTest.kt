@@ -3,7 +3,6 @@ package party.qwer.iris
 import android.content.Intent
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class ReplyMarkdownIntentTest {
@@ -35,12 +34,32 @@ class ReplyMarkdownIntentTest {
     }
 
     @Test
-    fun `reply markdown rejects thread metadata`() {
-        val error =
-            assertFailsWith<IllegalArgumentException> {
-                validateReplyMarkdownThreadMetadata(threadId = 123L, threadScope = null)
-            }
+    fun `reply markdown accepts threaded metadata`() {
+        assertEquals(3, validateReplyMarkdownThreadMetadata(threadId = 123L, threadScope = 3))
+    }
 
-        assertEquals("reply-markdown does not support thread metadata", error.message)
+    @Test
+    fun `reply markdown defaults threaded scope when omitted`() {
+        assertEquals(2, validateReplyMarkdownThreadMetadata(threadId = 123L, threadScope = null))
+    }
+
+    @Test
+    fun `build reply markdown spec keeps iris thread metadata when provided`() {
+        val metadata =
+            ReplyMarkdownThreadMetadata(
+                threadId = 3805486995143352321L,
+                threadScope = 2,
+                sessionId = "session-1",
+                createdAtEpochMs = 123456789L,
+            )
+
+        val spec =
+            buildReplyMarkdownIntentSpec(
+                room = 18476130232878491L,
+                text = "**고슴도치 귀여워**",
+                threadMetadata = metadata,
+            )
+
+        assertEquals(metadata, spec.threadMetadata)
     }
 }

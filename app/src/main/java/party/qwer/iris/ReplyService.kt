@@ -19,7 +19,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import party.qwer.iris.model.ReplyStatusSnapshot
 import java.io.File
-import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 internal data class ReplyQueueKey(
@@ -29,41 +28,22 @@ internal data class ReplyQueueKey(
 
 internal enum class ReplySendLane {
     TEXT,
-    SHARE_INTENT,
     NATIVE_IMAGE,
-}
-
-// SendMsg : ye-seola/go-kdb
-
-private const val IMAGE_SHARE_SESSION_PREFIX = "iris:"
-private const val EXTRA_IRIS_SESSION_ID = "party.qwer.iris.extra.SHARE_SESSION_ID"
-private const val EXTRA_IRIS_THREAD_ID = "party.qwer.iris.extra.THREAD_ID"
-private const val EXTRA_IRIS_THREAD_SCOPE = "party.qwer.iris.extra.THREAD_SCOPE"
-private const val EXTRA_IRIS_ROOM_ID = "party.qwer.iris.extra.ROOM_ID"
-private const val EXTRA_IRIS_CREATED_AT = "party.qwer.iris.extra.CREATED_AT"
-
-internal data class ImageShareIntentSpec(
-    val action: String,
-    val packageName: String,
-    val mimeType: String,
-    val sessionId: String,
-    val identifier: String,
-    val roomId: String,
-    val createdAt: Long,
-    val threadId: String?,
-    val threadScope: Int?,
-    val keyType: Int,
-    val fromDirectShare: Boolean,
-    val flags: Int,
-) {
-    val hasThreadMetadata: Boolean
-        get() = threadId != null && threadScope != null && threadScope >= 2
 }
 
 internal class ReplyService(
     private val config: ConfigProvider,
-    private val nativeImageReplySender: NativeImageReplySender = KakaoNativeImageReplySender(),
-    private val imageShareLauncher: (Intent) -> Unit = { intent -> AndroidHiddenApi.startActivity(intent) },
+    private val nativeImageReplySender: NativeImageReplySender = UdsImageReplySender(),
+    private val startService: (Intent) -> Unit = { intent -> AndroidHiddenApi.startService(intent) },
+    private val startActivityAs: (String, Intent) -> Unit = { callerPackage, intent ->
+        AndroidHiddenApi.startActivityAs(callerPackage, intent)
+    },
+    private val notificationReplySender: (String, Long, CharSequence, Long?, Int?) -> Unit = { referer, chatId, preparedMessage, threadId, threadScope ->
+        dispatchNotificationReply(startService, referer, chatId, preparedMessage, threadId, threadScope)
+    },
+    private val sharedTextReplySender: (Long, CharSequence, Long?, Int?) -> Unit = { room, preparedMessage, threadId, threadScope ->
+        dispatchSharedTextReply(startActivityAs, room, preparedMessage, threadId, threadScope)
+    },
     private val mediaScanner: (Uri) -> Unit = ::broadcastMediaScan,
     private val imageDir: File = File(IRIS_IMAGE_DIR_PATH),
 ) : MessageSender {
@@ -82,7 +62,6 @@ internal class ReplyService(
     private val laneMutexes =
         mapOf(
             ReplySendLane.TEXT to Mutex(),
-            ReplySendLane.SHARE_INTENT to Mutex(),
             ReplySendLane.NATIVE_IMAGE to Mutex(),
         )
     private val statusStore = ReplyStatusStore()
@@ -191,41 +170,8 @@ internal class ReplyService(
     ) {
         IrisLogger.debugLazy { "[ReplyService] sendMessageInternal: preparing intent for chatId=$chatId" }
         val preparedMessage = preserveInvisiblePadding(msg)
-        val isThreadNotification = threadId != null || threadScope != null
-
-        val intent =
-            Intent().apply {
-                component =
-                    ComponentName(
-                        "com.kakao.talk",
-                        "com.kakao.talk.notification.NotificationActionService",
-                    )
-                putExtra("noti_referer", referer)
-                putExtra("chat_id", chatId)
-
-                putExtra("is_chat_thread_notification", isThreadNotification)
-                if (threadId != null) {
-                    putExtra("thread_id", threadId)
-                }
-                if (threadScope != null) {
-                    putExtra("scope", threadScope)
-                }
-
-                action = "com.kakao.talk.notification.REPLY_MESSAGE"
-
-                val results =
-                    Bundle().apply {
-                        putCharSequence("reply_message", preparedMessage)
-                    }
-
-                val remoteInput = RemoteInput.Builder("reply_message").build()
-                RemoteInput.addResultsToIntent(arrayOf(remoteInput), this, results)
-            }
-
         try {
-            IrisLogger.debug("[ReplyService] Calling AndroidHiddenApi.startService...")
-            AndroidHiddenApi.startService(intent)
-            IrisLogger.debug("[ReplyService] AndroidHiddenApi.startService returned successfully")
+            notificationReplySender(referer, chatId, preparedMessage, threadId, threadScope)
         } catch (e: Exception) {
             IrisLogger.error("[ReplyService] AndroidHiddenApi.startService failed: ${e.message}", e)
             throw e
@@ -249,37 +195,20 @@ internal class ReplyService(
                 override val requestId = requestId
 
                 override suspend fun send() {
-                    sendMessageInternal(referer, chatId, msg, threadId, threadScope)
+                    if (threadId != null) {
+                        sendTextViaShareInternal(
+                            room = chatId,
+                            msg = msg,
+                            threadId = threadId,
+                            threadScope = threadScope ?: 2,
+                        )
+                    } else {
+                        sendMessageInternal(referer, chatId, msg, threadId, threadScope)
+                    }
                 }
             },
         )
     }
-
-    override fun sendPhoto(
-        room: Long,
-        base64ImageDataString: String,
-        threadId: Long?,
-        threadScope: Int?,
-        requestId: String?,
-    ): ReplyAdmissionResult = sendMultiplePhotos(room, listOf(base64ImageDataString), threadId, threadScope, requestId)
-
-    override fun sendMultiplePhotos(
-        room: Long,
-        base64ImageDataStrings: List<String>,
-        threadId: Long?,
-        threadScope: Int?,
-        requestId: String?,
-    ): ReplyAdmissionResult =
-        enqueueImages(
-            room = room,
-            base64ImageDataStrings = base64ImageDataStrings,
-            threadId = threadId,
-            lane = ReplySendLane.SHARE_INTENT,
-            requestId = requestId,
-            dispatch = { preparedImages ->
-                sendPreparedImages(preparedImages, threadId, threadScope)
-            },
-        )
 
     override fun sendNativePhoto(
         room: Long,
@@ -413,17 +342,19 @@ internal class ReplyService(
     override fun sendReplyMarkdown(
         room: Long,
         msg: String,
+        threadId: Long?,
+        threadScope: Int?,
         requestId: String?,
     ): ReplyAdmissionResult =
         enqueueRequest(
             room,
-            null,
+            threadId,
             object : SendMessageRequest {
                 override val lane = ReplySendLane.TEXT
                 override val requestId = requestId
 
                 override suspend fun send() {
-                    sendReplyMarkdownInternal(room, msg)
+                    sendReplyMarkdownInternal(room, msg, threadId, threadScope)
                 }
             },
         )
@@ -527,30 +458,6 @@ internal class ReplyService(
         }
     }
 
-    private fun sendPreparedImages(
-        preparedImages: PreparedImages,
-        threadId: Long?,
-        threadScope: Int?,
-    ) {
-        val intent =
-            buildImageShareIntent(
-                room = preparedImages.room,
-                uris = preparedImages.uris,
-                threadId = threadId,
-                threadScope = threadScope,
-                sessionId = UUID.randomUUID().toString(),
-                createdAt = System.currentTimeMillis(),
-            )
-
-        try {
-            imageShareLauncher(intent)
-        } catch (e: Exception) {
-            IrisLogger.error("Error starting activity for sending multiple photos: $e")
-            cleanupPreparedImages(preparedImages)
-            throw e
-        }
-    }
-
     private fun sendPreparedImagesNative(
         preparedImages: PreparedImages,
         threadId: Long?,
@@ -575,31 +482,26 @@ internal class ReplyService(
     private fun sendTextShareInternal(
         room: Long,
         msg: String,
-    ) {
-        val preparedMessage = preserveInvisiblePadding(msg)
-        val spec = buildReplyMarkdownIntentSpec(room, preparedMessage)
-        val intent = buildReplyMarkdownIntent(room, preparedMessage)
-
-        try {
-            AndroidHiddenApi.startActivityAs(spec.callerPackageName, intent)
-        } catch (e: Exception) {
-            IrisLogger.error("Error starting activity for sending text share: $e")
-            throw e
-        }
-    }
+    ) = sendTextViaShareInternal(room, msg, threadId = null, threadScope = null)
 
     private fun sendReplyMarkdownInternal(
         room: Long,
         msg: String,
+        threadId: Long?,
+        threadScope: Int?,
+    ) = sendTextViaShareInternal(room, msg, threadId, threadScope)
+
+    private fun sendTextViaShareInternal(
+        room: Long,
+        msg: String,
+        threadId: Long?,
+        threadScope: Int?,
     ) {
         val preparedMessage = preserveInvisiblePadding(msg)
-        val spec = buildReplyMarkdownIntentSpec(room, preparedMessage)
-        val intent = buildReplyMarkdownIntent(room, preparedMessage)
-
         try {
-            AndroidHiddenApi.startActivityAs(spec.callerPackageName, intent)
+            sharedTextReplySender(room, preparedMessage, threadId, threadScope)
         } catch (e: Exception) {
-            IrisLogger.error("Error starting activity for reply-markdown: $e")
+            IrisLogger.error("Error starting activity for shared text reply: $e")
             throw e
         }
     }
@@ -632,55 +534,69 @@ private data class PreparedImages(
     val files: ArrayList<File>,
 )
 
-internal fun buildImageShareIntent(
-    room: Long,
-    uris: ArrayList<Uri>,
+private fun dispatchNotificationReply(
+    startService: (Intent) -> Unit,
+    referer: String,
+    chatId: Long,
+    preparedMessage: CharSequence,
     threadId: Long?,
     threadScope: Int?,
-    sessionId: String,
-    createdAt: Long,
-): Intent {
-    val spec = buildImageShareIntentSpec(room, threadId, threadScope, sessionId, createdAt)
-    return Intent(spec.action).apply {
-        setPackage(spec.packageName)
-        type = spec.mimeType
-        putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
-        putExtra("key_id", room)
-        putExtra("key_type", spec.keyType)
-        putExtra("key_from_direct_share", spec.fromDirectShare)
-        putExtra(EXTRA_IRIS_SESSION_ID, spec.sessionId)
-        putExtra(EXTRA_IRIS_ROOM_ID, spec.roomId)
-        putExtra(EXTRA_IRIS_CREATED_AT, spec.createdAt)
-        setIdentifier(spec.identifier)
-        if (spec.hasThreadMetadata) {
-            putExtra(EXTRA_IRIS_THREAD_ID, spec.threadId)
-            putExtra(EXTRA_IRIS_THREAD_SCOPE, spec.threadScope)
+) {
+    val isThreadNotification = threadId != null || threadScope != null
+    val intent =
+        Intent().apply {
+            component =
+                ComponentName(
+                    "com.kakao.talk",
+                    "com.kakao.talk.notification.NotificationActionService",
+                )
+            putExtra("noti_referer", referer)
+            putExtra("chat_id", chatId)
+
+            putExtra("is_chat_thread_notification", isThreadNotification)
+            if (threadId != null) {
+                putExtra("thread_id", threadId)
+            }
+            if (threadScope != null) {
+                putExtra("scope", threadScope)
+            }
+
+            action = "com.kakao.talk.notification.REPLY_MESSAGE"
+
+            val results =
+                Bundle().apply {
+                    putCharSequence("reply_message", preparedMessage)
+                }
+
+            val remoteInput = RemoteInput.Builder("reply_message").build()
+            RemoteInput.addResultsToIntent(arrayOf(remoteInput), this, results)
         }
-        addFlags(spec.flags)
-    }
+
+    IrisLogger.debug("[ReplyService] Calling AndroidHiddenApi.startService...")
+    startService(intent)
+    IrisLogger.debug("[ReplyService] AndroidHiddenApi.startService returned successfully")
 }
 
-internal fun buildImageShareIntentSpec(
+private fun dispatchSharedTextReply(
+    startActivityAs: (String, Intent) -> Unit,
     room: Long,
+    preparedMessage: CharSequence,
     threadId: Long?,
     threadScope: Int?,
-    sessionId: String,
-    createdAt: Long,
-): ImageShareIntentSpec =
-    ImageShareIntentSpec(
-        action = Intent.ACTION_SEND_MULTIPLE,
-        packageName = "com.kakao.talk",
-        mimeType = "image/*",
-        sessionId = sessionId,
-        identifier = "$IMAGE_SHARE_SESSION_PREFIX$sessionId",
-        roomId = room.toString(),
-        createdAt = createdAt,
-        threadId = threadId?.toString(),
-        threadScope = threadScope?.takeIf { it >= 2 && threadId != null },
-        keyType = 1,
-        fromDirectShare = true,
-        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP,
-    )
+) {
+    val threadMetadata =
+        if (threadId != null && threadScope != null) {
+            ReplyMarkdownThreadMetadata(
+                threadId = threadId,
+                threadScope = threadScope,
+            )
+        } else {
+            null
+        }
+    val spec = buildReplyMarkdownIntentSpec(room, preparedMessage, threadMetadata)
+    val intent = buildReplyMarkdownIntent(room, preparedMessage, threadMetadata)
+    startActivityAs(spec.callerPackageName, intent)
+}
 
 private fun ensureImageDir(imageDir: File) {
     if (imageDir.exists()) {

@@ -58,14 +58,16 @@ internal class ChatRoomResolver(
             .mapNotNull { field -> field.readStaticValue() }
             .firstOrNull { candidate ->
                 candidate.javaClass.methods.any { method ->
-                    method.parameterCount == 1 &&
+                    method.name == "c" &&
+                        method.parameterCount == 1 &&
                         registry.chatRoomClass.isAssignableFrom(method.returnType) &&
                         method.parameterTypes[0].isAssignableFrom(entityClass)
                 }
             }?.let { companion ->
                 val resolverMethod =
                     companion.javaClass.methods.first { method ->
-                        method.parameterCount == 1 &&
+                        method.name == "c" &&
+                            method.parameterCount == 1 &&
                             registry.chatRoomClass.isAssignableFrom(method.returnType) &&
                             method.parameterTypes[0].isAssignableFrom(entityClass)
                     }
@@ -90,13 +92,17 @@ internal class ChatRoomResolver(
                 .mapNotNull { field -> field.readStaticValue() }
                 .firstOrNull { candidate ->
                     candidate.javaClass.methods.any { method ->
-                        method.parameterCount == 0 && method.returnType == managerClass
+                        method.name == "j" &&
+                            method.parameterCount == 0 &&
+                            method.returnType == managerClass
                     }
                 }
         if (companion != null) {
             val accessor =
                 companion.javaClass.methods.first { method ->
-                    method.parameterCount == 0 && method.returnType == managerClass
+                    method.name == "j" &&
+                        method.parameterCount == 0 &&
+                        method.returnType == managerClass
                 }
             return { accessor.invoke(companion) ?: error("ChatRoomManager companion accessor returned null") }
         }

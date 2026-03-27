@@ -49,8 +49,8 @@ private fun dispatchReply(
 ): ReplyAdmissionResult =
     when (replyRequest.type) {
         ReplyType.TEXT -> messageSender.sendMessage(notificationReferer, roomId, extractTextPayload(replyRequest), threadId, threadScope, requestId)
-        ReplyType.IMAGE -> messageSender.sendPhoto(roomId, extractSingleImagePayload(replyRequest), threadId, threadScope, requestId)
-        ReplyType.IMAGE_MULTIPLE -> messageSender.sendMultiplePhotos(roomId, extractImagePayloads(replyRequest), threadId, threadScope, requestId)
+        ReplyType.IMAGE -> messageSender.sendNativePhoto(roomId, extractSingleImagePayload(replyRequest), threadId, threadScope, requestId)
+        ReplyType.IMAGE_MULTIPLE -> messageSender.sendNativeMultiplePhotos(roomId, extractImagePayloads(replyRequest), threadId, threadScope, requestId)
     }
 
 internal fun extractTextPayload(replyRequest: ReplyRequest): String =

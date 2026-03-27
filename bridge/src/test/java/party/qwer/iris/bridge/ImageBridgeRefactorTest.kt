@@ -270,6 +270,25 @@ class KakaoSendInvocationFactoryTest {
 
         assertEquals(listOf("/tmp/polymorphic.png"), FakePolymorphicMediaSender.sentPaths)
     }
+
+    @Test
+    fun `sendSingle prefers exact sender constructor over assignable one`() {
+        ExactPreferredMediaSender.reset()
+        val factory =
+            KakaoSendInvocationFactory(
+                registry = buildExactPreferredRegistry(),
+            )
+
+        factory.sendSingle(
+            chatRoom = FakeDerivedChatRoom(),
+            imagePath = "/tmp/exact.png",
+            threadId = null,
+            threadScope = null,
+        )
+
+        assertEquals(1, ExactPreferredMediaSender.exactCalls)
+        assertEquals(0, ExactPreferredMediaSender.baseCalls)
+    }
 }
 
 class ChatRoomResolverTest {
@@ -285,6 +304,17 @@ class ChatRoomResolverTest {
         assertNotNull(first)
         assertNotNull(second)
         assertEquals(listOf(101L, 102L), FakeChatRuntime.resolvedRoomIds)
+    }
+
+    @Test
+    fun `resolve prefers exact legacy companion resolver name`() {
+        FakeChatRuntime.reset()
+        LegacyNameSensitiveRecorder.calls.clear()
+        val resolver = ChatRoomResolver(registry = buildLegacyNameSensitiveRegistry())
+
+        resolver.resolve(777L)
+
+        assertEquals(listOf("c"), LegacyNameSensitiveRecorder.calls)
     }
 }
 
@@ -650,6 +680,31 @@ private class FakeChatRoomModel private constructor(
     }
 }
 
+private class LegacyNameSensitiveChatRoom private constructor(
+    val roomId: Long,
+) {
+    companion object {
+        @JvmField
+        val CompanionResolver = Resolver()
+    }
+
+    class Resolver {
+        fun c(entity: FakeRoomEntity): LegacyNameSensitiveChatRoom {
+            LegacyNameSensitiveRecorder.calls += "c"
+            return LegacyNameSensitiveChatRoom(entity.roomId)
+        }
+
+        fun z(entity: FakeRoomEntity): LegacyNameSensitiveChatRoom {
+            LegacyNameSensitiveRecorder.calls += "z"
+            return LegacyNameSensitiveChatRoom(entity.roomId)
+        }
+    }
+}
+
+private object LegacyNameSensitiveRecorder {
+    val calls = mutableListOf<String>()
+}
+
 private class FakeChatRoomManager {
     companion object {
         @JvmStatic
@@ -865,6 +920,74 @@ private class FakePolymorphicMediaSender(
         listener: FakeListener?,
     ) {
         error("not used in this test")
+    }
+}
+
+private class ExactPreferredMediaSender {
+    companion object {
+        var exactCalls = 0
+        var baseCalls = 0
+
+        fun reset() {
+            exactCalls = 0
+            baseCalls = 0
+        }
+    }
+
+    constructor(
+        chatRoom: FakeBaseChatRoom,
+        threadId: Long?,
+        sendWithThread: () -> Boolean,
+        attachmentDecorator: (JSONObject) -> JSONObject?,
+    ) {
+        check(chatRoom.javaClass.name.isNotBlank())
+        check(threadId == null)
+        check(!sendWithThread())
+        check(attachmentDecorator(JSONObject()) != null)
+        baseCalls += 1
+    }
+
+    constructor(
+        chatRoom: FakeDerivedChatRoom,
+        threadId: Long?,
+        sendWithThread: () -> Boolean,
+        attachmentDecorator: (JSONObject) -> JSONObject?,
+    ) {
+        check(chatRoom.javaClass.name.isNotBlank())
+        check(threadId == null)
+        check(!sendWithThread())
+        check(attachmentDecorator(JSONObject()) != null)
+        exactCalls += 1
+    }
+
+    fun n(
+        mediaItem: FakeMediaItem,
+        suppressAnimation: Boolean,
+    ) {
+        check(!suppressAnimation)
+        check(mediaItem.path.isNotBlank())
+    }
+
+    @Suppress("UNUSED_PARAMETER")
+    fun p(
+        uris: List<Any>,
+        type: FakeMessageType,
+        message: String?,
+        attachment: JSONObject?,
+        forwardExtra: JSONObject?,
+        writeType: FakeWriteType,
+        shareOriginal: Boolean,
+        highQuality: Boolean,
+        listener: FakeListener?,
+    ) {
+        check(uris.isNotEmpty() || message == null)
+        check(type.name.isNotBlank())
+        check(attachment == null)
+        check(forwardExtra == null)
+        check(writeType.name.isNotBlank())
+        check(!shareOriginal)
+        check(!highQuality)
+        check(listener == null)
     }
 }
 
@@ -1101,6 +1224,144 @@ private fun buildPolymorphicRegistry(): KakaoClassRegistry {
         messageTypeClass = FakeMessageType::class.java,
         chatRoomManagerClass = FakeChatRoomManager::class.java,
         chatRoomClass = FakeBaseChatRoom::class.java,
+        singleSendMethod = singleSend,
+        multiSendMethod = multiSend,
+        mediaItemConstructor = mediaItemCtor,
+        masterDbSingletonField = masterDbField,
+        roomDaoMethod = roomDaoMethod,
+        entityLookupMethod = entityLookupMethod,
+        broadRoomResolverMethod = broadResolver,
+        directRoomResolverMethod = directResolver,
+        photoType = FakeMessageType.Photo,
+        multiPhotoType = FakeMessageType.MultiPhoto,
+        writeTypeNone = FakeWriteType.None,
+    )
+}
+
+private fun buildExactPreferredRegistry(): KakaoClassRegistry {
+    val singleSend =
+        ExactPreferredMediaSender::class.java.getMethod(
+            "n",
+            FakeMediaItem::class.java,
+            Boolean::class.javaPrimitiveType,
+        )
+    val multiSend =
+        ExactPreferredMediaSender::class.java.getMethod(
+            "p",
+            List::class.java,
+            FakeMessageType::class.java,
+            String::class.java,
+            JSONObject::class.java,
+            JSONObject::class.java,
+            FakeWriteType::class.java,
+            Boolean::class.javaPrimitiveType,
+            Boolean::class.javaPrimitiveType,
+            FakeListener::class.java,
+        )
+    val mediaItemCtor =
+        FakeMediaItem::class.java.getConstructor(
+            String::class.java,
+            Long::class.javaPrimitiveType,
+        )
+    val masterDbField = FakeMasterDatabase::class.java.getDeclaredField("INSTANCE")
+    val roomDaoMethod = FakeMasterDatabase::class.java.getMethod("O")
+    val entityLookupMethod =
+        FakeRoomDao::class.java.getMethod(
+            "h",
+            Long::class.javaPrimitiveType,
+        )
+    val broadResolver =
+        FakeChatRoomManager::class.java.getMethod(
+            "e0",
+            Long::class.javaPrimitiveType,
+            Boolean::class.javaPrimitiveType,
+            Boolean::class.javaPrimitiveType,
+        )
+    val directResolver =
+        FakeChatRoomManager::class.java.getMethod(
+            "d0",
+            Long::class.javaPrimitiveType,
+        )
+    return KakaoClassRegistry(
+        mediaItemClass = FakeMediaItem::class.java,
+        function0Class = kotlin.jvm.functions.Function0::class.java,
+        function1Class = kotlin.jvm.functions.Function1::class.java,
+        masterDatabaseClass = FakeMasterDatabase::class.java,
+        writeTypeClass = FakeWriteType::class.java,
+        listenerClass = FakeListener::class.java,
+        chatMediaSenderClass = ExactPreferredMediaSender::class.java,
+        messageTypeClass = FakeMessageType::class.java,
+        chatRoomManagerClass = FakeChatRoomManager::class.java,
+        chatRoomClass = FakeBaseChatRoom::class.java,
+        singleSendMethod = singleSend,
+        multiSendMethod = multiSend,
+        mediaItemConstructor = mediaItemCtor,
+        masterDbSingletonField = masterDbField,
+        roomDaoMethod = roomDaoMethod,
+        entityLookupMethod = entityLookupMethod,
+        broadRoomResolverMethod = broadResolver,
+        directRoomResolverMethod = directResolver,
+        photoType = FakeMessageType.Photo,
+        multiPhotoType = FakeMessageType.MultiPhoto,
+        writeTypeNone = FakeWriteType.None,
+    )
+}
+
+private fun buildLegacyNameSensitiveRegistry(): KakaoClassRegistry {
+    val singleSend =
+        FakeMediaSender::class.java.getMethod(
+            "n",
+            FakeMediaItem::class.java,
+            Boolean::class.javaPrimitiveType,
+        )
+    val multiSend =
+        FakeMediaSender::class.java.getMethod(
+            "p",
+            List::class.java,
+            FakeMessageType::class.java,
+            String::class.java,
+            JSONObject::class.java,
+            JSONObject::class.java,
+            FakeWriteType::class.java,
+            Boolean::class.javaPrimitiveType,
+            Boolean::class.javaPrimitiveType,
+            FakeListener::class.java,
+        )
+    val mediaItemCtor =
+        FakeMediaItem::class.java.getConstructor(
+            String::class.java,
+            Long::class.javaPrimitiveType,
+        )
+    val masterDbField = FakeMasterDatabase::class.java.getDeclaredField("INSTANCE")
+    val roomDaoMethod = FakeMasterDatabase::class.java.getMethod("O")
+    val entityLookupMethod =
+        FakeRoomDao::class.java.getMethod(
+            "h",
+            Long::class.javaPrimitiveType,
+        )
+    val broadResolver =
+        FakeChatRoomManager::class.java.getMethod(
+            "e0",
+            Long::class.javaPrimitiveType,
+            Boolean::class.javaPrimitiveType,
+            Boolean::class.javaPrimitiveType,
+        )
+    val directResolver =
+        FakeChatRoomManager::class.java.getMethod(
+            "d0",
+            Long::class.javaPrimitiveType,
+        )
+    return KakaoClassRegistry(
+        mediaItemClass = FakeMediaItem::class.java,
+        function0Class = kotlin.jvm.functions.Function0::class.java,
+        function1Class = kotlin.jvm.functions.Function1::class.java,
+        masterDatabaseClass = FakeMasterDatabase::class.java,
+        writeTypeClass = FakeWriteType::class.java,
+        listenerClass = FakeListener::class.java,
+        chatMediaSenderClass = FakeMediaSender::class.java,
+        messageTypeClass = FakeMessageType::class.java,
+        chatRoomManagerClass = FakeChatRoomManager::class.java,
+        chatRoomClass = LegacyNameSensitiveChatRoom::class.java,
         singleSendMethod = singleSend,
         multiSendMethod = multiSend,
         mediaItemConstructor = mediaItemCtor,

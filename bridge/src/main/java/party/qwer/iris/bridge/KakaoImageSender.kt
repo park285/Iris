@@ -37,6 +37,7 @@ internal class KakaoImageSender(
         logInfo(TAG, "send start room=$roomId images=${imagePaths.size} threadId=$threadId scope=$threadScope requestId=$requestId")
 
         val chatRoom = chatRoomResolver(roomId) ?: error("chat room not found: $roomId")
+        logInfo(TAG, "resolved chatRoom class=${chatRoom.javaClass.name} room=$roomId")
         if (threadId != null && threadScope != null && threadScope >= 2) {
             sendInvocationFactory.sendThreaded(roomId, chatRoom, imagePaths, threadId, threadScope)
         } else if (imagePaths.size == 1) {

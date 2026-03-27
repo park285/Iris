@@ -72,6 +72,13 @@ class ReplyAdmissionTest {
     }
 
     @Test
+    fun `reply markdown route accepts threaded metadata and defaults scope to two`() {
+        assertEquals(3, validateReplyMarkdownThreadMetadata(threadId = 123L, threadScope = 3))
+        assertEquals(2, validateReplyMarkdownThreadMetadata(threadId = 123L, threadScope = null))
+        assertEquals(null, validateReplyMarkdownThreadMetadata(threadId = null, threadScope = null))
+    }
+
+    @Test
     fun `reply image route only allows image types`() {
         val error =
             assertFailsWith<IllegalArgumentException> {
@@ -107,6 +114,62 @@ class ReplyAdmissionTest {
     }
 
     @Test
+    fun `reply image route preserves explicit thread detail scope variants`() {
+        assertEquals(3, validateReplyImageThreadScope(threadId = 123L, threadScope = 3))
+        assertEquals(2, validateReplyImageThreadScope(threadId = 123L, threadScope = 2))
+    }
+
+    @Test
+    fun `admit reply routes single image through native image sender`() {
+        val sender = RecordingMessageSender()
+
+        val result =
+            admitReply(
+                replyRequest =
+                    ReplyRequest(
+                        room = "1",
+                        type = ReplyType.IMAGE,
+                        data = JsonPrimitive("base64"),
+                    ),
+                roomId = 1L,
+                notificationReferer = "Iris",
+                threadId = 123L,
+                threadScope = 2,
+                messageSender = sender,
+                requestId = "reply-image-native-1",
+            )
+
+        assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
+        assertEquals(1, sender.nativePhotoCalls)
+        assertEquals("reply-image-native-1", sender.lastRequestId)
+    }
+
+    @Test
+    fun `admit reply routes multiple images through native image sender`() {
+        val sender = RecordingMessageSender()
+
+        val result =
+            admitReply(
+                replyRequest =
+                    ReplyRequest(
+                        room = "1",
+                        type = ReplyType.IMAGE_MULTIPLE,
+                        data = listOf(JsonPrimitive("a"), JsonPrimitive("b")).let { kotlinx.serialization.json.JsonArray(it) },
+                    ),
+                roomId = 1L,
+                notificationReferer = "Iris",
+                threadId = 123L,
+                threadScope = 3,
+                messageSender = sender,
+                requestId = "reply-image-native-2",
+            )
+
+        assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
+        assertEquals(1, sender.nativeMultiPhotoCalls)
+        assertEquals("reply-image-native-2", sender.lastRequestId)
+    }
+
+    @Test
     fun `admit reply forwards request id to message sender`() {
         val sender = RecordingMessageSender()
 
@@ -132,8 +195,8 @@ class ReplyAdmissionTest {
 }
 
 private class RecordingMessageSender : MessageSender {
-    var photoCalls = 0
-    var multiPhotoCalls = 0
+    var nativePhotoCalls = 0
+    var nativeMultiPhotoCalls = 0
     var lastRequestId: String? = null
 
     override fun sendMessage(
@@ -148,30 +211,6 @@ private class RecordingMessageSender : MessageSender {
         return ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
     }
 
-    override fun sendPhoto(
-        room: Long,
-        base64ImageDataString: String,
-        threadId: Long?,
-        threadScope: Int?,
-        requestId: String?,
-    ): ReplyAdmissionResult {
-        photoCalls += 1
-        lastRequestId = requestId
-        return ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
-    }
-
-    override fun sendMultiplePhotos(
-        room: Long,
-        base64ImageDataStrings: List<String>,
-        threadId: Long?,
-        threadScope: Int?,
-        requestId: String?,
-    ): ReplyAdmissionResult {
-        multiPhotoCalls += 1
-        lastRequestId = requestId
-        return ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
-    }
-
     override fun sendNativePhoto(
         room: Long,
         base64ImageDataString: String,
@@ -179,6 +218,7 @@ private class RecordingMessageSender : MessageSender {
         threadScope: Int?,
         requestId: String?,
     ): ReplyAdmissionResult {
+        nativePhotoCalls += 1
         lastRequestId = requestId
         return ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
     }
@@ -190,6 +230,7 @@ private class RecordingMessageSender : MessageSender {
         threadScope: Int?,
         requestId: String?,
     ): ReplyAdmissionResult {
+        nativeMultiPhotoCalls += 1
         lastRequestId = requestId
         return ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
     }
@@ -206,6 +247,8 @@ private class RecordingMessageSender : MessageSender {
     override fun sendReplyMarkdown(
         room: Long,
         msg: String,
+        threadId: Long?,
+        threadScope: Int?,
         requestId: String?,
     ): ReplyAdmissionResult {
         lastRequestId = requestId

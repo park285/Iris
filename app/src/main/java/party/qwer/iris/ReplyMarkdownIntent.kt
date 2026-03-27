@@ -2,6 +2,22 @@ package party.qwer.iris
 
 import android.content.Intent
 import party.qwer.iris.model.ReplyType
+import java.util.UUID
+
+internal object ReplyMarkdownHookExtras {
+    const val sessionId = "party.qwer.iris.extra.SHARE_SESSION_ID"
+    const val roomId = "party.qwer.iris.extra.ROOM_ID"
+    const val threadId = "party.qwer.iris.extra.THREAD_ID"
+    const val threadScope = "party.qwer.iris.extra.THREAD_SCOPE"
+    const val createdAt = "party.qwer.iris.extra.CREATED_AT"
+}
+
+internal data class ReplyMarkdownThreadMetadata(
+    val threadId: Long,
+    val threadScope: Int,
+    val sessionId: String = UUID.randomUUID().toString(),
+    val createdAtEpochMs: Long = System.currentTimeMillis(),
+)
 
 internal data class ReplyMarkdownIntentSpec(
     val action: String,
@@ -21,11 +37,13 @@ internal data class ReplyMarkdownIntentSpec(
     val keyType: Int,
     val fromDirectShare: Boolean,
     val flags: Int,
+    val threadMetadata: ReplyMarkdownThreadMetadata? = null,
 )
 
 internal fun buildReplyMarkdownIntentSpec(
     room: Long,
     text: CharSequence,
+    threadMetadata: ReplyMarkdownThreadMetadata? = null,
 ): ReplyMarkdownIntentSpec =
     ReplyMarkdownIntentSpec(
         action = Intent.ACTION_SEND,
@@ -45,13 +63,15 @@ internal fun buildReplyMarkdownIntentSpec(
         keyType = 1,
         fromDirectShare = true,
         flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP,
+        threadMetadata = threadMetadata,
     )
 
 internal fun buildReplyMarkdownIntent(
     room: Long,
     text: CharSequence,
+    threadMetadata: ReplyMarkdownThreadMetadata? = null,
 ): Intent {
-    val spec = buildReplyMarkdownIntentSpec(room, text)
+    val spec = buildReplyMarkdownIntentSpec(room, text, threadMetadata)
     return Intent(spec.action).apply {
         setClassName(spec.packageName, spec.className)
         type = spec.mimeType
@@ -70,8 +90,10 @@ internal fun buildReplyMarkdownIntent(
                 putExtra("EXTRA_CHAT_MESSAGE", spec.text.toString())
                 putExtra("EXTRA_CHAT_ATTACHMENT", spec.extraChatAttachment)
                 putExtra("EXTRA_CHAT_MESSAGE_TYPE_VALUE", spec.innerMessageTypeValue)
+                putReplyMarkdownThreadMetadata(spec.room, spec.threadMetadata)
             },
         )
+        putReplyMarkdownThreadMetadata(spec.room, spec.threadMetadata)
         addFlags(spec.flags)
     }
 }
@@ -79,14 +101,28 @@ internal fun buildReplyMarkdownIntent(
 internal fun validateReplyMarkdownThreadMetadata(
     threadId: Long?,
     threadScope: Int?,
-) {
-    require(threadId == null && threadScope == null) {
-        "reply-markdown does not support thread metadata"
-    }
+): Int? {
+    if (threadId == null && threadScope == null) return null
+    require(threadId != null) { "reply-markdown threadScope requires threadId" }
+    val normalizedScope = threadScope ?: 2
+    require(normalizedScope > 0) { "threadScope must be a positive integer" }
+    return normalizedScope
 }
 
 internal fun validateReplyMarkdownType(replyType: ReplyType) {
     require(replyType == ReplyType.TEXT) {
         "reply-markdown replies require type=text"
     }
+}
+
+private fun Intent.putReplyMarkdownThreadMetadata(
+    room: Long,
+    metadata: ReplyMarkdownThreadMetadata?,
+) {
+    if (metadata == null) return
+    putExtra(ReplyMarkdownHookExtras.sessionId, metadata.sessionId)
+    putExtra(ReplyMarkdownHookExtras.roomId, room.toString())
+    putExtra(ReplyMarkdownHookExtras.threadId, metadata.threadId.toString())
+    putExtra(ReplyMarkdownHookExtras.threadScope, metadata.threadScope)
+    putExtra(ReplyMarkdownHookExtras.createdAt, metadata.createdAtEpochMs)
 }

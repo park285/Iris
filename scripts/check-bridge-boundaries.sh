@@ -52,7 +52,7 @@ assert_not_contains "bridge/src/main/java/party/qwer/iris/bridge/ImageBridgeRequ
 assert_no_repo_matches "const val (SOCKET_NAME|ACTION_SEND_IMAGE|ACTION_HEALTH|STATUS_SENT|STATUS_FAILED|STATUS_OK|MAX_FRAME_SIZE)" "duplicated protocol constants"
 assert_no_repo_matches "DataInputStream|DataOutputStream" "duplicated frame codec"
 
-if rg -n "XposedHelpers|XC_MethodHook" "$repo_root/bridge/src/main/java/party/qwer/iris/bridge" | rg -v "IrisBridgeModule\\.kt|BridgeDiscovery\\.kt" >/dev/null; then
+if rg -n "XposedHelpers|XC_MethodHook" "$repo_root/bridge/src/main/java/party/qwer/iris/bridge" | rg -v "IrisBridgeModule\\.kt|BridgeDiscovery\\.kt|ThreadedImageXposedInjector\\.kt" >/dev/null; then
   echo "bridge boundary check failed: Xposed hook logic leaked outside discovery/module entrypoint" >&2
   exit 1
 fi

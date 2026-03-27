@@ -354,15 +354,14 @@ internal class IrisServer(
             replyRequest.threadId?.let {
                 it.toLongOrNull() ?: invalidRequest("threadId must be a numeric string")
             }
-        val threadScope = replyRequest.threadScope
+        val threadScope =
+            try {
+                validateReplyMarkdownThreadMetadata(threadId, replyRequest.threadScope)
+            } catch (e: IllegalArgumentException) {
+                invalidRequest(e.message ?: "invalid reply-markdown metadata")
+            }
 
-        try {
-            validateReplyMarkdownThreadMetadata(threadId, threadScope)
-        } catch (e: IllegalArgumentException) {
-            invalidRequest(e.message ?: "invalid reply-markdown metadata")
-        }
-
-        val admission = messageSender.sendReplyMarkdown(roomId, extractTextPayload(replyRequest), requestId)
+        val admission = messageSender.sendReplyMarkdown(roomId, extractTextPayload(replyRequest), threadId, threadScope, requestId)
         if (admission.status != ReplyAdmissionStatus.ACCEPTED) {
             requestRejected(
                 admission.message ?: "reply-markdown request rejected",
@@ -605,9 +604,17 @@ internal fun validateReplyImageThreadScope(
         return null
     }
     require(threadId != null) { "reply-image threadScope requires threadId" }
-    val normalizedScope = threadScope ?: throw IllegalArgumentException("reply-image threadId requires threadScope")
-    require(normalizedScope == 2 || normalizedScope == 3) { "reply-image threadScope must be 2 or 3" }
-    return normalizedScope
+    val replyImageScope = threadScope ?: throw IllegalArgumentException("reply-image threadId requires threadScope")
+    require(replyImageScope == 2 || replyImageScope == 3) { "reply-image threadScope must be 2 or 3" }
+    // threadScope는 Kakao 쪽 reply 표시 범위를 고르는 힌트다.
+    // - 1: 채팅방 전체
+    // - 2+: thread detail
+    // image reply 실측 기준:
+    // - 2: thread-only
+    // - 3: thread + room 같이 보내기
+    // 이 라우트는 caller가 의도한 범위를 그대로 bridge로 넘긴다.
+    // thread-only 기본 동작이 필요하면 caller가 2를 명시해야 한다.
+    return replyImageScope
 }
 
 private fun invalidRequest(message: String): Nothing = throw ApiRequestException(message)

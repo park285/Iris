@@ -52,6 +52,4 @@ docs/current-staging-split.md
 image.png
 
 # Build artifacts
-frida/agent/node_modules/
-frida/agent/generated/
-frida/daemon/graft-daemon
+**/target/

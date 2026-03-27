@@ -39,6 +39,9 @@ internal fun BridgeDiscoverySnapshot.sendBlockReason(imageCount: Int): String? {
 private const val HOOK_ROOM_DAO = "MasterDatabase#roomDao"
 private const val HOOK_MANAGER_DIRECT = "ChatRoomManager#directResolve"
 private const val HOOK_MANAGER_BROAD = "ChatRoomManager#broadResolve"
+internal const val HOOK_REPLY_MARKDOWN_INGRESS = "ReplyMarkdown#ingress"
+internal const val HOOK_REPLY_MARKDOWN_REUSE = "ReplyMarkdown#reuseIntent"
+internal const val HOOK_REPLY_MARKDOWN_REQUEST = "ReplyMarkdown#requestDispatch"
 internal const val HOOK_SEND_SINGLE = "ChatMediaSender#sendSingle"
 internal const val HOOK_SEND_MULTIPLE = "ChatMediaSender#sendMultiple"
 
@@ -52,6 +55,9 @@ internal object BridgeDiscovery {
             HOOK_ROOM_DAO,
             HOOK_MANAGER_DIRECT,
             HOOK_MANAGER_BROAD,
+            HOOK_REPLY_MARKDOWN_INGRESS,
+            HOOK_REPLY_MARKDOWN_REUSE,
+            HOOK_REPLY_MARKDOWN_REQUEST,
             HOOK_SEND_SINGLE,
             HOOK_SEND_MULTIPLE,
         ).associateWith { DiscoveryHookState() }.toMutableMap()
@@ -104,6 +110,27 @@ internal object BridgeDiscovery {
     internal fun markInstalledForTest(hookName: String) {
         installAttempted.set(true)
         stateFor(hookName).markInstalled()
+    }
+
+    internal fun markInstalled(hookName: String) {
+        installAttempted.set(true)
+        stateFor(hookName).markInstalled()
+    }
+
+    internal fun markInstallError(
+        hookName: String,
+        detail: String,
+    ) {
+        installAttempted.set(true)
+        stateFor(hookName).markInstallError(detail)
+    }
+
+    internal fun recordHook(
+        hookName: String,
+        summary: String,
+    ) {
+        installAttempted.set(true)
+        record(hookName, summary)
     }
 
     private fun installMethodHook(
