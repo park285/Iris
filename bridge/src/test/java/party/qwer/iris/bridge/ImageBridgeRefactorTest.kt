@@ -288,6 +288,58 @@ class ChatRoomResolverTest {
     }
 }
 
+class KakaoImageSenderTest {
+    @Test
+    fun `threaded image send routes through threaded invoker`() {
+        val invoker = RecordingKakaoSendInvoker()
+        val sender =
+            KakaoImageSender(
+                chatRoomResolver = { FakeChatRoom() },
+                sendInvocationFactory = invoker,
+                logInfo = { _, _ -> },
+            )
+
+        sender.send(
+            roomId = 18478615493603057L,
+            imagePaths = listOf("/tmp/thread.png"),
+            threadId = 3805486995143352321L,
+            threadScope = 3,
+            requestId = "req-thread",
+        )
+
+        assertEquals(0, invoker.singleCalls)
+        assertEquals(0, invoker.multiCalls)
+        assertEquals(1, invoker.threadedCalls)
+        assertEquals(18478615493603057L, invoker.lastRoomId)
+        assertEquals(listOf("/tmp/thread.png"), invoker.lastImagePaths)
+        assertEquals(3805486995143352321L, invoker.lastThreadId)
+        assertEquals(3, invoker.lastThreadScope)
+    }
+
+    @Test
+    fun `room image send still routes through single invoker`() {
+        val invoker = RecordingKakaoSendInvoker()
+        val sender =
+            KakaoImageSender(
+                chatRoomResolver = { FakeChatRoom() },
+                sendInvocationFactory = invoker,
+                logInfo = { _, _ -> },
+            )
+
+        sender.send(
+            roomId = 18478615493603057L,
+            imagePaths = listOf("/tmp/room.png"),
+            threadId = null,
+            threadScope = null,
+            requestId = "req-room",
+        )
+
+        assertEquals(1, invoker.singleCalls)
+        assertEquals(0, invoker.multiCalls)
+        assertEquals(0, invoker.threadedCalls)
+    }
+}
+
 class ImageBridgeServerRestartPolicyTest {
     @Test
     fun `restart delay grows exponentially and caps`() {
@@ -417,6 +469,48 @@ class BridgeSecurityTest {
 }
 
 private class FakeChatRoom
+
+private class RecordingKakaoSendInvoker : KakaoSendInvoker {
+    var singleCalls = 0
+    var multiCalls = 0
+    var threadedCalls = 0
+    var lastRoomId: Long? = null
+    var lastImagePaths: List<String> = emptyList()
+    var lastThreadId: Long? = null
+    var lastThreadScope: Int? = null
+
+    override fun sendSingle(
+        chatRoom: Any,
+        imagePath: String,
+        threadId: Long?,
+        threadScope: Int?,
+    ) {
+        singleCalls += 1
+    }
+
+    override fun sendMultiple(
+        chatRoom: Any,
+        imagePaths: List<String>,
+        threadId: Long?,
+        threadScope: Int?,
+    ) {
+        multiCalls += 1
+    }
+
+    override fun sendThreaded(
+        roomId: Long,
+        chatRoom: Any,
+        imagePaths: List<String>,
+        threadId: Long,
+        threadScope: Int,
+    ) {
+        threadedCalls += 1
+        lastRoomId = roomId
+        lastImagePaths = imagePaths
+        lastThreadId = threadId
+        lastThreadScope = threadScope
+    }
+}
 
 private fun readyHealthSnapshot(): ImageBridgeHealthSnapshot =
     ImageBridgeHealthSnapshot(

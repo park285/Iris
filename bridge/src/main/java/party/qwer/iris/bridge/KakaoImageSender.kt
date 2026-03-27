@@ -3,15 +3,16 @@ package party.qwer.iris.bridge
 import android.util.Log
 
 internal class KakaoImageSender(
-    private val chatRoomResolver: ChatRoomResolver,
-    private val sendInvocationFactory: KakaoSendInvocationFactory,
+    private val chatRoomResolver: (Long) -> Any?,
+    private val sendInvocationFactory: KakaoSendInvoker,
+    private val logInfo: (String, String) -> Unit = { tag, message -> Log.i(tag, message) },
 ) {
     companion object {
         private const val TAG = "IrisBridge"
     }
 
     constructor(registry: KakaoClassRegistry) : this(
-        chatRoomResolver = ChatRoomResolver(registry),
+        chatRoomResolver = ChatRoomResolver(registry)::resolve,
         sendInvocationFactory = KakaoSendInvocationFactory(registry),
     )
 
@@ -33,15 +34,16 @@ internal class KakaoImageSender(
         requestId: String?,
     ) {
         require(imagePaths.isNotEmpty()) { "no image paths" }
-        Log.i(TAG, "send start room=$roomId images=${imagePaths.size} threadId=$threadId scope=$threadScope requestId=$requestId")
+        logInfo(TAG, "send start room=$roomId images=${imagePaths.size} threadId=$threadId scope=$threadScope requestId=$requestId")
 
-        val chatRoom = chatRoomResolver.resolve(roomId) ?: error("chat room not found: $roomId")
-
-        if (imagePaths.size == 1) {
+        val chatRoom = chatRoomResolver(roomId) ?: error("chat room not found: $roomId")
+        if (threadId != null && threadScope != null && threadScope >= 2) {
+            sendInvocationFactory.sendThreaded(roomId, chatRoom, imagePaths, threadId, threadScope)
+        } else if (imagePaths.size == 1) {
             sendInvocationFactory.sendSingle(chatRoom, imagePaths.first(), threadId, threadScope)
         } else {
             sendInvocationFactory.sendMultiple(chatRoom, imagePaths, threadId, threadScope)
         }
-        Log.i(TAG, "send completed room=$roomId requestId=$requestId")
+        logInfo(TAG, "send completed room=$roomId requestId=$requestId")
     }
 }
