@@ -625,6 +625,22 @@ class KakaoClassRegistryTest {
     }
 
     @Test
+    fun `method selector prefers known method name when candidates are ambiguous`() {
+        val method =
+            KakaoClassRegistry.selectMethodCandidateForTest(
+                label = "direct resolver",
+                candidates =
+                    listOf(
+                        AmbiguousMethodOwner::class.java.getMethod("a", Long::class.javaPrimitiveType),
+                        AmbiguousMethodOwner::class.java.getMethod("b", Long::class.javaPrimitiveType),
+                    ),
+                preferredNames = setOf("b"),
+            )
+
+        assertEquals("b", method.name)
+    }
+
+    @Test
     fun `chat media sender selector accepts concrete subclass inheriting send methods`() {
         val selected =
             KakaoClassRegistry.selectChatMediaSenderCandidateForTest(
@@ -673,6 +689,21 @@ class KakaoClassRegistryTest {
         assertEquals("p", methods.second.name)
         assertEquals(AbstractInheritedMediaSender::class.java, methods.first.declaringClass)
         assertEquals(AbstractInheritedMediaSender::class.java, methods.second.declaringClass)
+    }
+
+    @Test
+    fun `chat media sender method resolver accepts inherited non public methods`() {
+        val methods =
+            KakaoClassRegistry.resolveChatMediaSenderMethodsForTest(
+                chatMediaSenderClass = ConcreteProtectedInheritedMediaSender::class.java,
+                mediaItemClass = FakeMediaItem::class.java,
+                messageTypeClass = FakeMessageType::class.java,
+            )
+
+        assertEquals("n", methods.first.name)
+        assertEquals("p", methods.second.name)
+        assertEquals(AbstractProtectedInheritedMediaSender::class.java, methods.first.declaringClass)
+        assertEquals(AbstractProtectedInheritedMediaSender::class.java, methods.second.declaringClass)
     }
 }
 
@@ -800,6 +831,57 @@ private class AlternateConcreteInheritedMediaSender(
     sendWithThread: () -> Boolean,
     attachmentDecorator: (JSONObject) -> JSONObject?,
 ) : AbstractInheritedMediaSender(chatRoom, threadId, sendWithThread, attachmentDecorator)
+
+private abstract class AbstractProtectedInheritedMediaSender(
+    chatRoom: FakeBaseChatRoom,
+    threadId: Long?,
+    sendWithThread: () -> Boolean,
+    attachmentDecorator: (JSONObject) -> JSONObject?,
+) {
+    init {
+        check(chatRoom.javaClass.name.isNotBlank())
+        check(threadId == null)
+        check(!sendWithThread())
+        check(attachmentDecorator(JSONObject()) != null)
+    }
+
+    protected fun n(
+        mediaItem: FakeMediaItem,
+        suppressAnimation: Boolean,
+    ) {
+        check(!suppressAnimation)
+        check(mediaItem.path.isNotBlank())
+    }
+
+    @Suppress("UNUSED_PARAMETER")
+    protected fun p(
+        uris: List<Any>,
+        type: FakeMessageType,
+        message: String?,
+        attachment: JSONObject?,
+        forwardExtra: JSONObject?,
+        writeType: FakeWriteType,
+        shareOriginal: Boolean,
+        highQuality: Boolean,
+        listener: FakeListener?,
+    ) {
+        check(uris.isNotEmpty() || message == null)
+        check(type.name.isNotBlank())
+        check(attachment == null)
+        check(forwardExtra == null)
+        check(writeType.name.isNotBlank())
+        check(!shareOriginal)
+        check(!highQuality)
+        check(listener == null)
+    }
+}
+
+private class ConcreteProtectedInheritedMediaSender(
+    chatRoom: FakeBaseChatRoom,
+    threadId: Long?,
+    sendWithThread: () -> Boolean,
+    attachmentDecorator: (JSONObject) -> JSONObject?,
+) : AbstractProtectedInheritedMediaSender(chatRoom, threadId, sendWithThread, attachmentDecorator)
 
 private fun buildFakeRegistry(): KakaoClassRegistry {
     val singleSend =

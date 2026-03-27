@@ -102,6 +102,7 @@ internal class KakaoClassRegistry(
                                     ),
                                 )
                         },
+                    preferredNames = setOf("e0"),
                 )
             val chatRoom = broadResolver.returnType
             Log.i(TAG, "ChatRoom derived as ${chatRoom.name}")
@@ -116,6 +117,7 @@ internal class KakaoClassRegistry(
                                 m.parameterTypes.contentEquals(arrayOf(Long::class.javaPrimitiveType)) &&
                                 chatRoom.isAssignableFrom(m.returnType)
                         },
+                    preferredNames = setOf("d0"),
                 )
 
             val (singleSend, multiSend) =
@@ -178,6 +180,7 @@ internal class KakaoClassRegistry(
                                         daoMethod.returnType != String::class.java
                                 }
                         },
+                    preferredNames = setOf("O"),
                 )
 
             val daoClass = roomDao.returnType
@@ -197,6 +200,7 @@ internal class KakaoClassRegistry(
                                 m.returnType != java.lang.Boolean::class.java &&
                                 m.returnType != String::class.java
                         },
+                    preferredNames = setOf("h"),
                 )
 
             val photoConst = requireEnumConstant(messageType, "Photo")
@@ -247,7 +251,8 @@ internal class KakaoClassRegistry(
         internal fun selectMethodCandidateForTest(
             label: String,
             candidates: List<Method>,
-        ): Method = selectMethodCandidate(label, candidates)
+            preferredNames: Set<String> = emptySet(),
+        ): Method = selectMethodCandidate(label, candidates, preferredNames)
 
         internal fun selectChatMediaSenderCandidateForTest(
             candidates: List<Class<*>>,
@@ -339,7 +344,7 @@ internal class KakaoClassRegistry(
                         ctor.parameterTypes[2] == function0Class &&
                         ctor.parameterTypes[3] == function1Class
                 } &&
-                clazz.methods.any { method ->
+                methodsInHierarchy(clazz).any { method ->
                     !Modifier.isStatic(method.modifiers) &&
                         method.parameterTypes.size == 2 &&
                         method.parameterTypes[0] == mediaItemClass &&
@@ -355,25 +360,40 @@ internal class KakaoClassRegistry(
                 selectMethodCandidate(
                     label = "ChatMediaSender single send on ${chatMediaSenderClass.name}",
                     candidates =
-                        chatMediaSenderClass.methods.filter { method ->
+                        methodsInHierarchy(chatMediaSenderClass).filter { method ->
                             !Modifier.isStatic(method.modifiers) &&
                                 method.parameterTypes.size == 2 &&
                                 method.parameterTypes[0] == mediaItemClass &&
                                 method.parameterTypes[1] == Boolean::class.javaPrimitiveType
                         },
+                    preferredNames = setOf("n"),
                 )
             val multiSend =
                 selectMethodCandidate(
                     label = "ChatMediaSender multi send on ${chatMediaSenderClass.name}",
                     candidates =
-                        chatMediaSenderClass.methods.filter { method ->
+                        methodsInHierarchy(chatMediaSenderClass).filter { method ->
                             !Modifier.isStatic(method.modifiers) &&
                                 method.parameterCount == 9 &&
                                 method.parameterTypes[0] == List::class.java &&
                                 method.parameterTypes[1] == messageTypeClass
                         },
+                    preferredNames = setOf("p"),
                 )
             return singleSend to multiSend
+        }
+
+        private fun methodsInHierarchy(clazz: Class<*>): List<Method> {
+            val methods = mutableListOf<Method>()
+            var current: Class<*>? = clazz
+            while (current != null && current != Any::class.java) {
+                current.declaredMethods.forEach { method ->
+                    runCatching { method.isAccessible = true }
+                    methods += method
+                }
+                current = current.superclass
+            }
+            return methods
         }
 
         private fun selectClassCandidate(
@@ -413,15 +433,21 @@ internal class KakaoClassRegistry(
         private fun selectMethodCandidate(
             label: String,
             candidates: List<Method>,
-        ): Method =
-            chooseUniqueCandidate(
+            preferredNames: Set<String> = emptySet(),
+        ): Method {
+            val uniqueCandidates = candidates.distinctBy(::methodSignature)
+            val preferredCandidates =
+                uniqueCandidates.filter { method -> method.name in preferredNames }
+            val narrowedCandidates = if (preferredCandidates.isNotEmpty()) preferredCandidates else uniqueCandidates
+            return chooseUniqueCandidate(
                 label = label,
-                candidates = candidates.distinctBy(::methodSignature),
+                candidates = narrowedCandidates,
                 preference = { method ->
                     !Modifier.isAbstract(method.modifiers) && !method.isBridge && !method.isSynthetic
                 },
                 describe = ::methodSignature,
             )
+        }
 
         private fun selectFieldCandidate(
             label: String,
