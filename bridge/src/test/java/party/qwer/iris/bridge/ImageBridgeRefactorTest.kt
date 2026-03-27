@@ -712,7 +712,7 @@ class KakaoClassRegistryTest {
                             AmbiguousMethodOwner::class.java.getMethod("a", Long::class.javaPrimitiveType),
                             AmbiguousMethodOwner::class.java.getMethod("b", Long::class.javaPrimitiveType),
                         ),
-                    )
+                )
             }
 
         assertTrue(error.message?.contains("ambiguous") == true)

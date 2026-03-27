@@ -30,9 +30,7 @@ internal class DexClassScanner(
 
     private val classNames: List<String> by lazy { enumerateClassNames() }
 
-    fun find(predicate: (Class<*>) -> Boolean): Class<*>? {
-        return findAll(predicate).firstOrNull()
-    }
+    fun find(predicate: (Class<*>) -> Boolean): Class<*>? = findAll(predicate).firstOrNull()
 
     fun findAll(predicate: (Class<*>) -> Boolean): List<Class<*>> {
         val matches = mutableListOf<Class<*>>()

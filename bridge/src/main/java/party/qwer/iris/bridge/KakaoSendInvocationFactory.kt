@@ -253,7 +253,8 @@ internal object ThreadedImageXposedInjector {
     ): Method? =
         chatMediaSenderClass.methods.firstOrNull { method ->
             method.name == "A" &&
-                !java.lang.reflect.Modifier.isStatic(method.modifiers) &&
+                !java.lang.reflect.Modifier
+                    .isStatic(method.modifiers) &&
                 method.parameterCount == 3 &&
                 method.parameterTypes[1] == writeTypeClass &&
                 method.parameterTypes[2] == listenerClass

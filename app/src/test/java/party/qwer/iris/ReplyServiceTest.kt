@@ -1,10 +1,7 @@
 package party.qwer.iris
 
 import android.content.Intent
-import android.net.Uri
 import kotlinx.coroutines.delay
-import java.io.File
-import java.nio.file.Files
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
