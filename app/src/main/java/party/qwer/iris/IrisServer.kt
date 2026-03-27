@@ -57,6 +57,7 @@ internal class IrisServer(
     private val replyStatusProvider: ((String) -> ReplyStatusSnapshot?)? = null,
     private val memberRepo: MemberRepository? = null,
     private val sseEventBus: SseEventBus? = null,
+    private val chatRoomIntrospectProvider: ((Long) -> String?)? = null,
 ) {
     private val serverJson =
         Json {
@@ -185,6 +186,15 @@ internal class IrisServer(
             }
             val bridgeHealth = bridgeHealthProvider?.invoke() ?: invalidRequest("bridge health unavailable")
             call.respond(bridgeHealth)
+        }
+
+        get("/diagnostics/chatroom-fields/{chatId}") {
+            if (!requireBotToken(call)) return@get
+            val chatId = call.parameters["chatId"]?.toLongOrNull()
+                ?: invalidRequest("chatId must be a number")
+            val result = chatRoomIntrospectProvider?.invoke(chatId)
+                ?: invalidRequest("bridge introspection unavailable")
+            call.respondText(result, ContentType.Application.Json)
         }
     }
 
