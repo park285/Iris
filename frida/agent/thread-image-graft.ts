@@ -13,12 +13,22 @@ import {
   IRIS_EXTRAS,
 } from './shared/session.js';
 import { FingerprintSessionStore, fingerprintUriStrings, mergeSessionMeta } from './shared/fingerprint-store.js';
+import {
+  readAttachmentText,
+  readChatRoomId,
+  rewriteAttachmentText,
+} from './shared/chatlog-reflection.js';
 import { isPhotoMessageType, removeCallingPkgFromAttachment } from './shared/message.js';
 
 // 모듈 수준 상태: V8/Frida 단일 스레드이므로 동기 체인(o→t→A) 내에서 안전
 const fingerprintStore = new FingerprintSessionStore();
 let currentMediaSenderSession: SessionMeta | null = null;
 let threadImageGraftHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let lastThreadImageEventHealthEmitAtMs = 0;
+const ENABLE_THREAD_IMAGE_GRAFT = false;
+const ENABLE_HOT_PATH_GRAFT_LOGS = false;
+const EMIT_EAGER_EVENT_HEALTH = false;
+const THROTTLED_EVENT_HEALTH_INTERVAL_MS = 250;
 
 const hasNativePointer =
   typeof (globalThis as typeof globalThis & { NativePointer?: unknown }).NativePointer !== 'undefined';
@@ -32,7 +42,7 @@ type RuntimeLike = {
     perform: (callback: () => void) => void;
     use: (className: string) => any;
   };
-  send?: (message: string) => void;
+  send?: (message: unknown) => void;
   now?: () => number;
 };
 
@@ -329,7 +339,12 @@ function emitThreadImageGraftHealth(
   event: string,
   timestampMs = nowMs(runtime),
 ): void {
-  runtime.send?.(JSON.stringify(snapshotThreadImageGraftHealth(health, event, timestampMs)));
+  const send = runtime.send;
+  if (send == null) {
+    return;
+  }
+
+  send(snapshotThreadImageGraftHealth(health, event, timestampMs));
 }
 
 function stopThreadImageGraftHeartbeat(): void {
@@ -383,6 +398,38 @@ export function planImageGraft(session: SessionMeta | null, roomId: string): Ima
 
 function log(runtime: RuntimeLike, message: string): void {
   runtime.send?.(`[graft] ${message}`);
+}
+
+function debugLog(runtime: RuntimeLike, buildMessage: () => string): void {
+  if (!ENABLE_HOT_PATH_GRAFT_LOGS) {
+    return;
+  }
+
+  const send = runtime.send;
+  if (send == null) {
+    return;
+  }
+
+  send(`[graft] ${buildMessage()}`);
+}
+
+function emitThreadImageGraftEventHealth(
+  runtime: RuntimeLike,
+  health: ThreadImageGraftHealth,
+  event: string,
+  outcome: ThreadImageGraftOutcome,
+  timestampMs: number,
+): void {
+  const shouldEmit =
+    EMIT_EAGER_EVENT_HEALTH ||
+    outcome === 'failure' ||
+    timestampMs-lastThreadImageEventHealthEmitAtMs >= THROTTLED_EVENT_HEALTH_INTERVAL_MS;
+  if (!shouldEmit) {
+    return;
+  }
+
+  lastThreadImageEventHealthEmitAtMs = timestampMs;
+  emitThreadImageGraftHealth(runtime, health, event, timestampMs);
 }
 
 function resolveAvailableMethodTargets(runtime: RuntimeLike): Record<string, string[]> {
@@ -641,61 +688,6 @@ function applySessionExtras(targetIntent: any, sourceIntent: any): void {
 
 // ─── 런타임 헬퍼 ────────────────────────────────────────────────────────────
 
-function readChatRoomId(runtime: RuntimeLike, sendingLog: any): string | null {
-  try {
-    const JavaBridge = runtime.Java;
-    if (JavaBridge == null) {
-      return null;
-    }
-    return JavaBridge.use('java.lang.String').valueOf(sendingLog.getChatRoomId());
-  } catch {
-    return null;
-  }
-}
-
-function readAttachmentText(sendingLog: any): string | null {
-  try {
-    const cls = sendingLog.getClass();
-    const attachmentField = cls.getDeclaredField(KAKAO_IMAGE_GRAFT_TARGET.attachmentField);
-    attachmentField.setAccessible(true);
-    const attachment = attachmentField.get(sendingLog);
-    return attachment == null ? null : String(attachment);
-  } catch {
-    return null;
-  }
-}
-
-function rewriteAttachmentText(sendingLog: any, newText: string): boolean {
-  try {
-    const cls = sendingLog.getClass();
-    const attachmentField = cls.getDeclaredField(KAKAO_IMAGE_GRAFT_TARGET.attachmentField);
-    attachmentField.setAccessible(true);
-    const attachment = attachmentField.get(sendingLog);
-    if (attachment == null) {
-      return false;
-    }
-
-    const attachmentClass = attachment.getClass();
-    const fields = attachmentClass.getDeclaredFields();
-    for (const field of fields) {
-      field.setAccessible(true);
-      if (field.getType().getName() !== 'java.lang.String') {
-        continue;
-      }
-
-      const value = field.get(attachment);
-      if (value != null && String(value).includes('callingPkg')) {
-        field.set(attachment, newText);
-        return true;
-      }
-    }
-  } catch {
-    return false;
-  }
-
-  return false;
-}
-
 function readMessageType(sendingLog: any): string | null {
   try {
     return String(sendingLog.w0());
@@ -758,14 +750,14 @@ function installBaseIntentFilterHook(runtime: RuntimeLike, health: ThreadImageGr
       if (merged != null) {
         fingerprintStore.set(fingerprint, merged);
         recordThreadImageEvent(health, 'capture', 'success', timestampMs, ['b6']);
-        emitThreadImageGraftHealth(runtime, health, 'capture', timestampMs);
-        log(
+        emitThreadImageGraftEventHealth(runtime, health, 'capture', 'success', timestampMs);
+        debugLog(
           runtime,
-          `b6 captured fp=${fingerprint} session=${merged.sessionId} threadId=${merged.threadId ?? 'none'} scope=${merged.threadScope} room=${merged.roomId ?? 'none'}`,
+          () => `b6 captured fp=${fingerprint} session=${merged.sessionId} threadId=${merged.threadId ?? 'none'} scope=${merged.threadScope} room=${merged.roomId ?? 'none'}`,
         );
       } else {
         recordThreadImageEvent(health, 'capture', 'skip', timestampMs, ['b6']);
-        emitThreadImageGraftHealth(runtime, health, 'capture', timestampMs);
+        emitThreadImageGraftEventHealth(runtime, health, 'capture', 'skip', timestampMs);
       }
 
       // 세션 extras를 forward intent로 전파
@@ -786,6 +778,8 @@ function installChatMediaSenderHooks(runtime: RuntimeLike, health: ThreadImageGr
   }
 
   const ChatMediaSender = JavaBridge.use(CHAT_MEDIA_SENDER_TARGET.className);
+  const LongClass = JavaBridge.use('java.lang.Long');
+  const StringClass = JavaBridge.use('java.lang.String');
   const installedAtMs = nowMs(runtime);
 
   // o(): 미디어 전송 진입점 — try/finally로 currentSession 스코프 관리
@@ -797,11 +791,8 @@ function installChatMediaSenderHooks(runtime: RuntimeLike, health: ThreadImageGr
       const session = fingerprintStore.get(fingerprint);
       currentMediaSenderSession = session;
       recordThreadImageEvent(health, 'restore', session == null ? 'skip' : 'success', timestampMs, ['o']);
-      emitThreadImageGraftHealth(runtime, health, 'restore', timestampMs);
-      log(
-        runtime,
-        `o entry fp=${fingerprint} session=${session?.sessionId ?? 'none'}`,
-      );
+      emitThreadImageGraftEventHealth(runtime, health, 'restore', session == null ? 'skip' : 'success', timestampMs);
+      debugLog(runtime, () => `o entry fp=${fingerprint} session=${session?.sessionId ?? 'none'}`);
       try {
         return overload.apply(this, args);
       } finally {
@@ -822,11 +813,11 @@ function installChatMediaSenderHooks(runtime: RuntimeLike, health: ThreadImageGr
         if (session != null) {
           currentMediaSenderSession = session;
           recordThreadImageEvent(health, 'restore', 'success', timestampMs, ['t']);
-          emitThreadImageGraftHealth(runtime, health, 'restore', timestampMs);
-          log(runtime, `t fallback-restore fp=${fingerprint} session=${session.sessionId}`);
+          emitThreadImageGraftEventHealth(runtime, health, 'restore', 'success', timestampMs);
+          debugLog(runtime, () => `t fallback-restore fp=${fingerprint} session=${session.sessionId}`);
         } else {
           recordThreadImageEvent(health, 'restore', 'skip', timestampMs, ['t']);
-          emitThreadImageGraftHealth(runtime, health, 'restore', timestampMs);
+          emitThreadImageGraftEventHealth(runtime, health, 'restore', 'skip', timestampMs);
         }
       }
       try {
@@ -846,36 +837,40 @@ function installChatMediaSenderHooks(runtime: RuntimeLike, health: ThreadImageGr
       touchThreadImageHook(health, 'A', timestampMs);
 
       if (session != null) {
-        const roomId = readChatRoomId(runtime, sendingLog);
+        const roomId = readChatRoomId(resolveJavaBridge(runtime), sendingLog);
         const plan = planImageGraft(session, roomId ?? '');
         if (plan.status === 'inject' && plan.injection != null) {
+          const injection = plan.injection;
           try {
-            sendingLog.H1(plan.injection.threadScope);
+            sendingLog.H1(injection.threadScope);
             sendingLog.J1(
-              JavaBridge.use('java.lang.Long').valueOf(
-                JavaBridge.use('java.lang.String').valueOf(plan.injection.threadId),
+              LongClass.valueOf(
+                StringClass.valueOf(injection.threadId),
               ),
             );
             recordThreadImageEvent(health, 'inject', 'success', timestampMs, ['A']);
-            emitThreadImageGraftHealth(runtime, health, 'inject', timestampMs);
-            log(
+            emitThreadImageGraftEventHealth(runtime, health, 'inject', 'success', timestampMs);
+            debugLog(
               runtime,
-              `A injected session=${session.sessionId} room=${roomId ?? 'none'} threadId=${plan.injection.threadId} scope=${plan.injection.threadScope}`,
+              () => `A injected session=${session.sessionId} room=${roomId ?? 'none'} threadId=${injection.threadId} scope=${injection.threadScope}`,
             );
           } catch (error) {
             recordThreadImageEvent(health, 'inject', 'failure', timestampMs, ['A']);
-            emitThreadImageGraftHealth(runtime, health, 'inject', timestampMs);
+            emitThreadImageGraftEventHealth(runtime, health, 'inject', 'failure', timestampMs);
             emitThreadImageGraftHealth(runtime, health, 'readiness', timestampMs);
             log(runtime, `A injection-failed session=${session.sessionId} error=${String(error)}`);
           }
         } else {
           recordThreadImageEvent(health, 'inject', 'skip', timestampMs, ['A']);
-          emitThreadImageGraftHealth(runtime, health, 'inject', timestampMs);
-          log(runtime, `A skip status=${plan.status} session=${session.sessionId} room=${roomId ?? 'none'}`);
+          emitThreadImageGraftEventHealth(runtime, health, 'inject', 'skip', timestampMs);
+          debugLog(
+            runtime,
+            () => `A skip status=${plan.status} session=${session.sessionId} room=${roomId ?? 'none'}`,
+          );
         }
       } else {
         recordThreadImageEvent(health, 'inject', 'skip', timestampMs, ['A']);
-        emitThreadImageGraftHealth(runtime, health, 'inject', timestampMs);
+        emitThreadImageGraftEventHealth(runtime, health, 'inject', 'skip', timestampMs);
       }
 
       return overload.apply(this, args);
@@ -905,16 +900,16 @@ function installSendingLogHook(runtime: RuntimeLike, health: ThreadImageGraftHea
       const messageType = readMessageType(sendingLog);
 
       if (isPhotoMessageType(messageType)) {
-        const attachmentText = readAttachmentText(sendingLog);
+        const attachmentText = readAttachmentText(sendingLog, KAKAO_IMAGE_GRAFT_TARGET.attachmentField);
         const cleanedAttachment = removeCallingPkgFromAttachment(attachmentText);
         if (cleanedAttachment != null && cleanedAttachment !== attachmentText) {
-          if (rewriteAttachmentText(sendingLog, cleanedAttachment)) {
-            log(runtime, `u callingPkg-removed room=${readChatRoomId(runtime, sendingLog) ?? 'none'}`);
+          if (rewriteAttachmentText(sendingLog, KAKAO_IMAGE_GRAFT_TARGET.attachmentField, cleanedAttachment)) {
+            debugLog(runtime, () => `u callingPkg-removed room=${readChatRoomId(resolveJavaBridge(runtime), sendingLog) ?? 'none'}`);
           }
         }
       }
 
-      log(runtime, `u observe type=${messageType ?? 'none'} room=${readChatRoomId(runtime, sendingLog) ?? 'none'}`);
+      debugLog(runtime, () => `u observe type=${messageType ?? 'none'} room=${readChatRoomId(resolveJavaBridge(runtime), sendingLog) ?? 'none'}`);
 
       return overload.apply(this, args);
     };
@@ -932,6 +927,7 @@ export function installThreadImageGraft(runtime: RuntimeLike = globalThis as Run
   }
 
   stopThreadImageGraftHeartbeat();
+  lastThreadImageEventHealthEmitAtMs = 0;
   const health = createThreadImageGraftHealth(nowMs(runtime));
   emitThreadImageGraftHealth(runtime, health, 'health', health.updatedAtMs);
 
@@ -964,7 +960,7 @@ export function installThreadImageGraft(runtime: RuntimeLike = globalThis as Run
   return true;
 }
 
-if (JavaBridgeGlobal?.available) {
+if (ENABLE_THREAD_IMAGE_GRAFT && JavaBridgeGlobal?.available) {
   installThreadImageGraft({
     ...(globalThis as RuntimeLike),
     Java: JavaBridgeGlobal,
