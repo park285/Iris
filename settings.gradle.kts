@@ -23,3 +23,4 @@ dependencyResolutionManagement {
 rootProject.name = "Iris"
 include(":app")
 include(":bridge")
+include(":imagebridge-protocol")
