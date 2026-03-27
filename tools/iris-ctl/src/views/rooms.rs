@@ -4,7 +4,7 @@ use ratatui::layout::{Rect, Constraint};
 use ratatui::style::Stylize;
 use ratatui::widgets::{Block, Row, Table, TableState, Cell};
 use crate::models::RoomSummary;
-use super::{View, ViewAction};
+use super::{TabId, View, ViewAction};
 
 pub struct RoomsView { pub rooms: Vec<RoomSummary>, state: TableState }
 
@@ -16,6 +16,36 @@ impl RoomsView {
     }
     pub fn selected_chat_id(&self) -> Option<i64> {
         self.state.selected().and_then(|i| self.rooms.get(i)).map(|r| r.chat_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::views::TabId;
+    use crossterm::event::KeyModifiers;
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn shortcuts_switch_to_stats_and_info_when_room_selected() {
+        let mut view = RoomsView::new();
+        view.set_rooms(vec![RoomSummary {
+            chat_id: 42,
+            room_type: Some("open".to_string()),
+            link_id: None,
+            active_members_count: Some(3),
+            link_name: Some("room".to_string()),
+            link_url: None,
+            member_limit: None,
+            searchable: None,
+            bot_role: None,
+        }]);
+
+        assert!(matches!(view.handle_key(key(KeyCode::Char('s'))), ViewAction::SwitchTo(TabId::Stats)));
+        assert!(matches!(view.handle_key(key(KeyCode::Char('i'))), ViewAction::SwitchTo(TabId::Stats)));
     }
 }
 
@@ -40,6 +70,16 @@ impl View for RoomsView {
                 self.state.select(Some(if i == 0 { self.rooms.len().saturating_sub(1) } else { i - 1 })); ViewAction::None }
             KeyCode::Down | KeyCode::Char('j') => { let i = self.state.selected().unwrap_or(0);
                 self.state.select(Some(if i >= self.rooms.len().saturating_sub(1) { 0 } else { i + 1 })); ViewAction::None }
+            KeyCode::Char('s') => {
+                if self.selected_chat_id().is_some() {
+                    ViewAction::SwitchTo(TabId::Stats)
+                } else { ViewAction::None }
+            }
+            KeyCode::Char('i') => {
+                if self.selected_chat_id().is_some() {
+                    ViewAction::SwitchTo(TabId::Stats)
+                } else { ViewAction::None }
+            }
             KeyCode::Enter => { if let Some(id) = self.selected_chat_id() { ViewAction::SelectRoom(id) } else { ViewAction::None } }
             _ => ViewAction::None,
         }

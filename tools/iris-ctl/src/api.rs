@@ -16,22 +16,25 @@ impl IrisApi {
         Ok(Self { client, base_url: config.base_url().trim_end_matches('/').to_string() })
     }
     pub async fn rooms(&self) -> Result<RoomListResponse> {
-        Ok(self.client.get(format!("{}/rooms", self.base_url)).send().await?.json().await?)
+        Ok(self.client.get(format!("{}/rooms", self.base_url))
+            .send().await?.error_for_status()?.json().await?)
     }
     pub async fn members(&self, chat_id: i64) -> Result<MemberListResponse> {
-        Ok(self.client.get(format!("{}/rooms/{}/members", self.base_url, chat_id)).send().await?.json().await?)
+        Ok(self.client.get(format!("{}/rooms/{}/members", self.base_url, chat_id))
+            .send().await?.error_for_status()?.json().await?)
     }
     pub async fn room_info(&self, chat_id: i64) -> Result<RoomInfoResponse> {
-        Ok(self.client.get(format!("{}/rooms/{}/info", self.base_url, chat_id)).send().await?.json().await?)
+        Ok(self.client.get(format!("{}/rooms/{}/info", self.base_url, chat_id))
+            .send().await?.error_for_status()?.json().await?)
     }
     pub async fn stats(&self, chat_id: i64, period: &str, limit: i32) -> Result<StatsResponse> {
         Ok(self.client.get(format!("{}/rooms/{}/stats", self.base_url, chat_id))
             .query(&[("period", period), ("limit", &limit.to_string())])
-            .send().await?.json().await?)
+            .send().await?.error_for_status()?.json().await?)
     }
     pub async fn member_activity(&self, chat_id: i64, user_id: i64, period: &str) -> Result<MemberActivityResponse> {
         Ok(self.client.get(format!("{}/rooms/{}/members/{}/activity", self.base_url, chat_id, user_id))
-            .query(&[("period", period)]).send().await?.json().await?)
+            .query(&[("period", period)]).send().await?.error_for_status()?.json().await?)
     }
     pub fn sse_url(&self) -> String { format!("{}/events/stream", self.base_url) }
     pub fn client(&self) -> &Client { &self.client }

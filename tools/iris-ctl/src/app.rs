@@ -61,7 +61,13 @@ impl App {
                         self.members_view.set_chat_id(id);
                         self.stats_view.chat_id = Some(id);
                         self.stats_view.stats = None;
+                        self.stats_view.room_info = None;
                         self.active_tab = TabId::Members;
+                    }
+                    ViewAction::SelectMember(chat_id, user_id) => {
+                        self.status = format!("Loading activity for user {}...", user_id);
+                        self.stats_view.chat_id = Some(chat_id);
+                        self.active_tab = TabId::Stats;
                     }
                     ViewAction::SwitchTo(tab) => self.active_tab = tab,
                     ViewAction::Back => self.active_tab = TabId::Rooms,
