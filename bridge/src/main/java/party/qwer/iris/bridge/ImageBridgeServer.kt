@@ -31,7 +31,8 @@ internal object ImageBridgeServer {
 
     fun start(
         context: Context,
-        classLoader: ClassLoader,
+        registry: KakaoClassRegistry?,
+        registryError: String? = null,
     ) {
         if (!running.compareAndSet(false, true)) {
             Log.w(TAG, "bridge server already running")
@@ -39,12 +40,11 @@ internal object ImageBridgeServer {
         }
         restartCount.set(0)
         lastCrashMessage.set(null)
-        val registry = runCatching { KakaoClassRegistry.discover(classLoader) }
-        val imageSender = registry.getOrNull()?.let { KakaoImageSender(it) } ?: KakaoImageSender(context, classLoader)
+        val imageSender = registry?.let { KakaoImageSender(it) }
         val verifier =
             BridgeHookSpecVerifier(
-                registry = registry.getOrNull(),
-                registryError = registry.exceptionOrNull()?.message,
+                registry = registry,
+                registryError = registryError,
             )
         val initialSpecStatus = verifier.verify()
         specStatus.set(initialSpecStatus)
@@ -53,7 +53,12 @@ internal object ImageBridgeServer {
         }
         requestHandler =
             ImageBridgeRequestHandler(
-                imageSender = imageSender::send,
+                imageSender = { request ->
+                    val sender =
+                        imageSender
+                            ?: error("KakaoClassRegistry not available: ${registryError ?: "unknown error"}")
+                    sender.send(request)
+                },
                 healthProvider = ::healthSnapshot,
             )
         clientExecutor =

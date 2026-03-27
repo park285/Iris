@@ -24,11 +24,9 @@ class IrisBridgeModule : IXposedHookLoadPackage {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     val app = param.thisObject as Application
                     Log.i(TAG, "Application.onCreate — starting image bridge server")
-                    val registry = runCatching { KakaoClassRegistry.discover(lpparam.classLoader) }.getOrNull()
-                    if (registry != null) {
-                        BridgeDiscovery.install(registry)
-                    }
-                    ImageBridgeServer.start(app, lpparam.classLoader)
+                    val registry = runCatching { KakaoClassRegistry.discover(lpparam.classLoader) }
+                    registry.getOrNull()?.let { BridgeDiscovery.install(it) }
+                    ImageBridgeServer.start(app, registry.getOrNull(), registry.exceptionOrNull()?.message)
                 }
             },
         )

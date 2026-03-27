@@ -1,6 +1,5 @@
 package party.qwer.iris.bridge
 
-import android.content.Context
 import android.util.Log
 
 internal class KakaoImageSender(
@@ -10,14 +9,6 @@ internal class KakaoImageSender(
     companion object {
         private const val TAG = "IrisBridge"
     }
-
-    @Suppress("UNUSED_PARAMETER")
-    constructor(
-        context: Context,
-        loader: ClassLoader,
-    ) : this(
-        registry = KakaoClassRegistry.discover(loader),
-    )
 
     constructor(registry: KakaoClassRegistry) : this(
         chatRoomResolver = ChatRoomResolver(registry),
