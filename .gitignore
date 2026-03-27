@@ -46,6 +46,11 @@ docs/current-staging-split.md
 *.bak
 *~
 
+# Local binary artifacts
+*.xapk
+*.zip
+image.png
+
 # Build artifacts
 frida/agent/node_modules/
 frida/agent/generated/
