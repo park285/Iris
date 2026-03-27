@@ -1,7 +1,10 @@
 package party.qwer.iris
 
 import android.content.Intent
+import android.net.Uri
 import kotlinx.coroutines.delay
+import java.io.File
+import java.nio.file.Files
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -14,6 +17,11 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ReplyServiceTest {
+    private companion object {
+        private const val VALID_TEST_PNG_BASE64 =
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+cq1cAAAAASUVORK5CYII="
+    }
+
     private val testConfig =
         object : ConfigProvider {
             override val botId = 0L
@@ -331,6 +339,16 @@ class ReplyServiceTest {
 
         assertEquals(ReplyAdmissionStatus.INVALID_PAYLOAD, result.status)
         service.shutdown()
+    }
+
+    @Test
+    fun `threaded native image reply is routed through share intent path`() {
+        val service = ReplyService(testConfig)
+
+        assertTrue(service.shouldRouteThreadImageViaShareIntentForTest(3805486995143352321L, 3))
+        assertTrue(service.shouldRouteThreadImageViaShareIntentForTest(3805486995143352321L, 2))
+        assertFalse(service.shouldRouteThreadImageViaShareIntentForTest(3805486995143352321L, 1))
+        assertFalse(service.shouldRouteThreadImageViaShareIntentForTest(null, null))
     }
 
     @Test

@@ -63,6 +63,9 @@ internal data class ImageShareIntentSpec(
 internal class ReplyService(
     private val config: ConfigProvider,
     private val nativeImageReplySender: NativeImageReplySender = KakaoNativeImageReplySender(),
+    private val imageShareLauncher: (Intent) -> Unit = { intent -> AndroidHiddenApi.startActivity(intent) },
+    private val mediaScanner: (Uri) -> Unit = ::broadcastMediaScan,
+    private val imageDir: File = File(IRIS_IMAGE_DIR_PATH),
 ) : MessageSender {
     private companion object {
         private const val PER_WORKER_QUEUE_CAPACITY = 16
@@ -85,7 +88,6 @@ internal class ReplyService(
     private val statusStore = ReplyStatusStore()
     private var started = false
     private var shutdownComplete = false
-    private val imageDir = File(IRIS_IMAGE_DIR_PATH)
     private val imageMediaScanEnabled =
         System
             .getenv("IRIS_IMAGE_MEDIA_SCAN")
@@ -293,17 +295,23 @@ internal class ReplyService(
         threadId: Long?,
         threadScope: Int?,
         requestId: String?,
-    ): ReplyAdmissionResult =
-        enqueueImages(
+    ): ReplyAdmissionResult {
+        val useThreadImageShareIntent = shouldRouteThreadImageViaShareIntent(threadId, threadScope)
+        return enqueueImages(
             room = room,
             base64ImageDataStrings = base64ImageDataStrings,
             threadId = threadId,
-            lane = ReplySendLane.NATIVE_IMAGE,
+            lane = if (useThreadImageShareIntent) ReplySendLane.SHARE_INTENT else ReplySendLane.NATIVE_IMAGE,
             requestId = requestId,
             dispatch = { preparedImages ->
-                sendPreparedImagesNative(preparedImages, threadId, threadScope, requestId)
+                if (useThreadImageShareIntent) {
+                    sendPreparedImages(preparedImages, threadId, threadScope)
+                } else {
+                    sendPreparedImagesNative(preparedImages, threadId, threadScope, requestId)
+                }
             },
         )
+    }
 
     private fun enqueueImages(
         room: Long,
@@ -348,7 +356,7 @@ internal class ReplyService(
                             createdFiles.add(imageFile)
                             val imageUri = Uri.fromFile(imageFile)
                             if (imageMediaScanEnabled) {
-                                mediaScan(imageUri)
+                                mediaScanner(imageUri)
                             }
                             uris.add(imageUri)
                         }
@@ -541,7 +549,7 @@ internal class ReplyService(
             )
 
         try {
-            AndroidHiddenApi.startActivity(intent)
+            imageShareLauncher(intent)
         } catch (e: Exception) {
             IrisLogger.error("Error starting activity for sending multiple photos: $e")
             cleanupPreparedImages(preparedImages)
@@ -621,19 +629,17 @@ internal class ReplyService(
 
     private fun isDecodableBase64Payload(value: String): Boolean = runCatching { decodeBase64Image(value) }.isSuccess
 
-    internal fun replyStatusOrNull(requestId: String): ReplyStatusSnapshot? = statusStore.get(requestId)
+    internal fun shouldRouteThreadImageViaShareIntentForTest(
+        threadId: Long?,
+        threadScope: Int?,
+    ): Boolean = shouldRouteThreadImageViaShareIntent(threadId, threadScope)
 
-    // Android Q+ deprecated ACTION_MEDIA_SCANNER_SCAN_FILE
-    // Context 없는 환경이므로 MediaScannerConnection 사용 불가
-    // shell context에서 broadcast 방식 유지
-    @Suppress("DEPRECATION")
-    private fun mediaScan(uri: Uri) {
-        val mediaScanIntent =
-            Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE).apply {
-                data = uri
-            }
-        AndroidHiddenApi.broadcastIntent(mediaScanIntent)
-    }
+    private fun shouldRouteThreadImageViaShareIntent(
+        threadId: Long?,
+        threadScope: Int?,
+    ): Boolean = threadId != null && threadScope != null && threadScope >= 2
+
+    internal fun replyStatusOrNull(requestId: String): ReplyStatusSnapshot? = statusStore.get(requestId)
 }
 
 private data class PreparedImages(
@@ -707,4 +713,16 @@ private fun cleanupPreparedImages(preparedImages: PreparedImages) {
             IrisLogger.error("Failed to delete prepared image file: ${file.absolutePath}")
         }
     }
+}
+
+// Android Q+ deprecated ACTION_MEDIA_SCANNER_SCAN_FILE
+// Context 없는 환경이므로 MediaScannerConnection 사용 불가
+// shell context에서 broadcast 방식 유지
+@Suppress("DEPRECATION")
+private fun broadcastMediaScan(uri: Uri) {
+    val mediaScanIntent =
+        Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE).apply {
+            data = uri
+        }
+    AndroidHiddenApi.broadcastIntent(mediaScanIntent)
 }
