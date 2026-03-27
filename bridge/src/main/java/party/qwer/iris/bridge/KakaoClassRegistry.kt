@@ -97,7 +97,7 @@ internal class KakaoClassRegistry(
                 }
 
             val broadResolver =
-                chatRoomManager.declaredMethods.first { m ->
+                chatRoomManager.declaredMethods.firstOrNull { m ->
                     !Modifier.isStatic(m.modifiers) &&
                         m.parameterTypes.contentEquals(
                             arrayOf(
@@ -106,32 +106,41 @@ internal class KakaoClassRegistry(
                                 Boolean::class.javaPrimitiveType,
                             ),
                         )
-                }
+                } ?: error(
+                    "ChatRoomManager broad resolver not found: expected (long,boolean,boolean) on ${chatRoomManager.name}",
+                )
             val chatRoom = broadResolver.returnType
             Log.i(TAG, "ChatRoom derived as ${chatRoom.name}")
 
             val directResolver =
-                chatRoomManager.declaredMethods.first { m ->
-                    !Modifier.isStatic(m.modifiers) &&
+                chatRoomManager.declaredMethods.firstOrNull { m ->
+                    m != broadResolver &&
+                        !Modifier.isStatic(m.modifiers) &&
                         m.parameterTypes.contentEquals(arrayOf(Long::class.javaPrimitiveType)) &&
                         chatRoom.isAssignableFrom(m.returnType)
-                }
+                } ?: error(
+                    "ChatRoomManager direct resolver not found: expected (long)->ChatRoom on ${chatRoomManager.name}",
+                )
 
             val singleSend =
-                chatMediaSender.declaredMethods.first { m ->
+                chatMediaSender.declaredMethods.firstOrNull { m ->
                     !Modifier.isStatic(m.modifiers) &&
                         m.parameterTypes.size == 2 &&
                         m.parameterTypes[0] == mediaItem &&
                         m.parameterTypes[1] == Boolean::class.javaPrimitiveType
-                }
+                } ?: error(
+                    "ChatMediaSender single send not found: expected (MediaItem,boolean) on ${chatMediaSender.name}",
+                )
 
             val multiSend =
-                chatMediaSender.declaredMethods.first { m ->
+                chatMediaSender.declaredMethods.firstOrNull { m ->
                     !Modifier.isStatic(m.modifiers) &&
                         m.parameterCount == 9 &&
                         m.parameterTypes[0] == List::class.java &&
                         m.parameterTypes[1] == messageType
-                }
+                } ?: error(
+                    "ChatMediaSender multi send not found: expected 9-param (List,MessageType,...) on ${chatMediaSender.name}",
+                )
 
             val mediaItemCtor =
                 mediaItem.getConstructor(
@@ -141,12 +150,13 @@ internal class KakaoClassRegistry(
 
             val masterDbField =
                 masterDb.declaredFields
-                    .first { field ->
+                    .firstOrNull { field ->
                         Modifier.isStatic(field.modifiers) && field.type == masterDb
-                    }.apply { isAccessible = true }
+                    }?.apply { isAccessible = true }
+                    ?: error("MasterDatabase singleton field not found on ${masterDb.name}")
 
             val roomDao =
-                masterDb.methods.first { m ->
+                masterDb.methods.firstOrNull { m ->
                     !Modifier.isStatic(m.modifiers) &&
                         m.parameterCount == 0 &&
                         m.returnType != Void.TYPE &&
@@ -156,16 +166,20 @@ internal class KakaoClassRegistry(
                             daoMethod.parameterTypes.contentEquals(arrayOf(Long::class.javaPrimitiveType)) &&
                                 daoMethod.returnType != Void.TYPE
                         }
-                }
+                } ?: error(
+                    "MasterDatabase roomDao accessor not found: expected 0-param method returning DAO on ${masterDb.name}",
+                )
 
             val daoClass = roomDao.returnType
             val entityLookup =
-                daoClass.methods.first { m ->
+                daoClass.methods.firstOrNull { m ->
                     !Modifier.isStatic(m.modifiers) &&
                         m.parameterTypes.contentEquals(arrayOf(Long::class.javaPrimitiveType)) &&
                         m.returnType != Void.TYPE &&
                         m.returnType != daoClass
-                }
+                } ?: error(
+                    "RoomDao entity lookup not found: expected (long)->entity on ${daoClass.name}",
+                )
 
             val photoConst = requireEnumConstant(messageType, "Photo")
             val multiPhotoConst = requireEnumConstant(messageType, "MultiPhoto")
@@ -242,24 +256,22 @@ internal class KakaoClassRegistry(
         }
 
         private fun hasSelfReturningAccessor(clazz: Class<*>): Boolean {
-            val hasCompanionAccessor =
-                clazz.declaredFields
-                    .asSequence()
-                    .filter { Modifier.isStatic(it.modifiers) }
-                    .any { field ->
-                        runCatching {
-                            field.isAccessible = true
-                            val companion = field.get(null)
-                            companion?.javaClass?.methods?.any { method ->
-                                method.parameterCount == 0 && method.returnType == clazz
-                            } == true
-                        }.getOrDefault(false)
+            // Check for static method returning self (direct singleton accessor)
+            val hasStaticSelfAccessor =
+                clazz.methods.any { method ->
+                    Modifier.isStatic(method.modifiers) &&
+                        method.parameterCount == 0 &&
+                        method.returnType == clazz
+                }
+            if (hasStaticSelfAccessor) return true
+            // Check for companion-style accessor: static field whose declared type
+            // has a 0-param method returning the enclosing class
+            return clazz.declaredFields.any { field ->
+                Modifier.isStatic(field.modifiers) &&
+                    field.type != clazz &&
+                    field.type.methods.any { method ->
+                        method.parameterCount == 0 && method.returnType == clazz
                     }
-            if (hasCompanionAccessor) return true
-            return clazz.methods.any { method ->
-                Modifier.isStatic(method.modifiers) &&
-                    method.parameterCount == 0 &&
-                    method.returnType == clazz
             }
         }
 
