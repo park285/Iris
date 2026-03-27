@@ -9,6 +9,7 @@ IRIS_APK_PATH="/data/local/tmp/Iris.apk"
 IRIS_APK_LOCAL_FILE="Iris.apk"
 IRIS_MD5_URL="${IRIS_APK_URL}.MD5"
 IRIS_CONFIG_PATH="${IRIS_CONFIG_PATH:-/data/local/tmp/config.json}"
+IRIS_ADB_DEVICE="${IRIS_ADB_DEVICE:-${ANDROID_SERIAL:-}}"
 IRIS_WEBHOOK_TRANSPORT="${IRIS_WEBHOOK_TRANSPORT:-}"
 IRIS_WEBHOOK_TOKEN="${IRIS_WEBHOOK_TOKEN:-}"
 IRIS_BOT_TOKEN="${IRIS_BOT_TOKEN:-}"
@@ -33,6 +34,12 @@ check_adb_installed() {
 
 select_adb_device() {
   if (( ${#ADB_CMD[@]} > 0 )); then
+    return 0
+  fi
+
+  if [[ -n "$IRIS_ADB_DEVICE" ]]; then
+    ADB_CMD=(adb -s "$IRIS_ADB_DEVICE")
+    echo "Using device from IRIS_ADB_DEVICE/ANDROID_SERIAL: $IRIS_ADB_DEVICE"
     return 0
   fi
 
@@ -71,13 +78,48 @@ select_adb_device() {
   esac
 }
 
+get_iris_http_port() {
+  "${ADB_CMD[@]}" shell "cat '$IRIS_CONFIG_PATH' 2>/dev/null" |
+    sed -n 's/.*"botHttpPort"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' |
+    head -n 1
+}
+
+get_iris_pid_by_port() {
+  local port
+  port="$(get_iris_http_port || true)"
+  if [[ -z "$port" ]]; then
+    return 0
+  fi
+
+  "${ADB_CMD[@]}" shell "su 0 sh -c 'ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null'" |
+    awk -v port=":${port}" '
+      $0 ~ port && $0 ~ /app_process/ {
+        for (i = 1; i <= NF; i++) {
+          if ($i ~ /app_process$/) {
+            split($i, parts, "/")
+            print parts[1]
+            exit
+          }
+        }
+      }
+    '
+}
+
 get_iris_pid() {
-  "${ADB_CMD[@]}" shell ps -f |
+  local pid
+  pid="$("${ADB_CMD[@]}" shell ps -f |
     grep "$IRIS_PROCESS_NAME" |
     grep "$IRIS_PROCESS_KEYWORD" |
     grep -v 'grep' |
     grep -v 'sh -c' |
-    awk '{print $2}'
+    awk '{print $2}' | head -n 1 || true)"
+
+  if [[ -n "$pid" ]]; then
+    printf '%s\n' "$pid"
+    return 0
+  fi
+
+  get_iris_pid_by_port || true
 }
 
 iris_status() {
