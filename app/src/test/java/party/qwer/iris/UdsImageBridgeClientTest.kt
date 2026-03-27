@@ -66,6 +66,101 @@ class UdsImageBridgeClientTest {
         assertFalse(result.success)
         assertTrue(result.error?.contains("connect failed") == true)
     }
+
+    @Test
+    fun `returns failure when response frame is malformed`() {
+        val fakeSocket =
+            FakeBridgeSocket(
+                input = ByteArrayInputStream(byteArrayOf(0, 0, 0, 0)),
+            )
+
+        val client = UdsImageBridgeClient(socketFactory = { fakeSocket })
+        val result =
+            client.sendImage(
+                roomId = 1L,
+                imagePaths = listOf("/tmp/test.png"),
+                threadId = null,
+                threadScope = null,
+            )
+
+        assertFalse(result.success)
+        assertTrue(result.error?.contains("bridge protocol failed") == true)
+    }
+
+    @Test
+    fun `parses bridge health response`() {
+        val responseBuffer = ByteArrayOutputStream()
+        ImageBridgeProtocol.writeFrame(
+            responseBuffer,
+            JSONObject().apply {
+                put("status", ImageBridgeProtocol.STATUS_OK)
+                put("running", true)
+                put("specReady", false)
+                put("restartCount", 2)
+                put("lastCrashMessage", "bind failed")
+                put(
+                    "discovery",
+                    JSONObject().apply {
+                        put("installAttempted", true)
+                        put(
+                            "hooks",
+                            org.json.JSONArray(
+                                listOf(
+                                    JSONObject().apply {
+                                        put("name", "bh.c#p")
+                                        put("installed", true)
+                                        put("invocationCount", 4)
+                                        put("lastSeenEpochMs", 99L)
+                                        put("lastSummary", "uris=2")
+                                    },
+                                ),
+                            ),
+                        )
+                    },
+                )
+                put(
+                    "checks",
+                    org.json.JSONArray(
+                        listOf(
+                            JSONObject().apply {
+                                put("name", "class bh.c")
+                                put("ok", true)
+                            },
+                            JSONObject().apply {
+                                put("name", "ChatMediaSender.p(...)")
+                                put("ok", false)
+                                put("detail", "method missing")
+                            },
+                        ),
+                    ),
+                )
+            },
+        )
+
+        val client =
+            UdsImageBridgeClient(
+                socketFactory = {
+                    FakeBridgeSocket(
+                        input = ByteArrayInputStream(responseBuffer.toByteArray()),
+                    )
+                },
+            )
+
+        val result = client.queryHealth()
+
+        assertTrue(result.reachable)
+        assertTrue(result.running)
+        assertFalse(result.specReady)
+        assertEquals(2, result.restartCount)
+        assertEquals("bind failed", result.lastCrashMessage)
+        assertEquals(2, result.checks.size)
+        assertEquals("ChatMediaSender.p(...)", result.checks[1].name)
+        assertFalse(result.checks[1].ok)
+        assertTrue(result.discoveryInstallAttempted)
+        assertEquals(1, result.discoveryHooks.size)
+        assertEquals("bh.c#p", result.discoveryHooks.first().name)
+        assertEquals("uris=2", result.discoveryHooks.first().lastSummary)
+    }
 }
 
 private class FakeBridgeSocket(
