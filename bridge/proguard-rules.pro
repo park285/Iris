@@ -16,6 +16,4 @@
 -keep class party.qwer.iris.ImageBridgeProtocol$* { *; }
 
 # ── Kotlin ─────────────────────────────────────────────────────────────────
--dontwarn kotlin.**
--dontwarn kotlinx.**
 -keep class kotlin.Metadata { *; }

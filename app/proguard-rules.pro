@@ -10,6 +10,9 @@
 }
 
 # ── kotlinx.serialization ─────────────────────────────────────────────────
+# 운영 규칙: @Serializable DTO는 party.qwer.iris.model 패키지에만 둘 것.
+# 이 범위 밖에 추가하면 R8이 serializer를 제거하여 release에서 크래시 발생.
+# ProguardSerializableGuardTest가 이를 검증함.
 -keepattributes *Annotation*, InnerClasses
 -dontnote kotlinx.serialization.**
 
@@ -63,8 +66,6 @@
 -dontwarn java.lang.management.RuntimeMXBean
 
 # ── Kotlin ─────────────────────────────────────────────────────────────────
--dontwarn kotlin.**
--dontwarn kotlinx.**
 -keep class kotlin.Metadata { *; }
 
 # ── Android hidden API reflection callers ──────────────────────────────────
