@@ -44,6 +44,9 @@ android {
 
 kotlin {
     jvmToolchain(21)
+    compilerOptions {
+        allWarningsAsErrors.set(true)
+    }
 }
 
 private fun registerAssembleOutputCopyTask(variantName: String) {

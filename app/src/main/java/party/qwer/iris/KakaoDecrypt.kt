@@ -333,7 +333,7 @@ class KakaoDecrypt {
                         SecretKeySpec(deriveKey(KEY_BYTES, salt, 2, 32), "AES")
                     }
                 }
-            val cipher = threadLocalCipher.get()
+            val cipher = threadLocalCipher.get()!!
 
             cipher.init(Cipher.DECRYPT_MODE, secretKeySpec, IV_SPEC)
 
