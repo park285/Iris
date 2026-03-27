@@ -37,6 +37,7 @@ class UdsImageBridgeClientTest {
                 imagePaths = listOf("/tmp/test.png"),
                 threadId = 2L,
                 threadScope = 2,
+                requestId = "req-1",
             )
 
         assertTrue(result.success)
@@ -44,6 +45,8 @@ class UdsImageBridgeClientTest {
         assertEquals(1, fakeSocket.connectCalls)
         assertEquals(30_000, fakeSocket.readTimeoutMs)
         assertTrue(fakeSocket.outputShutdown)
+        val request = ImageBridgeProtocol.readFrame(ByteArrayInputStream(fakeSocket.outputStream.toByteArray()))
+        assertEquals("req-1", request.getString("requestId"))
     }
 
     @Test

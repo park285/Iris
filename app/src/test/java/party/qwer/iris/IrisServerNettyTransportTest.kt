@@ -1,5 +1,7 @@
 package party.qwer.iris
 
+import party.qwer.iris.model.ImageBridgeDiscoveryHook
+import party.qwer.iris.model.ImageBridgeHealthResult
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -34,6 +36,61 @@ class IrisServerNettyTransportTest {
         } finally {
             restoreProperty(previous)
         }
+    }
+
+    @Test
+    fun `bridge ready ignores optional discovery hook failures`() {
+        val health =
+            ImageBridgeHealthResult(
+                reachable = true,
+                running = true,
+                specReady = true,
+                restartCount = 0,
+                discoveryInstallAttempted = true,
+                discoveryHooks =
+                    listOf(
+                        ImageBridgeDiscoveryHook(
+                            name = "MasterDatabase#roomDao",
+                            installed = false,
+                            installError = "abstract method, skipped",
+                            invocationCount = 0,
+                        ),
+                        ImageBridgeDiscoveryHook(
+                            name = "ChatMediaSender#sendSingle",
+                            installed = true,
+                            invocationCount = 1,
+                        ),
+                        ImageBridgeDiscoveryHook(
+                            name = "ChatMediaSender#sendMultiple",
+                            installed = true,
+                            invocationCount = 1,
+                        ),
+                    ),
+            )
+
+        assertTrue(IrisServer.isBridgeReadyForTest(health))
+    }
+
+    @Test
+    fun `bridge ready requires send discovery hooks`() {
+        val health =
+            ImageBridgeHealthResult(
+                reachable = true,
+                running = true,
+                specReady = true,
+                restartCount = 0,
+                discoveryInstallAttempted = true,
+                discoveryHooks =
+                    listOf(
+                        ImageBridgeDiscoveryHook(
+                            name = "ChatMediaSender#sendSingle",
+                            installed = true,
+                            invocationCount = 1,
+                        ),
+                    ),
+            )
+
+        assertFalse(IrisServer.isBridgeReadyForTest(health))
     }
 
     private fun restoreProperty(previous: String?) {

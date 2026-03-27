@@ -10,17 +10,18 @@ internal class UdsImageReplySender(
         uris: List<Uri>,
         threadId: Long?,
         threadScope: Int?,
+        requestId: String?,
     ) {
         val paths = uris.map(::requireFilePath)
         IrisLogger.info(
             "[UdsImageReplySender] sending ${paths.size} image(s) to bridge" +
-                " room=$roomId threadId=$threadId scope=$threadScope",
+                " room=$roomId threadId=$threadId scope=$threadScope requestId=$requestId",
         )
-        val result = client.sendImage(roomId, paths, threadId, threadScope)
+        val result = client.sendImage(roomId, paths, threadId, threadScope, requestId)
         if (!result.success) {
             error("image bridge send failed: ${result.error}")
         }
-        IrisLogger.info("[UdsImageReplySender] bridge send completed room=$roomId")
+        IrisLogger.info("[UdsImageReplySender] bridge send completed room=$roomId requestId=$requestId")
     }
 
     private fun requireFilePath(uri: Uri): String =

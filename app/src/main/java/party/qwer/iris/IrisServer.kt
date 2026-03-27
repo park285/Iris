@@ -26,10 +26,12 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import party.qwer.iris.model.CommonErrorResponse
 import party.qwer.iris.model.ConfigRequest
+import party.qwer.iris.model.ImageBridgeHealthResult
 import party.qwer.iris.model.QueryRequest
 import party.qwer.iris.model.QueryResponse
 import party.qwer.iris.model.ReplyAcceptedResponse
 import party.qwer.iris.model.ReplyRequest
+import party.qwer.iris.model.ReplyStatusSnapshot
 import party.qwer.iris.model.ReplyType
 import java.security.MessageDigest
 import java.util.UUID
@@ -44,11 +46,13 @@ internal fun enforceNettyNioTransport(): Boolean {
     return true
 }
 
-class IrisServer(
+internal class IrisServer(
     private val chatLogRepo: ChatLogRepository,
     private val configManager: ConfigManager,
     private val notificationReferer: String,
     private val messageSender: MessageSender,
+    private val bridgeHealthProvider: (() -> ImageBridgeHealthResult)? = null,
+    private val replyStatusProvider: ((String) -> ReplyStatusSnapshot?)? = null,
 ) {
     private val serverJson =
         Json {
@@ -148,6 +152,7 @@ class IrisServer(
             configureReplyRoute()
             configureReplyImageRoute()
             configureReplyMarkdownRoute()
+            configureReplyStatusRoute()
             configureQueryRoute()
         }
     }
@@ -158,7 +163,23 @@ class IrisServer(
         }
 
         get("/ready") {
-            call.respondText(READY_OK_JSON, ContentType.Application.Json)
+            val bridgeHealth = bridgeHealthProvider?.invoke()
+            if (bridgeHealth == null || isBridgeReady(bridgeHealth)) {
+                call.respondText(READY_OK_JSON, ContentType.Application.Json)
+            } else {
+                call.respond(
+                    HttpStatusCode.ServiceUnavailable,
+                    CommonErrorResponse(message = "bridge not ready"),
+                )
+            }
+        }
+
+        get("/diagnostics/bridge") {
+            if (!requireBotToken(call)) {
+                return@get
+            }
+            val bridgeHealth = bridgeHealthProvider?.invoke() ?: invalidRequest("bridge health unavailable")
+            call.respond(bridgeHealth)
         }
     }
 
@@ -223,6 +244,17 @@ class IrisServer(
         }
     }
 
+    private fun Route.configureReplyStatusRoute() {
+        get("/reply-status/{requestId}") {
+            if (!requireBotToken(call)) {
+                return@get
+            }
+            val requestId = call.parameters["requestId"] ?: invalidRequest("missing requestId")
+            val snapshot = replyStatusProvider?.invoke(requestId) ?: throw ApiRequestException("reply status not found", HttpStatusCode.NotFound)
+            call.respond(snapshot)
+        }
+    }
+
     private fun Route.configureReplyImageRoute() {
         post("/reply-image") {
             if (!requireBotToken(call)) {
@@ -256,6 +288,7 @@ class IrisServer(
     }
 
     private fun enqueueReply(replyRequest: ReplyRequest): ReplyAcceptedResponse {
+        val requestId = "reply-${UUID.randomUUID()}"
         val roomId = replyRequest.room.toLongOrNull() ?: invalidRequest("room must be a numeric string")
         val threadId =
             replyRequest.threadId?.let {
@@ -279,6 +312,7 @@ class IrisServer(
                 threadId,
                 threadScope,
                 messageSender,
+                requestId,
             )
         if (admission.status != ReplyAdmissionStatus.ACCEPTED) {
             requestRejected(
@@ -288,13 +322,14 @@ class IrisServer(
         }
 
         return ReplyAcceptedResponse(
-            requestId = "reply-${UUID.randomUUID()}",
+            requestId = requestId,
             room = replyRequest.room,
             type = replyRequest.type,
         )
     }
 
     private fun enqueueReplyMarkdown(replyRequest: ReplyRequest): ReplyAcceptedResponse {
+        val requestId = "reply-markdown-${UUID.randomUUID()}"
         validateReplyMarkdownType(replyRequest.type)
 
         val roomId = replyRequest.room.toLongOrNull() ?: invalidRequest("room must be a numeric string")
@@ -310,7 +345,7 @@ class IrisServer(
             invalidRequest(e.message ?: "invalid reply-markdown metadata")
         }
 
-        val admission = messageSender.sendReplyMarkdown(roomId, extractTextPayload(replyRequest))
+        val admission = messageSender.sendReplyMarkdown(roomId, extractTextPayload(replyRequest), requestId)
         if (admission.status != ReplyAdmissionStatus.ACCEPTED) {
             requestRejected(
                 admission.message ?: "reply-markdown request rejected",
@@ -319,13 +354,14 @@ class IrisServer(
         }
 
         return ReplyAcceptedResponse(
-            requestId = "reply-markdown-${UUID.randomUUID()}",
+            requestId = requestId,
             room = replyRequest.room,
             type = replyRequest.type,
         )
     }
 
     private fun enqueueReplyImage(replyRequest: ReplyRequest): ReplyAcceptedResponse {
+        val requestId = "reply-image-${UUID.randomUUID()}"
         validateReplyImageType(replyRequest.type)
 
         val roomId = replyRequest.room.toLongOrNull() ?: invalidRequest("room must be a numeric string")
@@ -348,6 +384,7 @@ class IrisServer(
                         extractTextPayload(replyRequest),
                         threadId,
                         threadScope,
+                        requestId,
                     )
                 ReplyType.IMAGE_MULTIPLE ->
                     messageSender.sendNativeMultiplePhotos(
@@ -355,6 +392,7 @@ class IrisServer(
                         extractImagePayloads(replyRequest),
                         threadId,
                         threadScope,
+                        requestId,
                     )
                 else -> invalidRequest("reply-image replies require type=image or image_multiple")
             }
@@ -366,7 +404,7 @@ class IrisServer(
         }
 
         return ReplyAcceptedResponse(
-            requestId = "reply-image-${UUID.randomUUID()}",
+            requestId = requestId,
             room = replyRequest.room,
             type = replyRequest.type,
         )
@@ -401,6 +439,22 @@ class IrisServer(
         private const val NETTY_WORKER_THREADS = 2
         private const val HEALTH_OK_JSON = """{"status":"ok"}"""
         private const val READY_OK_JSON = """{"status":"ready"}"""
+        private val REQUIRED_DISCOVERY_HOOKS = setOf("ChatMediaSender#sendSingle", "ChatMediaSender#sendMultiple")
+
+        internal fun isBridgeReadyForTest(health: ImageBridgeHealthResult): Boolean = isBridgeReady(health)
+
+        private fun isBridgeReady(health: ImageBridgeHealthResult): Boolean {
+            val hooksByName = health.discoveryHooks.associateBy { it.name }
+            val requiredHooksReady =
+                REQUIRED_DISCOVERY_HOOKS.all { hookName ->
+                    hooksByName[hookName]?.installed == true
+                }
+            return health.reachable &&
+                health.running &&
+                health.specReady &&
+                health.discoveryInstallAttempted &&
+                requiredHooksReady
+        }
     }
 
     private fun executeQueryRequest(queryRequest: QueryRequest): QueryResponse {

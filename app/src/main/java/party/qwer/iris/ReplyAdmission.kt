@@ -35,7 +35,8 @@ internal fun admitReply(
     threadId: Long?,
     threadScope: Int?,
     messageSender: MessageSender,
-): ReplyAdmissionResult = dispatchReply(replyRequest, roomId, notificationReferer, threadId, threadScope, messageSender)
+    requestId: String? = null,
+): ReplyAdmissionResult = dispatchReply(replyRequest, roomId, notificationReferer, threadId, threadScope, messageSender, requestId)
 
 private fun dispatchReply(
     replyRequest: ReplyRequest,
@@ -44,11 +45,12 @@ private fun dispatchReply(
     threadId: Long?,
     threadScope: Int?,
     messageSender: MessageSender,
+    requestId: String? = null,
 ): ReplyAdmissionResult =
     when (replyRequest.type) {
-        ReplyType.TEXT -> messageSender.sendMessage(notificationReferer, roomId, extractTextPayload(replyRequest), threadId, threadScope)
-        ReplyType.IMAGE -> messageSender.sendPhoto(roomId, extractSingleImagePayload(replyRequest), threadId, threadScope)
-        ReplyType.IMAGE_MULTIPLE -> messageSender.sendMultiplePhotos(roomId, extractImagePayloads(replyRequest), threadId, threadScope)
+        ReplyType.TEXT -> messageSender.sendMessage(notificationReferer, roomId, extractTextPayload(replyRequest), threadId, threadScope, requestId)
+        ReplyType.IMAGE -> messageSender.sendPhoto(roomId, extractSingleImagePayload(replyRequest), threadId, threadScope, requestId)
+        ReplyType.IMAGE_MULTIPLE -> messageSender.sendMultiplePhotos(roomId, extractImagePayloads(replyRequest), threadId, threadScope, requestId)
     }
 
 internal fun extractTextPayload(replyRequest: ReplyRequest): String =

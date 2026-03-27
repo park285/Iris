@@ -3,39 +3,15 @@ package party.qwer.iris
 import android.net.LocalSocket
 import android.net.LocalSocketAddress
 import org.json.JSONObject
+import party.qwer.iris.model.ImageBridgeDiscoveryHook
+import party.qwer.iris.model.ImageBridgeHealthCheck
+import party.qwer.iris.model.ImageBridgeHealthResult
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 
 internal data class ImageBridgeResult(
     val success: Boolean,
-    val error: String? = null,
-)
-
-internal data class ImageBridgeHealthCheck(
-    val name: String,
-    val ok: Boolean,
-    val detail: String? = null,
-)
-
-internal data class ImageBridgeDiscoveryHook(
-    val name: String,
-    val installed: Boolean,
-    val installError: String? = null,
-    val invocationCount: Int,
-    val lastSeenEpochMs: Long? = null,
-    val lastSummary: String? = null,
-)
-
-internal data class ImageBridgeHealthResult(
-    val reachable: Boolean,
-    val running: Boolean,
-    val specReady: Boolean,
-    val restartCount: Int,
-    val lastCrashMessage: String? = null,
-    val checks: List<ImageBridgeHealthCheck> = emptyList(),
-    val discoveryInstallAttempted: Boolean = false,
-    val discoveryHooks: List<ImageBridgeDiscoveryHook> = emptyList(),
     val error: String? = null,
 )
 
@@ -113,6 +89,7 @@ internal class UdsImageBridgeClient(
         imagePaths: List<String>,
         threadId: Long?,
         threadScope: Int?,
+        requestId: String? = null,
     ): ImageBridgeResult {
         try {
             return parseSendResponse(
@@ -122,6 +99,7 @@ internal class UdsImageBridgeClient(
                         imagePaths,
                         threadId,
                         threadScope,
+                        requestId,
                     ),
                 ),
             )

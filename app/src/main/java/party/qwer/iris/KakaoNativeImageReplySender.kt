@@ -25,6 +25,7 @@ internal interface NativeImageReplySender {
         uris: List<Uri>,
         threadId: Long?,
         threadScope: Int?,
+        requestId: String? = null,
     )
 }
 
@@ -36,6 +37,7 @@ internal class KakaoNativeImageReplySender(
         uris: List<Uri>,
         threadId: Long?,
         threadScope: Int?,
+        requestId: String?,
     ) {
         runtime.sendImages(roomId, uris, threadId, threadScope)
     }

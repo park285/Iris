@@ -7,6 +7,7 @@ interface MessageSender {
         msg: String,
         threadId: Long?,
         threadScope: Int?,
+        requestId: String? = null,
     ): ReplyAdmissionResult
 
     fun sendPhoto(
@@ -14,6 +15,7 @@ interface MessageSender {
         base64ImageDataString: String,
         threadId: Long? = null,
         threadScope: Int? = null,
+        requestId: String? = null,
     ): ReplyAdmissionResult
 
     fun sendMultiplePhotos(
@@ -21,6 +23,7 @@ interface MessageSender {
         base64ImageDataStrings: List<String>,
         threadId: Long? = null,
         threadScope: Int? = null,
+        requestId: String? = null,
     ): ReplyAdmissionResult
 
     fun sendNativePhoto(
@@ -28,6 +31,7 @@ interface MessageSender {
         base64ImageDataString: String,
         threadId: Long? = null,
         threadScope: Int? = null,
+        requestId: String? = null,
     ): ReplyAdmissionResult
 
     fun sendNativeMultiplePhotos(
@@ -35,15 +39,18 @@ interface MessageSender {
         base64ImageDataStrings: List<String>,
         threadId: Long? = null,
         threadScope: Int? = null,
+        requestId: String? = null,
     ): ReplyAdmissionResult
 
     fun sendTextShare(
         room: Long,
         msg: String,
+        requestId: String? = null,
     ): ReplyAdmissionResult
 
     fun sendReplyMarkdown(
         room: Long,
         msg: String,
+        requestId: String? = null,
     ): ReplyAdmissionResult
 }

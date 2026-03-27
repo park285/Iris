@@ -17,6 +17,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import party.qwer.iris.model.ReplyStatusSnapshot
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -25,6 +26,12 @@ internal data class ReplyQueueKey(
     val chatId: Long,
     val threadId: Long?,
 )
+
+internal enum class ReplySendLane {
+    TEXT,
+    SHARE_INTENT,
+    NATIVE_IMAGE,
+}
 
 // SendMsg : ye-seola/go-kdb
 
@@ -69,7 +76,13 @@ internal class ReplyService(
 
     private val workerRegistry = ConcurrentHashMap<ReplyQueueKey, ReplyWorkerState>()
     private val coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val sendMutex = Mutex()
+    private val laneMutexes =
+        mapOf(
+            ReplySendLane.TEXT to Mutex(),
+            ReplySendLane.SHARE_INTENT to Mutex(),
+            ReplySendLane.NATIVE_IMAGE to Mutex(),
+        )
+    private val statusStore = ReplyStatusStore()
     private var started = false
     private var shutdownComplete = false
     private val imageDir = File(IRIS_IMAGE_DIR_PATH)
@@ -223,12 +236,16 @@ internal class ReplyService(
         msg: String,
         threadId: Long?,
         threadScope: Int?,
+        requestId: String?,
     ): ReplyAdmissionResult {
         IrisLogger.debugLazy { "[ReplyService] sendMessage called: chatId=$chatId, msg='${msg.take(LOG_MESSAGE_PREVIEW_LENGTH)}...'" }
         return enqueueRequest(
             chatId,
             threadId,
             object : SendMessageRequest {
+                override val lane = ReplySendLane.TEXT
+                override val requestId = requestId
+
                 override suspend fun send() {
                     sendMessageInternal(referer, chatId, msg, threadId, threadScope)
                 }
@@ -241,18 +258,22 @@ internal class ReplyService(
         base64ImageDataString: String,
         threadId: Long?,
         threadScope: Int?,
-    ): ReplyAdmissionResult = sendMultiplePhotos(room, listOf(base64ImageDataString), threadId, threadScope)
+        requestId: String?,
+    ): ReplyAdmissionResult = sendMultiplePhotos(room, listOf(base64ImageDataString), threadId, threadScope, requestId)
 
     override fun sendMultiplePhotos(
         room: Long,
         base64ImageDataStrings: List<String>,
         threadId: Long?,
         threadScope: Int?,
+        requestId: String?,
     ): ReplyAdmissionResult =
         enqueueImages(
             room = room,
             base64ImageDataStrings = base64ImageDataStrings,
             threadId = threadId,
+            lane = ReplySendLane.SHARE_INTENT,
+            requestId = requestId,
             dispatch = { preparedImages ->
                 sendPreparedImages(preparedImages, threadId, threadScope)
             },
@@ -263,20 +284,24 @@ internal class ReplyService(
         base64ImageDataString: String,
         threadId: Long?,
         threadScope: Int?,
-    ): ReplyAdmissionResult = sendNativeMultiplePhotos(room, listOf(base64ImageDataString), threadId, threadScope)
+        requestId: String?,
+    ): ReplyAdmissionResult = sendNativeMultiplePhotos(room, listOf(base64ImageDataString), threadId, threadScope, requestId)
 
     override fun sendNativeMultiplePhotos(
         room: Long,
         base64ImageDataStrings: List<String>,
         threadId: Long?,
         threadScope: Int?,
+        requestId: String?,
     ): ReplyAdmissionResult =
         enqueueImages(
             room = room,
             base64ImageDataStrings = base64ImageDataStrings,
             threadId = threadId,
+            lane = ReplySendLane.NATIVE_IMAGE,
+            requestId = requestId,
             dispatch = { preparedImages ->
-                sendPreparedImagesNative(preparedImages, threadId, threadScope)
+                sendPreparedImagesNative(preparedImages, threadId, threadScope, requestId)
             },
         )
 
@@ -284,14 +309,17 @@ internal class ReplyService(
         room: Long,
         base64ImageDataStrings: List<String>,
         threadId: Long?,
+        lane: ReplySendLane,
+        requestId: String?,
         dispatch: suspend (PreparedImages) -> Unit,
     ): ReplyAdmissionResult {
-        val decodedImages =
+        val validatedPayloads =
             try {
                 require(base64ImageDataStrings.isNotEmpty()) { "no image data provided" }
                 base64ImageDataStrings.map { base64 ->
                     require(base64.length <= MAX_BASE64_IMAGE_PAYLOAD_LENGTH) { "payload exceeds size limit" }
-                    decodeBase64Image(base64)
+                    require(isDecodableBase64Payload(base64)) { "payload is not decodable base64" }
+                    base64
                 }
             } catch (_: IllegalArgumentException) {
                 return ReplyAdmissionResult(
@@ -304,15 +332,18 @@ internal class ReplyService(
             room,
             threadId,
             object : SendMessageRequest {
+                override val lane = lane
+                override val requestId = requestId
                 private lateinit var preparedImages: PreparedImages
 
                 override suspend fun prepare() {
-                    IrisLogger.info("[ReplyService] preparing image reply room=$room threadId=$threadId imageCount=${decodedImages.size}")
+                    IrisLogger.info("[ReplyService] preparing image reply room=$room threadId=$threadId imageCount=${validatedPayloads.size}")
                     ensureImageDir(imageDir)
-                    val uris = ArrayList<Uri>(decodedImages.size)
-                    val createdFiles = ArrayList<File>(decodedImages.size)
+                    val uris = ArrayList<Uri>(validatedPayloads.size)
+                    val createdFiles = ArrayList<File>(validatedPayloads.size)
                     try {
-                        decodedImages.forEach { imageBytes ->
+                        validatedPayloads.forEach { base64 ->
+                            val imageBytes = decodeBase64Image(base64)
                             val imageFile = saveImage(imageBytes, imageDir)
                             createdFiles.add(imageFile)
                             val imageUri = Uri.fromFile(imageFile)
@@ -344,12 +375,17 @@ internal class ReplyService(
     internal fun enqueueAction(
         chatId: Long,
         threadId: Long?,
+        lane: ReplySendLane = ReplySendLane.TEXT,
+        requestId: String? = null,
         action: suspend () -> Unit,
     ): ReplyAdmissionResult =
         enqueueRequest(
             chatId,
             threadId,
             object : SendMessageRequest {
+                override val lane = lane
+                override val requestId = requestId
+
                 override suspend fun send() = action()
             },
         )
@@ -357,11 +393,15 @@ internal class ReplyService(
     override fun sendTextShare(
         room: Long,
         msg: String,
+        requestId: String?,
     ): ReplyAdmissionResult =
         enqueueRequest(
             room,
             null,
             object : SendMessageRequest {
+                override val lane = ReplySendLane.TEXT
+                override val requestId = requestId
+
                 override suspend fun send() {
                     sendTextShareInternal(room, msg)
                 }
@@ -371,11 +411,15 @@ internal class ReplyService(
     override fun sendReplyMarkdown(
         room: Long,
         msg: String,
+        requestId: String?,
     ): ReplyAdmissionResult =
         enqueueRequest(
             room,
             null,
             object : SendMessageRequest {
+                override val lane = ReplySendLane.TEXT
+                override val requestId = requestId
+
                 override suspend fun send() {
                     sendReplyMarkdownInternal(room, msg)
                 }
@@ -400,12 +444,17 @@ internal class ReplyService(
                         }
 
                         try {
+                            request.requestId?.let { statusStore.update(it, "preparing") }
                             request.prepare()
-                            sendMutex.withLock {
+                            request.requestId?.let { statusStore.update(it, "prepared") }
+                            mutexFor(request.lane).withLock {
+                                request.requestId?.let { statusStore.update(it, "sending") }
                                 request.send()
                             }
+                            request.requestId?.let { statusStore.update(it, "handoff_completed") }
                             delay(config.messageSendRate)
                         } catch (e: Exception) {
+                            request.requestId?.let { statusStore.update(it, "failed", e.message) }
                             IrisLogger.error("[ReplyService] worker($key) send error: ${e.message}", e)
                         }
                     }
@@ -454,6 +503,7 @@ internal class ReplyService(
         return when {
             sendResult.isSuccess -> {
                 IrisLogger.debug("[ReplyService] Message queued to worker($key)")
+                request.requestId?.let { statusStore.update(it, "queued") }
                 ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
             }
             sendResult.isClosed -> {
@@ -503,14 +553,16 @@ internal class ReplyService(
         preparedImages: PreparedImages,
         threadId: Long?,
         threadScope: Int?,
+        requestId: String?,
     ) {
         try {
-            IrisLogger.info("[ReplyService] sendPreparedImagesNative room=${preparedImages.room} threadId=$threadId scope=$threadScope uriCount=${preparedImages.uris.size}")
+            IrisLogger.info("[ReplyService] sendPreparedImagesNative room=${preparedImages.room} threadId=$threadId scope=$threadScope uriCount=${preparedImages.uris.size} requestId=$requestId")
             nativeImageReplySender.send(
                 roomId = preparedImages.room,
                 uris = preparedImages.uris,
                 threadId = threadId,
                 threadScope = threadScope,
+                requestId = requestId,
             )
         } catch (e: Exception) {
             IrisLogger.error("Error sending native reply-image: $e")
@@ -557,10 +609,19 @@ internal class ReplyService(
     )
 
     private interface SendMessageRequest {
+        val lane: ReplySendLane
+        val requestId: String?
+
         suspend fun prepare() {}
 
         suspend fun send()
     }
+
+    private fun mutexFor(lane: ReplySendLane): Mutex = laneMutexes.getValue(lane)
+
+    private fun isDecodableBase64Payload(value: String): Boolean = runCatching { decodeBase64Image(value) }.isSuccess
+
+    internal fun replyStatusOrNull(requestId: String): ReplyStatusSnapshot? = statusStore.get(requestId)
 
     // Android Q+ deprecated ACTION_MEDIA_SCANNER_SCAN_FILE
     // Context 없는 환경이므로 MediaScannerConnection 사용 불가

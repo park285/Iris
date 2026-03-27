@@ -41,6 +41,7 @@ object ImageBridgeProtocol {
         imagePaths: List<String>,
         threadId: Long?,
         threadScope: Int?,
+        requestId: String? = null,
     ): JSONObject =
         JSONObject().apply {
             put("action", ACTION_SEND_IMAGE)
@@ -48,6 +49,7 @@ object ImageBridgeProtocol {
             put("imagePaths", JSONArray(imagePaths))
             if (threadId != null) put("threadId", threadId)
             if (threadScope != null) put("threadScope", threadScope)
+            if (!requestId.isNullOrBlank()) put("requestId", requestId)
         }
 
     fun buildHealthRequest(): JSONObject =

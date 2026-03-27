@@ -19,8 +19,9 @@ class Main {
                 val notificationReferer = readNotificationReferer()
                 val shutdownLatch = CountDownLatch(1)
                 val configManager = ConfigManager()
+                val bridgeClient = UdsImageBridgeClient()
 
-                val replyService = ReplyService(configManager, UdsImageReplySender())
+                val replyService = ReplyService(configManager, UdsImageReplySender(bridgeClient))
                 configManager.onMessageSendRateChanged = { replyService.restart() }
                 replyService.start()
                 IrisLogger.info("Message sender thread started")
@@ -52,6 +53,8 @@ class Main {
                             configManager,
                             notificationReferer,
                             replyService,
+                            bridgeHealthProvider = bridgeClient::queryHealth,
+                            replyStatusProvider = replyService::replyStatusOrNull,
                         ).also {
                             it.startServer()
                             IrisLogger.info("Iris Server started")

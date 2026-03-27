@@ -171,7 +171,7 @@ class ReplyServiceTest {
     }
 
     @Test
-    fun `send mutex prevents concurrent send calls`() {
+    fun `same lane mutex prevents concurrent send calls`() {
         val service = ReplyService(testConfig)
         service.start()
         val concurrent = AtomicInteger(0)
@@ -180,7 +180,7 @@ class ReplyServiceTest {
 
         for (i in 0L until 2L) {
             repeat(2) {
-                service.enqueueAction(chatId = i, threadId = null) {
+                service.enqueueAction(chatId = i, threadId = null, lane = ReplySendLane.TEXT) {
                     val cur = concurrent.incrementAndGet()
                     maxConcurrent.updateAndGet { prev -> maxOf(prev, cur) }
                     delay(50)
@@ -192,6 +192,34 @@ class ReplyServiceTest {
 
         assertTrue(latch.await(5, TimeUnit.SECONDS), "all sends should complete")
         assertEquals(1, maxConcurrent.get(), "send calls must not overlap (mutex)")
+        service.shutdown()
+    }
+
+    @Test
+    fun `different lanes can execute concurrently`() {
+        val service = ReplyService(testConfig)
+        service.start()
+        val concurrent = AtomicInteger(0)
+        val maxConcurrent = AtomicInteger(0)
+        val latch = CountDownLatch(2)
+
+        service.enqueueAction(chatId = 1L, threadId = null, lane = ReplySendLane.TEXT) {
+            val cur = concurrent.incrementAndGet()
+            maxConcurrent.updateAndGet { prev -> maxOf(prev, cur) }
+            delay(50)
+            concurrent.decrementAndGet()
+            latch.countDown()
+        }
+        service.enqueueAction(chatId = 2L, threadId = null, lane = ReplySendLane.NATIVE_IMAGE) {
+            val cur = concurrent.incrementAndGet()
+            maxConcurrent.updateAndGet { prev -> maxOf(prev, cur) }
+            delay(50)
+            concurrent.decrementAndGet()
+            latch.countDown()
+        }
+
+        assertTrue(latch.await(5, TimeUnit.SECONDS), "different lanes should complete")
+        assertTrue(maxConcurrent.get() >= 2, "different lanes should be able to overlap")
         service.shutdown()
     }
 
@@ -302,6 +330,47 @@ class ReplyServiceTest {
             )
 
         assertEquals(ReplyAdmissionStatus.INVALID_PAYLOAD, result.status)
+        service.shutdown()
+    }
+
+    @Test
+    fun `sendNativePhoto rejects payload with invalid trailing base64 data`() {
+        val service = ReplyService(testConfig)
+        service.start()
+        val payload = "A".repeat(256) + "A==="
+
+        val result =
+            service.sendNativePhoto(
+                room = 18478615493603057L,
+                base64ImageDataString = payload,
+                threadId = 3804154209723703299L,
+                threadScope = 2,
+            )
+
+        assertEquals(ReplyAdmissionStatus.INVALID_PAYLOAD, result.status)
+        service.shutdown()
+    }
+
+    @Test
+    fun `request id status advances through queue and send`() {
+        val service = ReplyService(testConfig)
+        service.start()
+        val requestId = "req-123"
+        val latch = CountDownLatch(1)
+
+        val result =
+            service.enqueueAction(
+                chatId = 1L,
+                threadId = null,
+                lane = ReplySendLane.TEXT,
+                requestId = requestId,
+            ) {
+                latch.countDown()
+            }
+
+        assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
+        assertTrue(latch.await(5, TimeUnit.SECONDS))
+        assertEquals("handoff_completed", service.replyStatusOrNull(requestId)?.state)
         service.shutdown()
     }
 }

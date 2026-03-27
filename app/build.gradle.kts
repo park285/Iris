@@ -112,6 +112,7 @@ dependencies {
     implementation(libs.ktor.serialization.kotlinx.json)
     implementation(libs.okhttp)
     implementation(libs.slf4j.nop)
+    implementation(libs.caffeine)
 
     testImplementation(kotlin("test-junit"))
     testImplementation(libs.org.json)

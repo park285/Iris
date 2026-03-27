@@ -1,6 +1,8 @@
 package party.qwer.iris
 
 import io.ktor.http.HttpStatusCode
+import kotlinx.serialization.json.JsonPrimitive
+import party.qwer.iris.model.ReplyRequest
 import party.qwer.iris.model.ReplyType
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -103,11 +105,36 @@ class ReplyAdmissionTest {
 
         assertEquals("reply-image threadScope must be 2 or 3", error.message)
     }
+
+    @Test
+    fun `admit reply forwards request id to message sender`() {
+        val sender = RecordingMessageSender()
+
+        val result =
+            admitReply(
+                replyRequest =
+                    ReplyRequest(
+                        room = "1",
+                        type = ReplyType.TEXT,
+                        data = JsonPrimitive("hello"),
+                    ),
+                roomId = 1L,
+                notificationReferer = "Iris",
+                threadId = null,
+                threadScope = null,
+                messageSender = sender,
+                requestId = "reply-123",
+            )
+
+        assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
+        assertEquals("reply-123", sender.lastRequestId)
+    }
 }
 
 private class RecordingMessageSender : MessageSender {
     var photoCalls = 0
     var multiPhotoCalls = 0
+    var lastRequestId: String? = null
 
     override fun sendMessage(
         referer: String,
@@ -115,15 +142,21 @@ private class RecordingMessageSender : MessageSender {
         msg: String,
         threadId: Long?,
         threadScope: Int?,
-    ): ReplyAdmissionResult = ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
+        requestId: String?,
+    ): ReplyAdmissionResult {
+        lastRequestId = requestId
+        return ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
+    }
 
     override fun sendPhoto(
         room: Long,
         base64ImageDataString: String,
         threadId: Long?,
         threadScope: Int?,
+        requestId: String?,
     ): ReplyAdmissionResult {
         photoCalls += 1
+        lastRequestId = requestId
         return ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
     }
 
@@ -132,8 +165,10 @@ private class RecordingMessageSender : MessageSender {
         base64ImageDataStrings: List<String>,
         threadId: Long?,
         threadScope: Int?,
+        requestId: String?,
     ): ReplyAdmissionResult {
         multiPhotoCalls += 1
+        lastRequestId = requestId
         return ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
     }
 
@@ -142,22 +177,38 @@ private class RecordingMessageSender : MessageSender {
         base64ImageDataString: String,
         threadId: Long?,
         threadScope: Int?,
-    ): ReplyAdmissionResult = ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
+        requestId: String?,
+    ): ReplyAdmissionResult {
+        lastRequestId = requestId
+        return ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
+    }
 
     override fun sendNativeMultiplePhotos(
         room: Long,
         base64ImageDataStrings: List<String>,
         threadId: Long?,
         threadScope: Int?,
-    ): ReplyAdmissionResult = ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
+        requestId: String?,
+    ): ReplyAdmissionResult {
+        lastRequestId = requestId
+        return ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
+    }
 
     override fun sendTextShare(
         room: Long,
         msg: String,
-    ): ReplyAdmissionResult = ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
+        requestId: String?,
+    ): ReplyAdmissionResult {
+        lastRequestId = requestId
+        return ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
+    }
 
     override fun sendReplyMarkdown(
         room: Long,
         msg: String,
-    ): ReplyAdmissionResult = ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
+        requestId: String?,
+    ): ReplyAdmissionResult {
+        lastRequestId = requestId
+        return ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
+    }
 }
