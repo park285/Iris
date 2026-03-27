@@ -1,21 +1,76 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# ── Iris App R8 Rules ──────────────────────────────────────────────────────
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# 디버그 스택트레이스 보존
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# ── Entry point (app_process) ─────────────────────────────────────────────
+-keep class party.qwer.iris.Main {
+    public static void main(java.lang.String[]);
+}
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# ── kotlinx.serialization ─────────────────────────────────────────────────
+-keepattributes *Annotation*, InnerClasses
+-dontnote kotlinx.serialization.**
+
+-keep,includedescriptorclasses class party.qwer.iris.model.**$$serializer { *; }
+-keepclassmembers class party.qwer.iris.model.** {
+    *** Companion;
+    *** INSTANCE;
+    kotlinx.serialization.KSerializer serializer(...);
+}
+-keepclassmembers enum party.qwer.iris.model.** {
+    **[] values();
+    ** valueOf(java.lang.String);
+}
+
+# @SerialName 어노테이션이 제거되면 JSON 역직렬화 실패
+-keep @kotlinx.serialization.Serializable class party.qwer.iris.model.** {
+    *;
+}
+
+# 커스텀 KSerializer
+-keep class party.qwer.iris.util.IntAsStringSerializer { *; }
+
+# ── Ktor (ServiceLoader 기반 엔진 검색) ───────────────────────────────────
+-keep class io.ktor.server.netty.EngineMain { *; }
+-keep class io.ktor.server.netty.NettyApplicationEngine { *; }
+-keepnames class io.ktor.server.engine.** { *; }
+-keepnames class io.ktor.server.application.** { *; }
+
+# Ktor content negotiation + serialization 플러그인
+-keep class io.ktor.serialization.kotlinx.json.** { *; }
+-keep class io.ktor.server.plugins.contentnegotiation.** { *; }
+
+# ── Netty ──────────────────────────────────────────────────────────────────
+-dontwarn io.netty.**
+-keep class io.netty.channel.** { *; }
+-keep class io.netty.handler.** { *; }
+-keep class io.netty.buffer.** { *; }
+-keep class io.netty.util.** { *; }
+
+# ── OkHttp ─────────────────────────────────────────────────────────────────
+-dontwarn okhttp3.internal.platform.**
+-dontwarn org.bouncycastle.**
+-dontwarn org.conscrypt.**
+-dontwarn org.openjsse.**
+
+# ── SLF4J (NOP 바인딩) ─────────────────────────────────────────────────────
+-dontwarn org.slf4j.**
+
+# ── JVM management API (Android에 없음, Ktor 디버그 감지용) ─────────────────
+-dontwarn java.lang.management.ManagementFactory
+-dontwarn java.lang.management.RuntimeMXBean
+
+# ── Kotlin ─────────────────────────────────────────────────────────────────
+-dontwarn kotlin.**
+-dontwarn kotlinx.**
+-keep class kotlin.Metadata { *; }
+
+# ── Android hidden API reflection callers ──────────────────────────────────
+# 이 클래스들은 시스템 클래스를 문자열로 참조하므로 메서드 시그니처 보존 필요 없음
+# R8이 call graph를 추적하므로 내부 호출은 자동 유지됨
+
+# ── ImageBridge protocol (공유 모듈) ───────────────────────────────────────
+-keep class party.qwer.iris.ImageBridgeProtocol { *; }
+-keep class party.qwer.iris.ImageBridgeProtocol$* { *; }
