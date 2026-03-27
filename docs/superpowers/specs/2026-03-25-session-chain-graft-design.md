@@ -3,6 +3,7 @@
 > 작성일: 2026-03-25
 > 범위: image thread graft를 session chain 기반으로 재설계 + frida/ 계층 TS/Go 전환 통합
 > 선행 문서: `2026-03-24-frida-ts-go-graft-design.md` (TS/Go 전환), `doc.md` (session chain 원안)
+> 후속 실측: `2026-03-25-session-chain-graft-live-validation.md`
 
 ---
 
