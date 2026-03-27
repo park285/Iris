@@ -5,7 +5,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class SseEventBusTest {
-
     @Test
     fun `stores events in ring buffer`() {
         val bus = SseEventBus(bufferSize = 3)

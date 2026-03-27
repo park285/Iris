@@ -5,7 +5,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class ChatRoomIntrospectorTest {
-
     data class FakeRoom(
         val id: Long = 42L,
         val name: String = "TestRoom",
@@ -25,7 +24,9 @@ class ChatRoomIntrospectorTest {
 
     @Test
     fun `respects max depth`() {
-        data class Nested(val inner: FakeRoom = FakeRoom())
+        data class Nested(
+            val inner: FakeRoom = FakeRoom(),
+        )
         val result = ChatRoomIntrospector.scan(Nested(), maxDepth = 0)
         val innerField = result.fields.first { it.name == "inner" }
         assertTrue(innerField.nested.isEmpty())
@@ -33,7 +34,9 @@ class ChatRoomIntrospectorTest {
 
     @Test
     fun `scans nested fields at depth 1`() {
-        data class Nested(val inner: FakeRoom = FakeRoom())
+        data class Nested(
+            val inner: FakeRoom = FakeRoom(),
+        )
         val result = ChatRoomIntrospector.scan(Nested(), maxDepth = 1)
         val innerField = result.fields.first { it.name == "inner" }
         assertTrue(innerField.nested.isNotEmpty())

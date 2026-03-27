@@ -18,12 +18,12 @@ import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondBytesWriter
 import io.ktor.server.response.respondText
-import io.ktor.utils.io.writeStringUtf8
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
+import io.ktor.utils.io.writeStringUtf8
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import party.qwer.iris.model.CommonErrorResponse
@@ -190,10 +190,12 @@ internal class IrisServer(
 
         get("/diagnostics/chatroom-fields/{chatId}") {
             if (!requireBotToken(call)) return@get
-            val chatId = call.parameters["chatId"]?.toLongOrNull()
-                ?: invalidRequest("chatId must be a number")
-            val result = chatRoomIntrospectProvider?.invoke(chatId)
-                ?: invalidRequest("bridge introspection unavailable")
+            val chatId =
+                call.parameters["chatId"]?.toLongOrNull()
+                    ?: invalidRequest("chatId must be a number")
+            val result =
+                chatRoomIntrospectProvider?.invoke(chatId)
+                    ?: invalidRequest("bridge introspection unavailable")
             call.respondText(result, ContentType.Application.Json)
         }
     }
@@ -436,22 +438,25 @@ internal class IrisServer(
 
         get("/rooms/{chatId}/members") {
             if (!requireBotToken(call)) return@get
-            val chatId = call.parameters["chatId"]?.toLongOrNull()
-                ?: invalidRequest("chatId must be a number")
+            val chatId =
+                call.parameters["chatId"]?.toLongOrNull()
+                    ?: invalidRequest("chatId must be a number")
             call.respond(repo.listMembers(chatId))
         }
 
         get("/rooms/{chatId}/info") {
             if (!requireBotToken(call)) return@get
-            val chatId = call.parameters["chatId"]?.toLongOrNull()
-                ?: invalidRequest("chatId must be a number")
+            val chatId =
+                call.parameters["chatId"]?.toLongOrNull()
+                    ?: invalidRequest("chatId must be a number")
             call.respond(repo.roomInfo(chatId))
         }
 
         get("/rooms/{chatId}/stats") {
             if (!requireBotToken(call)) return@get
-            val chatId = call.parameters["chatId"]?.toLongOrNull()
-                ?: invalidRequest("chatId must be a number")
+            val chatId =
+                call.parameters["chatId"]?.toLongOrNull()
+                    ?: invalidRequest("chatId must be a number")
             val period = call.request.queryParameters["period"]
             val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 20
             call.respond(repo.roomStats(chatId, period, limit))
@@ -459,10 +464,12 @@ internal class IrisServer(
 
         get("/rooms/{chatId}/members/{userId}/activity") {
             if (!requireBotToken(call)) return@get
-            val chatId = call.parameters["chatId"]?.toLongOrNull()
-                ?: invalidRequest("chatId must be a number")
-            val userId = call.parameters["userId"]?.toLongOrNull()
-                ?: invalidRequest("userId must be a number")
+            val chatId =
+                call.parameters["chatId"]?.toLongOrNull()
+                    ?: invalidRequest("chatId must be a number")
+            val userId =
+                call.parameters["userId"]?.toLongOrNull()
+                    ?: invalidRequest("userId must be a number")
             val period = call.request.queryParameters["period"]
             call.respond(repo.memberActivity(chatId, userId, period))
         }

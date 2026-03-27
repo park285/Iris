@@ -7,8 +7,10 @@ import party.qwer.iris.model.RoleChangeEvent
 import party.qwer.iris.model.roleCodeToName
 
 class RoomSnapshotManager {
-
-    fun diff(prev: RoomSnapshotData, curr: RoomSnapshotData): List<Any> {
+    fun diff(
+        prev: RoomSnapshotData,
+        curr: RoomSnapshotData,
+    ): List<Any> {
         val events = mutableListOf<Any>()
         val now = System.currentTimeMillis() / 1000
 
@@ -17,9 +19,13 @@ class RoomSnapshotManager {
         for (uid in joined) {
             events.add(
                 MemberEvent(
-                    event = "join", chatId = curr.chatId, linkId = curr.linkId,
-                    userId = uid, nickname = curr.nicknames[uid],
-                    estimated = false, timestamp = now,
+                    event = "join",
+                    chatId = curr.chatId,
+                    linkId = curr.linkId,
+                    userId = uid,
+                    nickname = curr.nicknames[uid],
+                    estimated = false,
+                    timestamp = now,
                 ),
             )
         }
@@ -31,9 +37,12 @@ class RoomSnapshotManager {
             events.add(
                 MemberEvent(
                     event = if (isKicked) "kick" else "leave",
-                    chatId = curr.chatId, linkId = curr.linkId,
-                    userId = uid, nickname = prev.nicknames[uid],
-                    estimated = !isKicked, timestamp = now,
+                    chatId = curr.chatId,
+                    linkId = curr.linkId,
+                    userId = uid,
+                    nickname = prev.nicknames[uid],
+                    estimated = !isKicked,
+                    timestamp = now,
                 ),
             )
         }
@@ -46,8 +55,11 @@ class RoomSnapshotManager {
             if (oldNick != null && newNick != null && oldNick != newNick) {
                 events.add(
                     NicknameChangeEvent(
-                        chatId = curr.chatId, linkId = curr.linkId,
-                        userId = uid, oldNickname = oldNick, newNickname = newNick,
+                        chatId = curr.chatId,
+                        linkId = curr.linkId,
+                        userId = uid,
+                        oldNickname = oldNick,
+                        newNickname = newNick,
                         timestamp = now,
                     ),
                 )
@@ -59,8 +71,11 @@ class RoomSnapshotManager {
             if (oldRole != null && newRole != null && oldRole != newRole) {
                 events.add(
                     RoleChangeEvent(
-                        chatId = curr.chatId, linkId = curr.linkId,
-                        userId = uid, oldRole = roleCodeToName(oldRole), newRole = roleCodeToName(newRole),
+                        chatId = curr.chatId,
+                        linkId = curr.linkId,
+                        userId = uid,
+                        oldRole = roleCodeToName(oldRole),
+                        newRole = roleCodeToName(newRole),
                         timestamp = now,
                     ),
                 )
@@ -72,8 +87,10 @@ class RoomSnapshotManager {
             if (oldImg != null && newImg != null && oldImg != newImg) {
                 events.add(
                     ProfileChangeEvent(
-                        chatId = curr.chatId, linkId = curr.linkId,
-                        userId = uid, timestamp = now,
+                        chatId = curr.chatId,
+                        linkId = curr.linkId,
+                        userId = uid,
+                        timestamp = now,
                     ),
                 )
             }

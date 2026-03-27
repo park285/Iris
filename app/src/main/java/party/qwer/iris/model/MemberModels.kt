@@ -105,9 +105,10 @@ data class MemberActivityResponse(
     val messageTypes: Map<String, Int>,
 )
 
-fun roleCodeToName(code: Int): String = when (code) {
-    1 -> "owner"
-    4 -> "admin"
-    8 -> "bot"
-    else -> "member"
-}
+fun roleCodeToName(code: Int): String =
+    when (code) {
+        1 -> "owner"
+        4 -> "admin"
+        8 -> "bot"
+        else -> "member"
+    }

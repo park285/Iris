@@ -3,7 +3,6 @@ package party.qwer.iris.bridge
 import java.lang.reflect.Modifier
 
 object ChatRoomIntrospector {
-
     data class ScanResult(
         val className: String,
         val scannedAt: Long,
@@ -19,16 +18,22 @@ object ChatRoomIntrospector {
         val nested: List<FieldInfo> = emptyList(),
     )
 
-    fun scan(obj: Any, maxDepth: Int = 1): ScanResult {
-        return ScanResult(
+    fun scan(
+        obj: Any,
+        maxDepth: Int = 1,
+    ): ScanResult =
+        ScanResult(
             className = obj.javaClass.canonicalName ?: obj.javaClass.name,
             scannedAt = System.currentTimeMillis() / 1000,
             fields = scanFields(obj, maxDepth, currentDepth = 0),
         )
-    }
 
-    private fun scanFields(obj: Any, maxDepth: Int, currentDepth: Int): List<FieldInfo> {
-        return obj.javaClass.declaredFields
+    private fun scanFields(
+        obj: Any,
+        maxDepth: Int,
+        currentDepth: Int,
+    ): List<FieldInfo> =
+        obj.javaClass.declaredFields
             .filter { !Modifier.isStatic(it.modifiers) }
             .mapNotNull { field ->
                 field.isAccessible = true
@@ -42,8 +47,10 @@ object ChatRoomIntrospector {
                         value is Collection<*> -> {
                             val elemType = value.firstOrNull()?.javaClass?.name
                             FieldInfo(
-                                name = field.name, type = typeName,
-                                size = value.size, elementType = elemType,
+                                name = field.name,
+                                type = typeName,
+                                size = value.size,
+                                elementType = elemType,
                             )
                         }
                         value is Map<*, *> -> {
@@ -51,7 +58,8 @@ object ChatRoomIntrospector {
                         }
                         value != null && currentDepth < maxDepth -> {
                             FieldInfo(
-                                name = field.name, type = typeName,
+                                name = field.name,
+                                type = typeName,
                                 nested = scanFields(value, maxDepth, currentDepth + 1),
                             )
                         }
@@ -63,5 +71,4 @@ object ChatRoomIntrospector {
                     FieldInfo(name = field.name, type = field.type.name, value = "<inaccessible>")
                 }
             }
-    }
 }

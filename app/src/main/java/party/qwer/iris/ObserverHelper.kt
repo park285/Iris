@@ -23,7 +23,11 @@ class ObserverHelper(
     private val roomMetadataCache = lruMap<Long, KakaoDB.RoomMetadata>(256)
     private val recentCommandFingerprints = lruMap<CommandFingerprint, Long>(MAX_COMMAND_FINGERPRINTS)
     private val previousSnapshots = mutableMapOf<Long, RoomSnapshotData>()
-    private val serverJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true; explicitNulls = false }
+    private val serverJson =
+        kotlinx.serialization.json.Json {
+            ignoreUnknownKeys = true
+            explicitNulls = false
+        }
 
     @Volatile
     private var initBridgeBackoffUntil: Long = 0L
@@ -72,17 +76,34 @@ class ObserverHelper(
 
             val events = snapMgr.diff(previousSnapshot, currentSnapshot)
             for (event in events) {
-                val jsonStr = when (event) {
-                    is party.qwer.iris.model.MemberEvent ->
-                        serverJson.encodeToString(party.qwer.iris.model.MemberEvent.serializer(), event)
-                    is party.qwer.iris.model.NicknameChangeEvent ->
-                        serverJson.encodeToString(party.qwer.iris.model.NicknameChangeEvent.serializer(), event)
-                    is party.qwer.iris.model.RoleChangeEvent ->
-                        serverJson.encodeToString(party.qwer.iris.model.RoleChangeEvent.serializer(), event)
-                    is party.qwer.iris.model.ProfileChangeEvent ->
-                        serverJson.encodeToString(party.qwer.iris.model.ProfileChangeEvent.serializer(), event)
-                    else -> continue
-                }
+                val jsonStr =
+                    when (event) {
+                        is party.qwer.iris.model.MemberEvent ->
+                            serverJson.encodeToString(
+                                party.qwer.iris.model.MemberEvent
+                                    .serializer(),
+                                event,
+                            )
+                        is party.qwer.iris.model.NicknameChangeEvent ->
+                            serverJson.encodeToString(
+                                party.qwer.iris.model.NicknameChangeEvent
+                                    .serializer(),
+                                event,
+                            )
+                        is party.qwer.iris.model.RoleChangeEvent ->
+                            serverJson.encodeToString(
+                                party.qwer.iris.model.RoleChangeEvent
+                                    .serializer(),
+                                event,
+                            )
+                        is party.qwer.iris.model.ProfileChangeEvent ->
+                            serverJson.encodeToString(
+                                party.qwer.iris.model.ProfileChangeEvent
+                                    .serializer(),
+                                event,
+                            )
+                        else -> continue
+                    }
                 bus.emit(jsonStr)
             }
         }
@@ -225,10 +246,11 @@ class ObserverHelper(
     ): Boolean {
         val threadMetadata = resolveObservedThreadMetadata(logEntry, enc)
         val roomMetadata = resolveRoomMetadata(logEntry.chatId)
-        val senderRole = memberRepo?.resolveSenderRole(
-            logEntry.userId,
-            roomMetadata.linkId.toLongOrNull(),
-        )
+        val senderRole =
+            memberRepo?.resolveSenderRole(
+                logEntry.userId,
+                roomMetadata.linkId.toLongOrNull(),
+            )
         val routingCommand =
             RoutingCommand(
                 text = parsedCommand.normalizedText,

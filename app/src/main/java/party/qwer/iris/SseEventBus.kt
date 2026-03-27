@@ -3,7 +3,9 @@ package party.qwer.iris
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicLong
 
-class SseEventBus(private val bufferSize: Int = 100) {
+class SseEventBus(
+    private val bufferSize: Int = 100,
+) {
     private val idCounter = AtomicLong(0)
     private val buffer = ArrayDeque<Pair<Long, String>>(bufferSize)
     private val lock = Any()

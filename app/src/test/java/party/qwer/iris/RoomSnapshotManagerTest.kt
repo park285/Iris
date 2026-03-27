@@ -8,7 +8,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class RoomSnapshotManagerTest {
-
     private fun snap(
         memberIds: Set<Long> = emptySet(),
         blindedIds: Set<Long> = emptySet(),
@@ -16,9 +15,13 @@ class RoomSnapshotManagerTest {
         roles: Map<Long, Int> = emptyMap(),
         profileImages: Map<Long, String> = emptyMap(),
     ) = RoomSnapshotData(
-        chatId = 100L, linkId = 1L,
-        memberIds = memberIds, blindedIds = blindedIds,
-        nicknames = nicknames, roles = roles, profileImages = profileImages,
+        chatId = 100L,
+        linkId = 1L,
+        memberIds = memberIds,
+        blindedIds = blindedIds,
+        nicknames = nicknames,
+        roles = roles,
+        profileImages = profileImages,
     )
 
     @Test

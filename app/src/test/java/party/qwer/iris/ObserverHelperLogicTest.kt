@@ -83,9 +83,14 @@ class ObserverHelperLogicTest {
 
     @Test
     fun `snapshot diff emits member events after prior snapshot exists`() {
-        val roomList = party.qwer.iris.model.RoomListResponse(
-            rooms = listOf(party.qwer.iris.model.RoomSummary(chatId = 100L, type = "OM", linkId = 200L, activeMembersCount = 2)),
-        )
+        val roomList =
+            party.qwer.iris.model.RoomListResponse(
+                rooms =
+                    listOf(
+                        party.qwer.iris.model
+                            .RoomSummary(chatId = 100L, type = "OM", linkId = 200L, activeMembersCount = 2),
+                    ),
+            )
         val initialSnapshot =
             RoomSnapshotData(
                 chatId = 100L,
@@ -116,33 +121,35 @@ class ObserverHelperLogicTest {
         val firstReplay = bus.replayFrom(0)
 
         chatLogRepo.latestLogId = 2L
-        chatLogRepo.polledLogs = listOf(
-            KakaoDB.ChatLogEntry(
-                id = 2L,
-                chatId = 100L,
-                userId = 9L,
-                message = "not a command",
-                metadata = "{\"enc\":0,\"origin\":\"CHATLOG\"}",
-                createdAt = "2026-03-27T00:00:00Z",
-                messageType = "0",
-            ),
-        )
+        chatLogRepo.polledLogs =
+            listOf(
+                KakaoDB.ChatLogEntry(
+                    id = 2L,
+                    chatId = 100L,
+                    userId = 9L,
+                    message = "not a command",
+                    metadata = "{\"enc\":0,\"origin\":\"CHATLOG\"}",
+                    createdAt = "2026-03-27T00:00:00Z",
+                    messageType = "0",
+                ),
+            )
 
         helper.checkChange()
         val secondReplay = bus.replayFrom(0)
 
         chatLogRepo.latestLogId = 3L
-        chatLogRepo.polledLogs = listOf(
-            KakaoDB.ChatLogEntry(
-                id = 3L,
-                chatId = 100L,
-                userId = 9L,
-                message = "still not a command",
-                metadata = "{\"enc\":0,\"origin\":\"CHATLOG\"}",
-                createdAt = "2026-03-27T00:00:01Z",
-                messageType = "0",
-            ),
-        )
+        chatLogRepo.polledLogs =
+            listOf(
+                KakaoDB.ChatLogEntry(
+                    id = 3L,
+                    chatId = 100L,
+                    userId = 9L,
+                    message = "still not a command",
+                    metadata = "{\"enc\":0,\"origin\":\"CHATLOG\"}",
+                    createdAt = "2026-03-27T00:00:01Z",
+                    messageType = "0",
+                ),
+            )
 
         helper.checkChange()
         val thirdReplay = bus.replayFrom(0)
@@ -162,7 +169,10 @@ private class FakeChatLogRepository(
     var latestLogId: Long = 1L,
     var polledLogs: List<KakaoDB.ChatLogEntry> = emptyList(),
 ) : ChatLogRepository {
-    override fun pollChatLogsAfter(afterLogId: Long, limit: Int): List<KakaoDB.ChatLogEntry> = polledLogs
+    override fun pollChatLogsAfter(
+        afterLogId: Long,
+        limit: Int,
+    ): List<KakaoDB.ChatLogEntry> = polledLogs
 
     override fun resolveSenderName(userId: Long): String = userId.toString()
 
