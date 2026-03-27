@@ -2,6 +2,7 @@ package party.qwer.iris
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import party.qwer.iris.model.BotCommandInfo
@@ -24,7 +25,7 @@ class MemberRepository(
     private val botId: Long,
 ) {
     companion object {
-        private const val MAX_ROWS = 500
+        private const val MAX_ROWS = 2000
         private const val STATS_ROW_LIMIT = 50_000
         private val json = Json { ignoreUnknownKeys = true }
 
@@ -167,10 +168,12 @@ class MemberRepository(
         chatId: Long,
         period: String?,
         limit: Int,
+        minMessages: Int = 0,
     ): StatsResponse {
         val periodSecs = parsePeriodSeconds(period)
         val now = System.currentTimeMillis() / 1000
         val from = if (periodSecs != null) now - periodSecs else 0L
+        val linkId = resolveLinkId(chatId)
 
         val rows =
             executeQuery(
@@ -198,8 +201,9 @@ class MemberRepository(
                         val la = row["last_active"]?.toLongOrNull()
                         if (la != null && (lastActive == null || la > lastActive)) lastActive = la
                     }
-                    MemberStats(userId, resolveNickname(userId), total, lastActive, types)
+                    MemberStats(userId, resolveNickname(userId, linkId), total, lastActive, types)
                 }.sortedByDescending { it.messageCount }
+                .filter { it.messageCount >= minMessages }
 
         val totalMessages = memberStats.sumOf { it.messageCount }
         val activeMembers = memberStats.size
@@ -222,6 +226,7 @@ class MemberRepository(
         val periodSecs = parsePeriodSeconds(period)
         val now = System.currentTimeMillis() / 1000
         val from = if (periodSecs != null) now - periodSecs else 0L
+        val linkId = resolveLinkId(chatId)
 
         val rows =
             executeQuery(
@@ -251,7 +256,7 @@ class MemberRepository(
 
         return MemberActivityResponse(
             userId = userId,
-            nickname = resolveNickname(userId),
+            nickname = resolveNickname(userId, linkId),
             messageCount = rows.size,
             firstMessageAt = firstAt,
             lastMessageAt = lastAt,
@@ -260,13 +265,20 @@ class MemberRepository(
         )
     }
 
-    private fun resolveNickname(userId: Long): String? {
-        val row =
-            executeQuery(
-                "SELECT nickname, enc FROM db2.open_chat_member WHERE user_id = ? LIMIT 1",
-                arrayOf(userId.toString()),
-                1,
-            ).firstOrNull() ?: return null
+    private fun resolveNickname(userId: Long, linkId: Long? = null): String? {
+        val query =
+            if (linkId != null) {
+                "SELECT nickname, enc FROM db2.open_chat_member WHERE user_id = ? AND link_id = ? LIMIT 1"
+            } else {
+                "SELECT nickname, enc FROM db2.open_chat_member WHERE user_id = ? LIMIT 1"
+            }
+        val args =
+            if (linkId != null) {
+                arrayOf<String?>(userId.toString(), linkId.toString())
+            } else {
+                arrayOf<String?>(userId.toString())
+            }
+        val row = executeQuery(query, args, 1).firstOrNull() ?: return null
         val enc = row["enc"]?.toIntOrNull() ?: 0
         val rawNick = row["nickname"] ?: return null
         return if (enc > 0) decrypt(enc, rawNick, botId) else rawNick
@@ -355,11 +367,30 @@ class MemberRepository(
         return row["link_member_type"]?.toIntOrNull()
     }
 
+    private fun resolveLinkId(chatId: Long): Long? =
+        executeQuery(
+            "SELECT link_id FROM chat_rooms WHERE id = ?",
+            arrayOf(chatId.toString()),
+            1,
+        ).firstOrNull()?.get("link_id")?.toLongOrNull()
+
     private fun parseNotices(meta: String?): List<NoticeInfo> {
         if (meta.isNullOrBlank()) return emptyList()
         return try {
-            json.parseToJsonElement(meta)
-            emptyList()
+            val obj = json.parseToJsonElement(meta).jsonObject
+            val noticesArray = obj["noticeActivityContents"]?.jsonArray ?: return emptyList()
+            noticesArray.mapNotNull { elem ->
+                try {
+                    val notice = elem.jsonObject
+                    NoticeInfo(
+                        content = notice["message"]?.jsonPrimitive?.content ?: return@mapNotNull null,
+                        authorId = notice["authorId"]?.jsonPrimitive?.long ?: 0L,
+                        updatedAt = notice["createdAt"]?.jsonPrimitive?.long ?: 0L,
+                    )
+                } catch (_: Exception) {
+                    null
+                }
+            }
         } catch (_: Exception) {
             emptyList()
         }

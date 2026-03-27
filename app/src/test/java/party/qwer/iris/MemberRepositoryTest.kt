@@ -69,16 +69,17 @@ class MemberRepositoryTest {
             MemberRepository(
                 executeQuery = { sqlQuery, bindArgs, _ ->
                     when {
+                        sqlQuery == "SELECT link_id FROM chat_rooms WHERE id = ?" -> listOf(mapOf("link_id" to "777"))
                         sqlQuery.contains("FROM chat_logs WHERE chat_id = ? AND created_at >= ?") ->
                             listOf(
                                 mapOf("user_id" to "1", "type" to "0", "cnt" to "10", "last_active" to "1000"),
                                 mapOf("user_id" to "2", "type" to "0", "cnt" to "7", "last_active" to "900"),
                                 mapOf("user_id" to "3", "type" to "0", "cnt" to "3", "last_active" to "800"),
                             )
-                        sqlQuery == "SELECT nickname, enc FROM db2.open_chat_member WHERE user_id = ? LIMIT 1" ->
+                        sqlQuery == "SELECT nickname, enc FROM db2.open_chat_member WHERE user_id = ? AND link_id = ? LIMIT 1" ->
                             listOf(
                                 mapOf(
-                                    "nickname" to "user-${bindArgs?.get(0)}",
+                                    "nickname" to "user-${bindArgs?.get(0)}-link-${bindArgs?.get(1)}",
                                     "enc" to "0",
                                 ),
                             )
@@ -96,5 +97,35 @@ class MemberRepositoryTest {
         assertEquals(2, stats.topMembers.size)
         assertEquals(listOf(1L, 2L), stats.topMembers.map { it.userId })
         assertTrue(stats.topMembers.all { it.userId != 3L || it.messageCount == 3 })
+        assertEquals("user-1-link-777", stats.topMembers.first().nickname)
+    }
+
+    @Test
+    fun `roomStats applies minMessages filter before totals`() {
+        val repo =
+            MemberRepository(
+                executeQuery = { sqlQuery, _, _ ->
+                    when {
+                        sqlQuery == "SELECT link_id FROM chat_rooms WHERE id = ?" -> listOf(mapOf("link_id" to "777"))
+                        sqlQuery.contains("FROM chat_logs WHERE chat_id = ? AND created_at >= ?") ->
+                            listOf(
+                                mapOf("user_id" to "1", "type" to "0", "cnt" to "10", "last_active" to "1000"),
+                                mapOf("user_id" to "2", "type" to "0", "cnt" to "7", "last_active" to "900"),
+                                mapOf("user_id" to "3", "type" to "0", "cnt" to "3", "last_active" to "800"),
+                            )
+                        sqlQuery == "SELECT nickname, enc FROM db2.open_chat_member WHERE user_id = ? AND link_id = ? LIMIT 1" ->
+                            listOf(mapOf("nickname" to "user", "enc" to "0"))
+                        else -> emptyList()
+                    }
+                },
+                decrypt = { _, raw, _ -> raw },
+                botId = 1L,
+            )
+
+        val stats = repo.roomStats(chatId = 100L, period = "all", limit = 10, minMessages = 5)
+
+        assertEquals(17, stats.totalMessages)
+        assertEquals(2, stats.activeMembers)
+        assertEquals(listOf(1L, 2L), stats.topMembers.map { it.userId })
     }
 }

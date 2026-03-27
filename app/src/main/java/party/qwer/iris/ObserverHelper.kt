@@ -77,35 +77,45 @@ class ObserverHelper(
 
             val events = snapMgr.diff(previousSnapshot, currentSnapshot)
             for (event in events) {
-                val jsonStr =
+                val (jsonStr, eventChatId) =
                     when (event) {
                         is party.qwer.iris.model.MemberEvent ->
                             serverJson.encodeToString(
                                 party.qwer.iris.model.MemberEvent
                                     .serializer(),
                                 event,
-                            )
+                            ) to event.chatId
                         is party.qwer.iris.model.NicknameChangeEvent ->
                             serverJson.encodeToString(
                                 party.qwer.iris.model.NicknameChangeEvent
                                     .serializer(),
                                 event,
-                            )
+                            ) to event.chatId
                         is party.qwer.iris.model.RoleChangeEvent ->
                             serverJson.encodeToString(
                                 party.qwer.iris.model.RoleChangeEvent
                                     .serializer(),
                                 event,
-                            )
+                            ) to event.chatId
                         is party.qwer.iris.model.ProfileChangeEvent ->
                             serverJson.encodeToString(
                                 party.qwer.iris.model.ProfileChangeEvent
                                     .serializer(),
                                 event,
-                            )
+                            ) to event.chatId
                         else -> continue
                     }
                 bus.emit(jsonStr)
+                ensureDispatcher()?.route(
+                    RoutingCommand(
+                        text = jsonStr,
+                        room = eventChatId.toString(),
+                        sender = "iris-system",
+                        userId = "0",
+                        sourceLogId = -1,
+                        messageType = "member_event",
+                    ),
+                )
             }
         }
     }

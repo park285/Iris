@@ -14,6 +14,7 @@ import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
+import io.ktor.server.request.path
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondBytesWriter
@@ -26,10 +27,15 @@ import io.ktor.server.routing.routing
 import io.ktor.utils.io.writeStringUtf8
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonPrimitive
+import party.qwer.iris.model.ApiErrorResponse
 import party.qwer.iris.model.CommonErrorResponse
 import party.qwer.iris.model.ConfigRequest
 import party.qwer.iris.model.ImageBridgeHealthResult
 import party.qwer.iris.model.QueryRequest
+import party.qwer.iris.model.QueryColumn
 import party.qwer.iris.model.QueryResponse
 import party.qwer.iris.model.ReplyAcceptedResponse
 import party.qwer.iris.model.ReplyRequest
@@ -53,11 +59,13 @@ internal class IrisServer(
     private val configManager: ConfigManager,
     private val notificationReferer: String,
     private val messageSender: MessageSender,
-    private val bridgeHealthProvider: (() -> ImageBridgeHealthResult)? = null,
+    private val bridgeHealthProvider: (() -> ImageBridgeHealthResult?)? = null,
     private val replyStatusProvider: ((String) -> ReplyStatusSnapshot?)? = null,
     private val memberRepo: MemberRepository? = null,
     private val sseEventBus: SseEventBus? = null,
     private val chatRoomIntrospectProvider: ((Long) -> String?)? = null,
+    private val bindHost: String = DEFAULT_BIND_HOST,
+    private val nettyWorkerThreads: Int = DEFAULT_NETTY_WORKER_THREADS,
 ) {
     private val serverJson =
         Json {
@@ -109,11 +117,11 @@ internal class IrisServer(
         return embeddedServer(Netty, config) {
             connector {
                 port = configManager.botSocketPort
-                host = "0.0.0.0"
+                host = bindHost
             }
             enableHttp2 = true
             enableH2c = true
-            workerGroupSize = NETTY_WORKER_THREADS
+            workerGroupSize = nettyWorkerThreads
         }
     }
 
@@ -126,26 +134,53 @@ internal class IrisServer(
     private fun Application.configureStatusPages() {
         install(StatusPages) {
             exception<ApiRequestException> { call, cause ->
-                call.respond(
-                    cause.status,
-                    CommonErrorResponse(message = cause.message),
-                )
+                val path = call.request.path()
+                if (path.startsWith("/rooms") || path.startsWith("/events") || path.startsWith("/diagnostics/chatroom")) {
+                    call.respond(
+                        cause.status,
+                        ApiErrorResponse(
+                            error = cause.message,
+                            code = mapApiErrorCode(cause.status),
+                        ),
+                    )
+                } else {
+                    call.respond(
+                        cause.status,
+                        CommonErrorResponse(message = cause.message),
+                    )
+                }
             }
 
             exception<SerializationException> { call, cause ->
                 IrisLogger.error("[IrisServer] Invalid JSON request: ${cause.message}")
-                call.respond(
-                    HttpStatusCode.BadRequest,
-                    CommonErrorResponse(message = "invalid json request"),
-                )
+                val path = call.request.path()
+                if (path.startsWith("/rooms") || path.startsWith("/events") || path.startsWith("/diagnostics/chatroom")) {
+                    call.respond(
+                        HttpStatusCode.BadRequest,
+                        ApiErrorResponse(error = "invalid json request", code = "INVALID_REQUEST"),
+                    )
+                } else {
+                    call.respond(
+                        HttpStatusCode.BadRequest,
+                        CommonErrorResponse(message = "invalid json request"),
+                    )
+                }
             }
 
             exception<Throwable> { call, cause ->
                 IrisLogger.error("[IrisServer] Unhandled error: ${cause.message}", cause)
-                call.respond(
-                    HttpStatusCode.InternalServerError,
-                    CommonErrorResponse(message = "internal server error"),
-                )
+                val path = call.request.path()
+                if (path.startsWith("/rooms") || path.startsWith("/events") || path.startsWith("/diagnostics/chatroom")) {
+                    call.respond(
+                        HttpStatusCode.InternalServerError,
+                        ApiErrorResponse(error = "internal server error", code = "INTERNAL_ERROR"),
+                    )
+                } else {
+                    call.respond(
+                        HttpStatusCode.InternalServerError,
+                        CommonErrorResponse(message = "internal server error"),
+                    )
+                }
             }
         }
     }
@@ -458,7 +493,8 @@ internal class IrisServer(
                     ?: invalidRequest("chatId must be a number")
             val period = call.request.queryParameters["period"]
             val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 20
-            call.respond(repo.roomStats(chatId, period, limit))
+            val minMessages = call.request.queryParameters["minMessages"]?.toIntOrNull() ?: 0
+            call.respond(repo.roomStats(chatId, period, limit, minMessages))
         }
 
         get("/rooms/{chatId}/members/{userId}/activity") {
@@ -527,10 +563,18 @@ internal class IrisServer(
         private const val HEADER_BOT_TOKEN = "X-Bot-Token"
         private const val SERVER_GRACE_PERIOD_MS = 1_000L
         private const val SERVER_STOP_TIMEOUT_MS = 5_000L
-        private const val NETTY_WORKER_THREADS = 2
+        private const val DEFAULT_BIND_HOST = "127.0.0.1"
+        private const val DEFAULT_NETTY_WORKER_THREADS = 2
         private const val HEALTH_OK_JSON = """{"status":"ok"}"""
         private const val READY_OK_JSON = """{"status":"ready"}"""
-        private val REQUIRED_DISCOVERY_HOOKS = setOf("ChatMediaSender#sendSingle", "ChatMediaSender#sendMultiple")
+        private val REQUIRED_DISCOVERY_HOOKS =
+            setOf(
+                "ChatMediaSender#sendSingle",
+                "ChatMediaSender#sendMultiple",
+                "ReplyMarkdown#ingress",
+                "ReplyMarkdown#reuseIntent",
+                "ReplyMarkdown#requestDispatch",
+            )
 
         internal fun isBridgeReadyForTest(health: ImageBridgeHealthResult): Boolean = isBridgeReady(health)
 
@@ -546,25 +590,32 @@ internal class IrisServer(
                 health.discoveryInstallAttempted &&
                 requiredHooksReady
         }
+
+        private fun mapApiErrorCode(status: HttpStatusCode): String =
+            when (status) {
+                HttpStatusCode.BadRequest -> "INVALID_REQUEST"
+                HttpStatusCode.NotFound -> "NOT_FOUND"
+                HttpStatusCode.Unauthorized -> "UNAUTHORIZED"
+                HttpStatusCode.Forbidden -> "FORBIDDEN"
+                else -> "INTERNAL_ERROR"
+            }
     }
 
     private fun executeQueryRequest(queryRequest: QueryRequest): QueryResponse {
-        val rows =
+        val queryResult =
             chatLogRepo.executeQuery(
                 queryRequest.query,
                 (queryRequest.bind?.map { it.content } ?: listOf()).toTypedArray(),
                 MAX_QUERY_ROWS + 1,
             )
-        if (rows.size > MAX_QUERY_ROWS) {
+        if (queryResult.rows.size > MAX_QUERY_ROWS) {
             invalidRequest("query returned too many rows; limit is $MAX_QUERY_ROWS")
         }
 
-        return QueryResponse(
-            rowCount = rows.size,
-            data =
-                rows.map {
-                    decryptRow(it, configManager)
-                },
+        return buildQueryResponse(
+            queryResult = queryResult,
+            decrypt = queryRequest.decrypt,
+            config = configManager,
         )
     }
 }
@@ -637,3 +688,62 @@ private fun requireReadOnlyQuery(query: String) {
         invalidRequest("only SELECT, WITH...SELECT, and safe PRAGMA queries are allowed")
     }
 }
+
+internal fun buildQueryResponse(
+    queryResult: QueryExecutionResult,
+    decrypt: Boolean,
+    config: ConfigProvider,
+    decryptor: (Map<String, String?>, ConfigProvider) -> Map<String, String?> = ::decryptRow,
+): QueryResponse {
+    val legacyRows = toLegacyQueryRows(queryResult)
+    val effectiveLegacyRows =
+        if (decrypt) {
+            legacyRows.map { row -> decryptor(row, config) }
+        } else {
+            legacyRows
+        }
+    val effectiveRows =
+        queryResult.rows.indices.map { rowIndex ->
+            applyLegacyRowOverlay(
+                columns = queryResult.columns,
+                originalRow = queryResult.rows[rowIndex],
+                effectiveLegacyRow = effectiveLegacyRows[rowIndex],
+            )
+        }
+
+    return QueryResponse(
+        rowCount = effectiveRows.size,
+        columns = queryResult.columns,
+        rows = effectiveRows,
+        data = effectiveLegacyRows,
+    )
+}
+
+internal fun toLegacyQueryRows(queryResult: QueryExecutionResult): List<Map<String, String?>> =
+    queryResult.rows.map { row ->
+        buildLegacyQueryRow(queryResult.columns, row)
+    }
+
+private fun buildLegacyQueryRow(
+    columns: List<QueryColumn>,
+    row: List<JsonElement?>,
+): Map<String, String?> =
+    columns.indices.associate { index ->
+        columns[index].name to row[index]?.jsonPrimitive?.content
+    }
+
+private fun applyLegacyRowOverlay(
+    columns: List<QueryColumn>,
+    originalRow: List<JsonElement?>,
+    effectiveLegacyRow: Map<String, String?>,
+): List<JsonElement?> =
+    columns.indices.map { index ->
+        val originalCell = originalRow[index]
+        val effectiveValue = effectiveLegacyRow[columns[index].name]
+        when {
+            effectiveValue == null -> null
+            originalCell == null -> JsonPrimitive(effectiveValue)
+            !originalCell.jsonPrimitive.isString && originalCell.jsonPrimitive.content == effectiveValue -> originalCell
+            else -> JsonPrimitive(effectiveValue)
+        }
+    }

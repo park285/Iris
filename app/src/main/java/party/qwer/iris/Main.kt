@@ -10,26 +10,28 @@ const val IRIS_IMAGE_DIR_PATH: String = "/sdcard/Android/data/com.kakao.talk/fil
 
 class Main {
     companion object {
-        private val defaultImageDeletionIntervalMs = TimeUnit.HOURS.toMillis(1)
-        private val defaultImageRetentionMs = TimeUnit.DAYS.toMillis(1)
+        internal val defaultImageDeletionIntervalMs = TimeUnit.HOURS.toMillis(1)
+        internal val defaultImageRetentionMs = TimeUnit.DAYS.toMillis(1)
 
         @JvmStatic
         fun main(args: Array<String>) {
             try {
+                val runtimeOptions = RuntimeOptions.fromEnv()
                 val notificationReferer = readNotificationReferer()
                 val shutdownLatch = CountDownLatch(1)
                 val configManager = ConfigManager()
                 val bridgeClient = UdsImageBridgeClient()
 
                 val replyService = ReplyService(configManager, UdsImageReplySender(bridgeClient))
-                configManager.onMessageSendRateChanged = { replyService.restart() }
                 replyService.start()
                 IrisLogger.info("Message sender thread started")
 
                 val kakaoDb = KakaoDB(configManager)
                 val memberRepo =
                     MemberRepository(
-                        executeQuery = kakaoDb::executeQuery,
+                        executeQuery = { sqlQuery, bindArgs, maxRows ->
+                            toLegacyQueryRows(kakaoDb.executeQuery(sqlQuery, bindArgs, maxRows))
+                        },
                         decrypt = KakaoDecrypt.Companion::decrypt,
                         botId = configManager.botId,
                     )
@@ -55,9 +57,14 @@ class Main {
                 kakaoProfileIndexer.launch()
                 IrisLogger.info("Kakao profile indexer started")
 
-                val imageDeleter = startImageDeleter()
+                val imageDeleter = startImageDeleter(runtimeOptions)
 
-                val disableHttp = System.getenv("IRIS_DISABLE_HTTP")?.equals("1", ignoreCase = true) == true
+                val bridgeHealthCache =
+                    BridgeHealthCache(
+                        healthProvider = bridgeClient::queryHealth,
+                        refreshIntervalMs = runtimeOptions.bridgeHealthRefreshMs,
+                    ).also { it.start() }
+                val disableHttp = runtimeOptions.disableHttp
                 val irisServer =
                     if (disableHttp) {
                         IrisLogger.info("[Main] IRIS_DISABLE_HTTP=1; skipping Iris HTTP server startup")
@@ -68,11 +75,15 @@ class Main {
                             configManager,
                             notificationReferer,
                             replyService,
-                            bridgeHealthProvider = bridgeClient::queryHealth,
+                            bridgeHealthProvider = bridgeHealthCache::current,
                             replyStatusProvider = replyService::replyStatusOrNull,
                             memberRepo = memberRepo,
                             sseEventBus = sseEventBus,
-                            // chatRoomIntrospectProvider requires bridge IPC — wire when ImageBridgeServer exposes introspection.
+                            bindHost = runtimeOptions.bindHost,
+                            nettyWorkerThreads = runtimeOptions.httpWorkerThreads,
+                            // chatRoomIntrospectProvider: requires bridge IPC channel (not yet implemented).
+                            // ChatRoomIntrospector exists in bridge module but runs inside the KakaoTalk/Xposed process.
+                            // Wire this when ImageBridgeServer exposes chat-room introspection over the existing UDS channel.
                         ).also {
                             it.startServer()
                             IrisLogger.info("Iris Server started")
@@ -90,6 +101,7 @@ class Main {
                             imageDeleter.stopDeletion()
                             observerHelper.close()
                             replyService.shutdown()
+                            bridgeHealthCache.stop()
                             if (!configManager.saveConfigNow()) {
                                 IrisLogger.error("[Main] Failed to save config during shutdown")
                             }
@@ -144,21 +156,18 @@ class Main {
             return fallback
         }
 
-        private fun startImageDeleter(): ImageDeleter {
-            val intervalMs =
-                readPositiveDurationMillis("IRIS_IMAGE_DELETE_INTERVAL_MS", defaultImageDeletionIntervalMs)
-            val retentionMs =
-                readPositiveDurationMillis("IRIS_IMAGE_RETENTION_MS", defaultImageRetentionMs)
-            return ImageDeleter(IRIS_IMAGE_DIR_PATH, intervalMs, retentionMs).also {
+        private fun startImageDeleter(runtimeOptions: RuntimeOptions): ImageDeleter =
+            ImageDeleter(
+                IRIS_IMAGE_DIR_PATH,
+                runtimeOptions.imageDeletionIntervalMs,
+                runtimeOptions.imageRetentionMs,
+            ).also {
                 it.startDeletion()
-                IrisLogger.info("ImageDeleter started (intervalMs=$intervalMs, retentionMs=$retentionMs).")
+                IrisLogger.info(
+                    "ImageDeleter started (intervalMs=${runtimeOptions.imageDeletionIntervalMs}, " +
+                        "retentionMs=${runtimeOptions.imageRetentionMs}).",
+                )
             }
-        }
-
-        private fun readPositiveDurationMillis(
-            envName: String,
-            defaultValue: Long,
-        ): Long = positiveDurationMillisOrDefault(System.getenv(envName), defaultValue)
     }
 }
 

@@ -8,6 +8,8 @@
 
 **Tech Stack:** Kotlin, Ktor (Netty), kotlinx.serialization, KakaoDecrypt (AES-256-CBC), Xposed (bridge), kotlin.test
 
+**Phase 3 Status:** Deferred — requires bridge IPC channel. `ChatRoomIntrospector` is implemented, but runtime data cannot be merged into API responses until the bridge exposes introspection results over the existing UDS communication channel.
+
 **Spec:** `docs/superpowers/specs/2026-03-27-member-management-design.md`
 
 ---
