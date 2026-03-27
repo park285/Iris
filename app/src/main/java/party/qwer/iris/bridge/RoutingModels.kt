@@ -13,6 +13,7 @@ data class RoutingCommand(
     val threadScope: Int? = null,
     val messageType: String? = null,
     val attachment: String? = null,
+    val senderRole: Int? = null,
 )
 
 enum class RoutingResult {

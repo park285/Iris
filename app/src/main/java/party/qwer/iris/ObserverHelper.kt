@@ -9,6 +9,7 @@ import java.io.Closeable
 class ObserverHelper(
     private val db: ChatLogRepository,
     private val config: ConfigProvider,
+    private val memberRepo: MemberRepository? = null,
 ) : Closeable {
     @Volatile
     private var lastLogId: Long = 0
@@ -183,6 +184,10 @@ class ObserverHelper(
     ): Boolean {
         val threadMetadata = resolveObservedThreadMetadata(logEntry, enc)
         val roomMetadata = resolveRoomMetadata(logEntry.chatId)
+        val senderRole = memberRepo?.resolveSenderRole(
+            logEntry.userId,
+            roomMetadata.linkId.toLongOrNull(),
+        )
         val routingCommand =
             RoutingCommand(
                 text = parsedCommand.normalizedText,
@@ -197,6 +202,7 @@ class ObserverHelper(
                 threadScope = threadMetadata?.threadScope,
                 messageType = logEntry.messageType?.trim()?.takeIf { it.isNotEmpty() },
                 attachment = logEntry.attachment?.takeIf { it.isNotBlank() }?.let { decryptMessage(it, enc, logEntry.userId) },
+                senderRole = senderRole,
             )
 
         return when (ensureDispatcher()?.route(routingCommand) ?: RoutingResult.RETRY_LATER) {
