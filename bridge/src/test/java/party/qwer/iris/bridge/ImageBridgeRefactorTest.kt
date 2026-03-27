@@ -4,6 +4,7 @@ package party.qwer.iris.bridge
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -20,10 +21,13 @@ class ImageBridgeRequestHandlerTest {
     @Test
     fun `send image request delegates to runtime and returns sent response`() {
         var captured: ImageSendRequest? = null
+        val file = Files.createTempFile("iris-bridge", ".png").toFile().apply { writeText("x") }
+        val rootDir = file.parentFile ?: error("temp file parent missing")
         val handler =
             ImageBridgeRequestHandler(
                 imageSender = { request -> captured = request },
                 healthProvider = { readyHealthSnapshot() },
+                pathValidator = BridgeImagePathValidator(rootDir.absolutePath),
             )
 
         val response =
@@ -31,22 +35,25 @@ class ImageBridgeRequestHandlerTest {
                 JSONObject().apply {
                     put("action", "send_image")
                     put("roomId", 123L)
-                    put("imagePaths", JSONArray(listOf("/tmp/a.png", "/tmp/b.png")))
+                    put("imagePaths", JSONArray(listOf(file.absolutePath)))
                     put("threadId", 55L)
                     put("threadScope", 3)
+                    put("requestId", "req-1")
                 },
             )
 
         assertEquals(
             ImageSendRequest(
                 roomId = 123L,
-                imagePaths = listOf("/tmp/a.png", "/tmp/b.png"),
+                imagePaths = listOf(file.canonicalPath),
                 threadId = 55L,
                 threadScope = 3,
+                requestId = "req-1",
             ),
             captured,
         )
         assertEquals("sent", response.getString("status"))
+        file.delete()
     }
 
     @Test
@@ -70,10 +77,13 @@ class ImageBridgeRequestHandlerTest {
 
     @Test
     fun `sender failure returns failed response`() {
+        val file = Files.createTempFile("iris-bridge", ".png").toFile().apply { writeText("x") }
+        val rootDir = file.parentFile ?: error("temp file parent missing")
         val handler =
             ImageBridgeRequestHandler(
                 imageSender = { throw IllegalStateException("send failed") },
                 healthProvider = { readyHealthSnapshot() },
+                pathValidator = BridgeImagePathValidator(rootDir.absolutePath),
                 logError = { _, _, _ -> },
             )
 
@@ -82,12 +92,13 @@ class ImageBridgeRequestHandlerTest {
                 JSONObject().apply {
                     put("action", "send_image")
                     put("roomId", 1L)
-                    put("imagePaths", JSONArray(listOf("/tmp/a.png")))
+                    put("imagePaths", JSONArray(listOf(file.absolutePath)))
                 },
             )
 
         assertEquals("failed", response.getString("status"))
         assertEquals("send failed", response.getString("error"))
+        file.delete()
     }
 
     @Test
@@ -141,6 +152,8 @@ class ImageBridgeRequestHandlerTest {
 
     @Test
     fun `send image request fails closed when required discovery hook is not installed`() {
+        val file = Files.createTempFile("iris-bridge", ".png").toFile().apply { writeText("x") }
+        val rootDir = file.parentFile ?: error("temp file parent missing")
         val handler =
             ImageBridgeRequestHandler(
                 imageSender = { error("should not be called") },
@@ -157,6 +170,7 @@ class ImageBridgeRequestHandlerTest {
                         lastCrashMessage = null,
                     )
                 },
+                pathValidator = BridgeImagePathValidator(rootDir.absolutePath),
                 logError = { _, _, _ -> },
             )
 
@@ -165,12 +179,13 @@ class ImageBridgeRequestHandlerTest {
                 JSONObject().apply {
                     put("action", "send_image")
                     put("roomId", 1L)
-                    put("imagePaths", JSONArray(listOf("/tmp/a.png")))
+                    put("imagePaths", JSONArray(listOf(file.absolutePath)))
                 },
             )
 
         assertEquals("failed", response.getString("status"))
         assertEquals("bridge discovery hook not ready: bh.c#n", response.getString("error"))
+        file.delete()
     }
 }
 
@@ -397,6 +412,36 @@ class RoomThreadSerialExecutorTest {
     }
 }
 
+class BridgeSecurityTest {
+    @Test
+    fun `peer validator rejects unauthorized uid`() {
+        val validator = BridgePeerIdentityValidator(setOf(2000))
+
+        val error =
+            assertFailsWith<IllegalArgumentException> {
+                validator.validate(1000)
+            }
+
+        assertEquals("unauthorized bridge client uid=1000", error.message)
+    }
+
+    @Test
+    fun `path validator rejects files outside allowed root`() {
+        val allowedDir = Files.createTempDirectory("iris-allowed").toFile()
+        val outsideFile = Files.createTempFile("iris-outside", ".png").toFile().apply { writeText("x") }
+        val validator = BridgeImagePathValidator(allowedDir.absolutePath)
+
+        val error =
+            assertFailsWith<IllegalArgumentException> {
+                validator.validate(listOf(outsideFile.absolutePath))
+            }
+
+        assertTrue(error.message?.contains("outside allowed root") == true)
+        outsideFile.delete()
+        allowedDir.deleteRecursively()
+    }
+}
+
 private class FakeChatRoom
 
 private fun readyHealthSnapshot(): ImageBridgeHealthSnapshot =
@@ -551,4 +596,94 @@ private class FakeChatRoomManager {
     ): FakeChatRoomModel? = null
 
     fun d0(roomId: Long): FakeChatRoomModel = FakeChatRoomModel.CompanionResolver.c(FakeRoomEntity(roomId))
+}
+
+class KakaoClassRegistryTest {
+    @Test
+    fun `registry constructed with fake classes exposes all fields`() {
+        val registry = buildFakeRegistry()
+
+        assertEquals(FakeMediaSender::class.java, registry.chatMediaSenderClass)
+        assertEquals(FakeMessageType::class.java, registry.messageTypeClass)
+        assertEquals(FakeChatRoomManager::class.java, registry.chatRoomManagerClass)
+        assertEquals(FakeMediaItem::class.java, registry.mediaItemClass)
+        assertNotNull(registry.singleSendMethod)
+        assertNotNull(registry.multiSendMethod)
+        assertNotNull(registry.mediaItemConstructor)
+        assertNotNull(registry.photoType)
+        assertEquals(FakeMessageType.Photo, registry.photoType)
+        assertNotNull(registry.multiPhotoType)
+        assertEquals(FakeMessageType.MultiPhoto, registry.multiPhotoType)
+        assertNotNull(registry.writeTypeNone)
+        assertEquals(FakeWriteType.None, registry.writeTypeNone)
+    }
+}
+
+private fun buildFakeRegistry(): KakaoClassRegistry {
+    val singleSend =
+        FakeMediaSender::class.java.getMethod(
+            "n",
+            FakeMediaItem::class.java,
+            Boolean::class.javaPrimitiveType,
+        )
+    val multiSend =
+        FakeMediaSender::class.java.getMethod(
+            "p",
+            List::class.java,
+            FakeMessageType::class.java,
+            String::class.java,
+            JSONObject::class.java,
+            JSONObject::class.java,
+            FakeWriteType::class.java,
+            Boolean::class.javaPrimitiveType,
+            Boolean::class.javaPrimitiveType,
+            FakeListener::class.java,
+        )
+    val mediaItemCtor =
+        FakeMediaItem::class.java.getConstructor(
+            String::class.java,
+            Long::class.javaPrimitiveType,
+        )
+    val masterDbField = FakeMasterDatabase::class.java.getDeclaredField("INSTANCE")
+    val roomDaoMethod = FakeMasterDatabase::class.java.getMethod("O")
+    val entityLookupMethod =
+        FakeRoomDao::class.java.getMethod(
+            "h",
+            Long::class.javaPrimitiveType,
+        )
+    val broadResolver =
+        FakeChatRoomManager::class.java.getMethod(
+            "e0",
+            Long::class.javaPrimitiveType,
+            Boolean::class.javaPrimitiveType,
+            Boolean::class.javaPrimitiveType,
+        )
+    val directResolver =
+        FakeChatRoomManager::class.java.getMethod(
+            "d0",
+            Long::class.javaPrimitiveType,
+        )
+    return KakaoClassRegistry(
+        mediaItemClass = FakeMediaItem::class.java,
+        function0Class = kotlin.jvm.functions.Function0::class.java,
+        function1Class = kotlin.jvm.functions.Function1::class.java,
+        masterDatabaseClass = FakeMasterDatabase::class.java,
+        writeTypeClass = FakeWriteType::class.java,
+        listenerClass = FakeListener::class.java,
+        chatMediaSenderClass = FakeMediaSender::class.java,
+        messageTypeClass = FakeMessageType::class.java,
+        chatRoomManagerClass = FakeChatRoomManager::class.java,
+        chatRoomClass = FakeChatRoomModel::class.java,
+        singleSendMethod = singleSend,
+        multiSendMethod = multiSend,
+        mediaItemConstructor = mediaItemCtor,
+        masterDbSingletonField = masterDbField,
+        roomDaoMethod = roomDaoMethod,
+        entityLookupMethod = entityLookupMethod,
+        broadRoomResolverMethod = broadResolver,
+        directRoomResolverMethod = directResolver,
+        photoType = FakeMessageType.Photo,
+        multiPhotoType = FakeMessageType.MultiPhoto,
+        writeTypeNone = FakeWriteType.None,
+    )
 }

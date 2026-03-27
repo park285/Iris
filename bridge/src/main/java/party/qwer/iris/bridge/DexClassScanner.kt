@@ -85,7 +85,7 @@ internal class DexClassScanner(
         var current: Class<*>? = this
         while (current != null) {
             runCatching {
-                return current!!.getDeclaredField(name)
+                return current.getDeclaredField(name)
             }
             current = current.superclass
         }
