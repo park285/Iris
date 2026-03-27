@@ -4,6 +4,7 @@ import android.util.Log
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import java.lang.reflect.Method
+import java.lang.reflect.Modifier
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -110,6 +111,11 @@ internal object BridgeDiscovery {
         method: Method,
         summarize: (XC_MethodHook.MethodHookParam) -> String,
     ) {
+        if (Modifier.isAbstract(method.modifiers)) {
+            stateFor(hookName).markInstallError("abstract method, skipped: ${method.declaringClass.name}.${method.name}")
+            Log.w(TAG, "discovery hook skipped (abstract): $hookName — ${method.declaringClass.name}.${method.name}")
+            return
+        }
         try {
             XposedBridge.hookMethod(
                 method,
