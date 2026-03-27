@@ -1,4 +1,5 @@
 mod config;
+#[allow(dead_code)]
 mod models;
 mod api;
 mod sse;
@@ -39,6 +40,10 @@ async fn main() -> Result<()> {
             if let Ok(rooms) = iris.rooms().await { app.rooms_view.set_rooms(rooms.rooms); }
             if let Some(chat_id) = app.members_view.chat_id {
                 if let Ok(members) = iris.members(chat_id).await { app.members_view.set_members(members.members); }
+                if let Ok(stats) = iris.stats(chat_id, &app.stats_view.period, 20).await {
+                    app.stats_view.chat_id = Some(chat_id);
+                    app.stats_view.set_stats(stats);
+                }
             }
         }
     }

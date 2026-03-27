@@ -6,6 +6,7 @@ use crate::models::*;
 #[derive(Clone)]
 pub struct IrisApi { client: Client, base_url: String }
 
+#[allow(dead_code)]
 impl IrisApi {
     pub fn new(config: &Config) -> Result<Self> {
         let mut headers = header::HeaderMap::new();

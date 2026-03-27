@@ -2,7 +2,6 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::widgets::{Block, List, ListItem, ListState};
-use ratatui::style::Stylize;
 use crate::models::SseEvent;
 use super::{View, ViewAction};
 

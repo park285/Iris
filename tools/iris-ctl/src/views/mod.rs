@@ -6,12 +6,14 @@ pub mod events;
 use ratatui::Frame;
 use crossterm::event::KeyEvent;
 
+#[allow(dead_code)]
 pub trait View {
     fn render(&self, frame: &mut Frame, area: ratatui::layout::Rect);
     fn handle_key(&mut self, key: KeyEvent) -> ViewAction;
     fn title(&self) -> &str;
 }
 
+#[allow(dead_code)]
 pub enum ViewAction { None, SwitchTo(TabId), SelectRoom(i64), SelectMember(i64, i64), Quit, Back }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

@@ -1,7 +1,7 @@
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Direction};
-use ratatui::style::Stylize;
+
 use ratatui::widgets::{Block, Tabs};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -57,7 +57,12 @@ impl App {
                 };
                 match action {
                     ViewAction::Quit => return Ok(true),
-                    ViewAction::SelectRoom(id) => { self.members_view.set_chat_id(id); self.active_tab = TabId::Members; }
+                    ViewAction::SelectRoom(id) => {
+                        self.members_view.set_chat_id(id);
+                        self.stats_view.chat_id = Some(id);
+                        self.stats_view.stats = None;
+                        self.active_tab = TabId::Members;
+                    }
                     ViewAction::SwitchTo(tab) => self.active_tab = tab,
                     ViewAction::Back => self.active_tab = TabId::Rooms,
                     _ => {}
