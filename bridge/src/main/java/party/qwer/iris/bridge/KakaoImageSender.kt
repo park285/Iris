@@ -16,8 +16,12 @@ internal class KakaoImageSender(
         context: Context,
         loader: ClassLoader,
     ) : this(
-        chatRoomResolver = ChatRoomResolver(loader),
-        sendInvocationFactory = KakaoSendInvocationFactory(loader),
+        registry = KakaoClassRegistry.discover(loader),
+    )
+
+    constructor(registry: KakaoClassRegistry) : this(
+        chatRoomResolver = ChatRoomResolver(registry),
+        sendInvocationFactory = KakaoSendInvocationFactory(registry),
     )
 
     fun send(request: ImageSendRequest) {
@@ -26,6 +30,7 @@ internal class KakaoImageSender(
             imagePaths = request.imagePaths,
             threadId = request.threadId,
             threadScope = request.threadScope,
+            requestId = request.requestId,
         )
     }
 
@@ -34,9 +39,10 @@ internal class KakaoImageSender(
         imagePaths: List<String>,
         threadId: Long?,
         threadScope: Int?,
+        requestId: String?,
     ) {
         require(imagePaths.isNotEmpty()) { "no image paths" }
-        Log.i(TAG, "send start room=$roomId images=${imagePaths.size} threadId=$threadId scope=$threadScope")
+        Log.i(TAG, "send start room=$roomId images=${imagePaths.size} threadId=$threadId scope=$threadScope requestId=$requestId")
 
         val chatRoom = chatRoomResolver.resolve(roomId) ?: error("chat room not found: $roomId")
 
@@ -45,6 +51,6 @@ internal class KakaoImageSender(
         } else {
             sendInvocationFactory.sendMultiple(chatRoom, imagePaths, threadId, threadScope)
         }
-        Log.i(TAG, "send completed room=$roomId")
+        Log.i(TAG, "send completed room=$roomId requestId=$requestId")
     }
 }
