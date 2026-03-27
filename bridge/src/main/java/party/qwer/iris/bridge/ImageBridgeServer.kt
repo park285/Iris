@@ -21,6 +21,7 @@ internal object ImageBridgeServer {
     private val restartCount = AtomicInteger(0)
     private val lastCrashMessage = AtomicReference<String?>(null)
     private val specStatus = AtomicReference<BridgeSpecStatus?>(null)
+    private val peerIdentityValidator = BridgePeerIdentityValidator()
 
     @Volatile
     private var requestHandler: ImageBridgeRequestHandler? = null
@@ -38,8 +39,13 @@ internal object ImageBridgeServer {
         }
         restartCount.set(0)
         lastCrashMessage.set(null)
-        val imageSender = KakaoImageSender(context, classLoader)
-        val verifier = BridgeHookSpecVerifier { className -> Class.forName(className, true, classLoader) }
+        val registry = runCatching { KakaoClassRegistry.discover(classLoader) }
+        val imageSender = registry.getOrNull()?.let { KakaoImageSender(it) } ?: KakaoImageSender(context, classLoader)
+        val verifier =
+            BridgeHookSpecVerifier(
+                registry = registry.getOrNull(),
+                registryError = registry.exceptionOrNull()?.message,
+            )
         val initialSpecStatus = verifier.verify()
         specStatus.set(initialSpecStatus)
         if (!initialSpecStatus.ready) {
@@ -118,6 +124,20 @@ internal object ImageBridgeServer {
         if (executor == null || handler == null) {
             runCatching {
                 writeFrame(client.outputStream, failureResponse("sender not initialized"))
+            }
+            runCatching { client.close() }
+            return
+        }
+        val peerUid =
+            runCatching {
+                client.peerCredentials.uid
+            }.getOrNull()
+        try {
+            peerIdentityValidator.validate(peerUid)
+        } catch (error: IllegalArgumentException) {
+            Log.e(TAG, "unauthorized bridge client uid=$peerUid")
+            runCatching {
+                writeFrame(client.outputStream, failureResponse(error.message ?: "unauthorized bridge client"))
             }
             runCatching { client.close() }
             return

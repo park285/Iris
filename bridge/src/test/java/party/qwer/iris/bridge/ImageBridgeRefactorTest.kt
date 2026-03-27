@@ -120,7 +120,7 @@ class ImageBridgeRequestHandlerTest {
                                 hooks =
                                     listOf(
                                         DiscoveryHookStatus(
-                                            name = "bh.c#p",
+                                            name = HOOK_SEND_MULTIPLE,
                                             installed = true,
                                             invocationCount = 4,
                                             lastSeenEpochMs = 99L,
@@ -163,7 +163,7 @@ class ImageBridgeRequestHandlerTest {
                         discoverySnapshot =
                             BridgeDiscoverySnapshot(
                                 installAttempted = true,
-                                hooks = listOf(DiscoveryHookStatus(name = "bh.c#n", installed = false, invocationCount = 0)),
+                                hooks = listOf(DiscoveryHookStatus(name = HOOK_SEND_SINGLE, installed = false, invocationCount = 0)),
                             ),
                         restartCount = 0,
                         lastCrashMessage = null,
@@ -183,7 +183,7 @@ class ImageBridgeRequestHandlerTest {
             )
 
         assertEquals("failed", response.getString("status"))
-        assertEquals("bridge discovery hook not ready: bh.c#n", response.getString("error"))
+        assertEquals("bridge discovery hook not ready: ChatMediaSender#sendSingle", response.getString("error"))
         file.delete()
     }
 }
@@ -285,11 +285,11 @@ class BridgeDiscoveryTest {
     fun `records discovery hook installation and invocation`() {
         BridgeDiscovery.resetForTest()
 
-        BridgeDiscovery.markInstalledForTest("bh.c#p")
-        BridgeDiscovery.recordForTest("bh.c#p", "uris=2")
+        BridgeDiscovery.markInstalledForTest(HOOK_SEND_MULTIPLE)
+        BridgeDiscovery.recordForTest(HOOK_SEND_MULTIPLE, "uris=2")
 
         val snapshot = BridgeDiscovery.snapshot()
-        val hook = snapshot.hooks.first { it.name == "bh.c#p" }
+        val hook = snapshot.hooks.first { it.name == HOOK_SEND_MULTIPLE }
 
         assertTrue(snapshot.installAttempted)
         assertTrue(hook.installed)
@@ -409,8 +409,8 @@ private fun readyHealthSnapshot(): ImageBridgeHealthSnapshot =
                 installAttempted = true,
                 hooks =
                     listOf(
-                        DiscoveryHookStatus(name = "bh.c#n", installed = true, invocationCount = 0),
-                        DiscoveryHookStatus(name = "bh.c#p", installed = true, invocationCount = 0),
+                        DiscoveryHookStatus(name = HOOK_SEND_SINGLE, installed = true, invocationCount = 0),
+                        DiscoveryHookStatus(name = HOOK_SEND_MULTIPLE, installed = true, invocationCount = 0),
                     ),
             ),
         restartCount = 0,
