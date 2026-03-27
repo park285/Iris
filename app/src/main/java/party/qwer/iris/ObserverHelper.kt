@@ -10,6 +10,8 @@ class ObserverHelper(
     private val db: ChatLogRepository,
     private val config: ConfigProvider,
     private val memberRepo: MemberRepository? = null,
+    private val snapshotManager: RoomSnapshotManager? = null,
+    private val sseEventBus: SseEventBus? = null,
 ) : Closeable {
     @Volatile
     private var lastLogId: Long = 0
@@ -20,6 +22,8 @@ class ObserverHelper(
     private val senderNameCache = lruMap<Long, String>(256)
     private val roomMetadataCache = lruMap<Long, KakaoDB.RoomMetadata>(256)
     private val recentCommandFingerprints = lruMap<CommandFingerprint, Long>(MAX_COMMAND_FINGERPRINTS)
+    private val previousSnapshots = mutableMapOf<Long, RoomSnapshotData>()
+    private val serverJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true; explicitNulls = false }
 
     @Volatile
     private var initBridgeBackoffUntil: Long = 0L
@@ -43,6 +47,43 @@ class ObserverHelper(
         for (logEntry in newLogs) {
             if (!processLogEntry(logEntry)) {
                 return
+            }
+        }
+
+        if (snapshotManager != null && memberRepo != null && sseEventBus != null) {
+            runSnapshotDiff()
+        }
+    }
+
+    private fun runSnapshotDiff() {
+        val repo = memberRepo ?: return
+        val snapMgr = snapshotManager ?: return
+        val bus = sseEventBus ?: return
+
+        val roomRows = repo.listRooms().rooms
+        for (room in roomRows) {
+            val chatId = room.chatId
+            if (chatId == 0L) continue
+            val currentSnapshot = repo.snapshot(chatId)
+            val previousSnapshot = previousSnapshots[chatId]
+            previousSnapshots[chatId] = currentSnapshot
+
+            if (previousSnapshot == null) continue
+
+            val events = snapMgr.diff(previousSnapshot, currentSnapshot)
+            for (event in events) {
+                val jsonStr = when (event) {
+                    is party.qwer.iris.model.MemberEvent ->
+                        serverJson.encodeToString(party.qwer.iris.model.MemberEvent.serializer(), event)
+                    is party.qwer.iris.model.NicknameChangeEvent ->
+                        serverJson.encodeToString(party.qwer.iris.model.NicknameChangeEvent.serializer(), event)
+                    is party.qwer.iris.model.RoleChangeEvent ->
+                        serverJson.encodeToString(party.qwer.iris.model.RoleChangeEvent.serializer(), event)
+                    is party.qwer.iris.model.ProfileChangeEvent ->
+                        serverJson.encodeToString(party.qwer.iris.model.ProfileChangeEvent.serializer(), event)
+                    else -> continue
+                }
+                bus.emit(jsonStr)
             }
         }
     }
