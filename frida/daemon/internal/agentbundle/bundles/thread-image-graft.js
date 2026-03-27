@@ -1,5 +1,5 @@
 📦
-503921 /thread-image-graft.js
+506875 /thread-image-graft.js
 ✄
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -13834,14 +13834,16 @@ var FingerprintSessionStore = class {
     this.sweepIntervalMs = sweepIntervalMs;
   }
   set(fingerprint, session) {
-    this.maybeCleanup();
-    const existing = this.entries.get(fingerprint) ?? null;
+    const now = Date.now();
+    this.maybeCleanup(now);
+    const existing = this.getLiveEntry(fingerprint, now);
     this.entries.set(fingerprint, mergeSessionMeta(existing, session));
     this.evictOldest();
   }
   get(fingerprint) {
-    this.maybeCleanup();
-    return this.entries.get(fingerprint) ?? null;
+    const now = Date.now();
+    this.maybeCleanup(now);
+    return this.getLiveEntry(fingerprint, now);
   }
   get size() {
     return this.entries.size;
@@ -13858,10 +13860,24 @@ var FingerprintSessionStore = class {
   cleanup(now = Date.now()) {
     this.lastSweepAt = now;
     for (const [fingerprint, session] of this.entries) {
-      if (now - session.createdAt > this.ttlMs) {
+      if (this.isExpired(session, now)) {
         this.entries.delete(fingerprint);
       }
     }
+  }
+  getLiveEntry(fingerprint, now) {
+    const entry = this.entries.get(fingerprint) ?? null;
+    if (entry == null) {
+      return null;
+    }
+    if (!this.isExpired(entry, now)) {
+      return entry;
+    }
+    this.entries.delete(fingerprint);
+    return null;
+  }
+  isExpired(session, now) {
+    return now - session.createdAt > this.ttlMs;
   }
   evictOldest() {
     while (this.entries.size > this.maxSize) {
@@ -13873,6 +13889,146 @@ var FingerprintSessionStore = class {
     }
   }
 };
+
+// shared/chatlog-reflection.ts
+init_node_globals();
+var stringClassCache = /* @__PURE__ */ new WeakMap();
+var attachmentFieldCache = /* @__PURE__ */ new Map();
+var attachmentTextFieldCache = /* @__PURE__ */ new Map();
+function getClassName(klass) {
+  try {
+    const name = klass.getName?.();
+    return typeof name === "string" && name.length > 0 ? name : null;
+  } catch {
+    return null;
+  }
+}
+function getAttachmentField(sendingLog, attachmentFieldName) {
+  const klass = sendingLog.getClass();
+  const className = getClassName(klass);
+  const cacheKey = className == null ? null : `${className}:${attachmentFieldName}`;
+  if (cacheKey != null) {
+    const cached = attachmentFieldCache.get(cacheKey);
+    if (cached != null) {
+      return cached;
+    }
+  }
+  try {
+    const field = klass.getDeclaredField(attachmentFieldName);
+    field.setAccessible(true);
+    if (cacheKey != null) {
+      attachmentFieldCache.set(cacheKey, field);
+    }
+    return field;
+  } catch {
+    return null;
+  }
+}
+function getAttachmentObject(sendingLog, attachmentFieldName) {
+  if (sendingLog == null || typeof sendingLog !== "object" || !("getClass" in sendingLog)) {
+    return null;
+  }
+  const field = getAttachmentField(sendingLog, attachmentFieldName);
+  if (field == null) {
+    return null;
+  }
+  try {
+    return field.get(sendingLog) ?? null;
+  } catch {
+    return null;
+  }
+}
+function resolveStringClass(javaBridge) {
+  const cached = stringClassCache.get(javaBridge);
+  if (cached != null) {
+    return cached;
+  }
+  try {
+    const StringClass = javaBridge.use("java.lang.String");
+    stringClassCache.set(javaBridge, StringClass);
+    return StringClass;
+  } catch {
+    return null;
+  }
+}
+function resolveAttachmentTextField(attachment) {
+  if (attachment == null || typeof attachment !== "object" || !("getClass" in attachment)) {
+    return null;
+  }
+  const attachmentObject = attachment;
+  const attachmentClass = attachmentObject.getClass();
+  const className = getClassName(attachmentClass);
+  if (className != null) {
+    const cached = attachmentTextFieldCache.get(className);
+    if (cached != null) {
+      return cached;
+    }
+  }
+  const serialized = String(attachment);
+  let fallback = null;
+  try {
+    for (const field of attachmentClass.getDeclaredFields?.() ?? []) {
+      field.setAccessible(true);
+      if (field.getType().getName() !== "java.lang.String") {
+        continue;
+      }
+      const value = field.get(attachment);
+      if (value == null) {
+        continue;
+      }
+      const text = String(value);
+      if (text === serialized) {
+        if (className != null) {
+          attachmentTextFieldCache.set(className, field);
+        }
+        return field;
+      }
+      if (fallback == null && text.includes("callingPkg")) {
+        fallback = field;
+      }
+    }
+  } catch {
+    return null;
+  }
+  if (className != null && fallback != null) {
+    attachmentTextFieldCache.set(className, fallback);
+  }
+  return fallback;
+}
+function readChatRoomId(javaBridge, sendingLog) {
+  if (javaBridge == null) {
+    return null;
+  }
+  try {
+    const StringClass = resolveStringClass(javaBridge);
+    if (StringClass == null) {
+      return null;
+    }
+    return StringClass.valueOf(sendingLog.getChatRoomId());
+  } catch {
+    return null;
+  }
+}
+function readAttachmentText(sendingLog, attachmentFieldName) {
+  const attachment = getAttachmentObject(sendingLog, attachmentFieldName);
+  return attachment == null ? null : String(attachment);
+}
+function rewriteAttachmentText(sendingLog, attachmentFieldName, newText) {
+  const attachment = getAttachmentObject(sendingLog, attachmentFieldName);
+  if (attachment == null) {
+    return false;
+  }
+  const payloadField = resolveAttachmentTextField(attachment);
+  if (payloadField == null) {
+    return false;
+  }
+  try {
+    payloadField.set(attachment, newText);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // shared/message.ts
 init_node_globals();
@@ -14329,55 +14485,6 @@ function applySessionExtras(targetIntent, sourceIntent) {
   } catch {
   }
 }
-function readChatRoomId(runtime2, sendingLog) {
-  try {
-    const JavaBridge = runtime2.Java;
-    if (JavaBridge == null) {
-      return null;
-    }
-    return JavaBridge.use("java.lang.String").valueOf(sendingLog.getChatRoomId());
-  } catch {
-    return null;
-  }
-}
-function readAttachmentText(sendingLog) {
-  try {
-    const cls = sendingLog.getClass();
-    const attachmentField = cls.getDeclaredField(KAKAO_IMAGE_GRAFT_TARGET.attachmentField);
-    attachmentField.setAccessible(true);
-    const attachment = attachmentField.get(sendingLog);
-    return attachment == null ? null : String(attachment);
-  } catch {
-    return null;
-  }
-}
-function rewriteAttachmentText(sendingLog, newText) {
-  try {
-    const cls = sendingLog.getClass();
-    const attachmentField = cls.getDeclaredField(KAKAO_IMAGE_GRAFT_TARGET.attachmentField);
-    attachmentField.setAccessible(true);
-    const attachment = attachmentField.get(sendingLog);
-    if (attachment == null) {
-      return false;
-    }
-    const attachmentClass = attachment.getClass();
-    const fields = attachmentClass.getDeclaredFields();
-    for (const field of fields) {
-      field.setAccessible(true);
-      if (field.getType().getName() !== "java.lang.String") {
-        continue;
-      }
-      const value = field.get(attachment);
-      if (value != null && String(value).includes("callingPkg")) {
-        field.set(attachment, newText);
-        return true;
-      }
-    }
-  } catch {
-    return false;
-  }
-  return false;
-}
 function readMessageType(sendingLog) {
   try {
     return String(sendingLog.w0());
@@ -14499,7 +14606,7 @@ function installChatMediaSenderHooks(runtime2, health) {
       const timestampMs = nowMs(runtime2);
       touchThreadImageHook(health, "A", timestampMs);
       if (session != null) {
-        const roomId = readChatRoomId(runtime2, sendingLog);
+        const roomId = readChatRoomId(resolveJavaBridge(runtime2), sendingLog);
         const plan = planImageGraft(session, roomId ?? "");
         if (plan.status === "inject" && plan.injection != null) {
           const injection = plan.injection;
@@ -14545,15 +14652,15 @@ function installSendingLogHook(runtime2, health) {
       const sendingLog = args[1];
       const messageType = readMessageType(sendingLog);
       if (isPhotoMessageType(messageType)) {
-        const attachmentText = readAttachmentText(sendingLog);
+        const attachmentText = readAttachmentText(sendingLog, KAKAO_IMAGE_GRAFT_TARGET.attachmentField);
         const cleanedAttachment = removeCallingPkgFromAttachment(attachmentText);
         if (cleanedAttachment != null && cleanedAttachment !== attachmentText) {
-          if (rewriteAttachmentText(sendingLog, cleanedAttachment)) {
-            debugLog(runtime2, () => `u callingPkg-removed room=${readChatRoomId(runtime2, sendingLog) ?? "none"}`);
+          if (rewriteAttachmentText(sendingLog, KAKAO_IMAGE_GRAFT_TARGET.attachmentField, cleanedAttachment)) {
+            debugLog(runtime2, () => `u callingPkg-removed room=${readChatRoomId(resolveJavaBridge(runtime2), sendingLog) ?? "none"}`);
           }
         }
       }
-      debugLog(runtime2, () => `u observe type=${messageType ?? "none"} room=${readChatRoomId(runtime2, sendingLog) ?? "none"}`);
+      debugLog(runtime2, () => `u observe type=${messageType ?? "none"} room=${readChatRoomId(resolveJavaBridge(runtime2), sendingLog) ?? "none"}`);
       return overload.apply(this, args);
     };
   }
