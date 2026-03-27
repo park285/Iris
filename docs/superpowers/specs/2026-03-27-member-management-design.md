@@ -37,6 +37,7 @@ DB 기반 조회 API, Bridge reflection 탐색, 이벤트 감지, 활동 분석,
 - 모든 API 응답은 `KakaoDecrypt.decrypt()` 경유 복호화된 평문만 반환
 - 기존 인증 동일 (`X-Bot-Token` 헤더)
 - 기존 폴링 사이클(`pollChatLogsAfter()`) 재사용, 별도 폴링 루프 없음
+- 에러 응답 형식 통일: `{"error": "<message>", "code": "<ERROR_CODE>"}` — 모든 4xx/5xx 응답에 적용
 
 ## Phase 1 — API Endpoints (DB-based)
 
@@ -87,6 +88,8 @@ Data sources: `chat_rooms` JOIN `open_link` JOIN `open_profile`
 
 `roleCode` mapping: `1→"owner"`, `2→"member"`, `4→"admin"`, `8→"bot"`
 
+현재 최대 방 인원 97명 수준이므로 전량 반환. pagination 미적용은 의도적 — 오픈채팅 인원 상한(최대 1,500명)에서도 단일 응답이 허용 가능한 크기이므로 YAGNI 적용. 향후 필요 시 `?limit=&offset=` 추가 가능.
+
 Data sources: `open_chat_member` WHERE `link_id` matches, nicknames decrypted with botId
 
 ### `GET /rooms/{chatId}/info`
@@ -126,6 +129,7 @@ val senderRole: Int? = null  // 1=owner, 2=member, 4=admin, 8=bot, null=unknown
 ```
 
 메시지 수신 시 `open_chat_member` 에서 sender의 `link_member_type` 조회.
+조회 실패 시(sender가 `open_chat_member`에 없는 경우, 예: 일반 그룹채팅, DM 등) `senderRole = null`로 fallback.
 
 ## Phase 2 — Bridge Reflection Scan
 
@@ -165,7 +169,7 @@ ChatRoomIntrospector.scan()
 
 - 필드 읽기만, setter/메서드 호출 없음
 - 진단 엔드포인트 호출 시에만 스캔 (자동 실행 안 함)
-- 중첩 depth=1 제한
+- 중첩 depth=1 제한 — 순환 참조 방지 및 KakaoTalk 프로세스 내 reflection 부하 최소화 목적
 
 ### File Location
 
@@ -202,6 +206,8 @@ object ChatRoomFieldMapping {
 ```
 
 Phase 2 discovery 후 유의미한 필드를 등록. 등록된 필드만 `runtime` 블록에 포함.
+
+난독화 이름은 KakaoTalk 앱 업데이트 시 변경될 수 있으므로, 매핑된 필드가 실제 객체에서 발견되지 않으면 경고 로그를 출력하고 해당 필드를 `runtime` 블록에서 제외한다. `/diagnostics/chatroom-fields` 엔드포인트로 새 필드명을 확인한 뒤 매핑을 갱신하는 절차를 따른다.
 
 ### Bridge ↔ App Communication
 
@@ -318,6 +324,11 @@ Design principles (per h2c optimization memory):
 
 Implementation: Ktor `respondSse` / `respondBytesWriter` with `text/event-stream` content type.
 
+SSE reconnection policy:
+- 각 이벤트에 `id` 필드 포함 (monotonic counter)
+- 클라이언트 재연결 시 `Last-Event-ID` 헤더 지원 — 최근 N개(기본 100) 이벤트 인메모리 링버퍼에서 replay
+- 링버퍼 범위를 초과한 이벤트는 복구 불가 — observation path이므로 replay 보장 없음, 확실한 상태는 REST API 조회로 확인
+
 ### Known Limitations
 
 | Limitation | Reason |
@@ -368,6 +379,8 @@ Query params: `period` (7d/30d/all), `limit` (top N), `minMessages` (filter)
 
 Data source: `chat_logs` GROUP BY `user_id`, filtered by `chat_id` and `created_at` range.
 
+Performance: `chat_logs` 테이블의 `chat_id` 인덱스를 활용. `period` 파라미터로 스캔 범위를 제한하고, 쿼리에 row limit(기본 50,000)을 적용하여 대용량 방에서도 DB 부하를 제어한다.
+
 ## Phase 6 — TUI Tool (`iris-ctl`)
 
 ### Stack
@@ -415,14 +428,16 @@ fn main() -> std::io::Result<()> {
 ### Configuration
 
 ```toml
-# ~/.config/iris-ctl/config.toml
+# ~/.config/iris-ctl/config.toml (file permission: 600)
 [server]
 url = "http://100.100.1.4:PORT"
-token = "X-Bot-Token-value"
+token = "X-Bot-Token-value"  # 환경변수 IRIS_TOKEN으로 오버라이드 가능
 
 [ui]
 poll_interval_secs = 5
 ```
+
+Token resolution order: `IRIS_TOKEN` env var → config.toml `token` field. Config 파일에는 `chmod 600` 권한을 요구하며, 그 외 권한이면 경고 출력.
 
 ### Build & Distribution
 
