@@ -1,8 +1,6 @@
 package party.qwer.iris
 
 import io.ktor.http.HttpStatusCode
-import kotlinx.serialization.json.JsonPrimitive
-import party.qwer.iris.model.ReplyRequest
 import party.qwer.iris.model.ReplyType
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -10,32 +8,12 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class ReplyAdmissionTest {
-    private val threadReady =
-        GraftReadinessChecker {
-            GraftReadinessSnapshot(
-                ready = true,
-                state = GraftDaemonState.READY,
-                checkedAtMs = 1711280000L,
-            )
-        }
-
-    private val threadBlocked =
-        GraftReadinessChecker {
-            GraftReadinessSnapshot(
-                ready = false,
-                state = GraftDaemonState.BLOCKED,
-                checkedAtMs = 1711280000L,
-                detail = "hook targets missing",
-            )
-        }
-
     @Test
     fun `maps reply admission statuses to expected http codes`() {
         assertEquals(HttpStatusCode.Accepted, replyAdmissionHttpStatus(ReplyAdmissionStatus.ACCEPTED))
         assertEquals(HttpStatusCode.TooManyRequests, replyAdmissionHttpStatus(ReplyAdmissionStatus.QUEUE_FULL))
         assertEquals(HttpStatusCode.ServiceUnavailable, replyAdmissionHttpStatus(ReplyAdmissionStatus.SHUTDOWN))
         assertEquals(HttpStatusCode.BadRequest, replyAdmissionHttpStatus(ReplyAdmissionStatus.INVALID_PAYLOAD))
-        assertEquals(HttpStatusCode.ServiceUnavailable, replyAdmissionHttpStatus(ReplyAdmissionStatus.GRAFT_NOT_READY))
     }
 
     @Test
@@ -124,86 +102,6 @@ class ReplyAdmissionTest {
             }
 
         assertEquals("reply-image threadScope must be 2 or 3", error.message)
-    }
-
-    @Test
-    fun `rejects threaded image replies when graft daemon is not ready`() {
-        val sender = RecordingMessageSender()
-
-        val result =
-            admitReply(
-                replyRequest =
-                    ReplyRequest(
-                        type = ReplyType.IMAGE,
-                        room = "123",
-                        data = JsonPrimitive("base64"),
-                        threadId = "456",
-                        threadScope = 2,
-                    ),
-                roomId = 123L,
-                notificationReferer = "Iris",
-                threadId = 456L,
-                threadScope = 2,
-                messageSender = sender,
-                graftReadinessChecker = threadBlocked,
-            )
-
-        assertEquals(ReplyAdmissionStatus.GRAFT_NOT_READY, result.status)
-        assertEquals(0, sender.photoCalls)
-    }
-
-    @Test
-    fun `allows plain image replies even when graft daemon is blocked`() {
-        val sender = RecordingMessageSender()
-
-        val result =
-            admitReply(
-                replyRequest =
-                    ReplyRequest(
-                        type = ReplyType.IMAGE,
-                        room = "123",
-                        data = JsonPrimitive("base64"),
-                    ),
-                roomId = 123L,
-                notificationReferer = "Iris",
-                threadId = null,
-                threadScope = null,
-                messageSender = sender,
-                graftReadinessChecker = threadBlocked,
-            )
-
-        assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
-        assertEquals(1, sender.photoCalls)
-    }
-
-    @Test
-    fun `allows threaded image replies when graft daemon is ready`() {
-        val sender = RecordingMessageSender()
-
-        val result =
-            admitReply(
-                replyRequest =
-                    ReplyRequest(
-                        type = ReplyType.IMAGE_MULTIPLE,
-                        room = "123",
-                        data =
-                            kotlinx.serialization.json.buildJsonArray {
-                                add(JsonPrimitive("a"))
-                                add(JsonPrimitive("b"))
-                            },
-                        threadId = "456",
-                        threadScope = 2,
-                    ),
-                roomId = 123L,
-                notificationReferer = "Iris",
-                threadId = 456L,
-                threadScope = 2,
-                messageSender = sender,
-                graftReadinessChecker = threadReady,
-            )
-
-        assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
-        assertEquals(1, sender.multiPhotoCalls)
     }
 }
 

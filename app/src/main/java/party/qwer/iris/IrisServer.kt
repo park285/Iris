@@ -49,7 +49,6 @@ class IrisServer(
     private val configManager: ConfigManager,
     private val notificationReferer: String,
     private val messageSender: MessageSender,
-    private val graftReadinessChecker: GraftReadinessChecker,
 ) {
     private val serverJson =
         Json {
@@ -280,7 +279,6 @@ class IrisServer(
                 threadId,
                 threadScope,
                 messageSender,
-                graftReadinessChecker,
             )
         if (admission.status != ReplyAdmissionStatus.ACCEPTED) {
             requestRejected(

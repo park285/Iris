@@ -11,7 +11,6 @@ enum class ReplyAdmissionStatus {
     QUEUE_FULL,
     SHUTDOWN,
     INVALID_PAYLOAD,
-    GRAFT_NOT_READY,
 }
 
 data class ReplyAdmissionResult(
@@ -25,7 +24,6 @@ internal fun replyAdmissionHttpStatus(status: ReplyAdmissionStatus): HttpStatusC
         ReplyAdmissionStatus.QUEUE_FULL -> HttpStatusCode.TooManyRequests
         ReplyAdmissionStatus.SHUTDOWN -> HttpStatusCode.ServiceUnavailable
         ReplyAdmissionStatus.INVALID_PAYLOAD -> HttpStatusCode.BadRequest
-        ReplyAdmissionStatus.GRAFT_NOT_READY -> HttpStatusCode.ServiceUnavailable
     }
 
 internal fun supportsThreadReply(replyType: ReplyType): Boolean = replyType == ReplyType.TEXT || replyType == ReplyType.IMAGE || replyType == ReplyType.IMAGE_MULTIPLE
@@ -37,22 +35,7 @@ internal fun admitReply(
     threadId: Long?,
     threadScope: Int?,
     messageSender: MessageSender,
-    graftReadinessChecker: GraftReadinessChecker,
-): ReplyAdmissionResult =
-    when {
-        requiresThreadedImageGraft(replyRequest.type, threadId, threadScope) -> {
-            val snapshot = graftReadinessChecker.current()
-            if (!snapshot.ready) {
-                ReplyAdmissionResult(
-                    status = ReplyAdmissionStatus.GRAFT_NOT_READY,
-                    message = snapshot.detail ?: "threaded image graft not ready (${snapshot.state.name.lowercase()})",
-                )
-            } else {
-                dispatchReply(replyRequest, roomId, notificationReferer, threadId, threadScope, messageSender)
-            }
-        }
-        else -> dispatchReply(replyRequest, roomId, notificationReferer, threadId, threadScope, messageSender)
-    }
+): ReplyAdmissionResult = dispatchReply(replyRequest, roomId, notificationReferer, threadId, threadScope, messageSender)
 
 private fun dispatchReply(
     replyRequest: ReplyRequest,
