@@ -16,7 +16,9 @@ import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondBytesWriter
 import io.ktor.server.response.respondText
+import io.ktor.utils.io.writeStringUtf8
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
@@ -53,6 +55,8 @@ internal class IrisServer(
     private val messageSender: MessageSender,
     private val bridgeHealthProvider: (() -> ImageBridgeHealthResult)? = null,
     private val replyStatusProvider: ((String) -> ReplyStatusSnapshot?)? = null,
+    private val memberRepo: MemberRepository? = null,
+    private val sseEventBus: SseEventBus? = null,
 ) {
     private val serverJson =
         Json {
@@ -154,6 +158,7 @@ internal class IrisServer(
             configureReplyMarkdownRoute()
             configureReplyStatusRoute()
             configureQueryRoute()
+            configureMemberRoutes()
         }
     }
 
@@ -408,6 +413,76 @@ internal class IrisServer(
             room = replyRequest.room,
             type = replyRequest.type,
         )
+    }
+
+    private fun Route.configureMemberRoutes() {
+        val repo = memberRepo ?: return
+        val bus = sseEventBus
+
+        get("/rooms") {
+            if (!requireBotToken(call)) return@get
+            call.respond(repo.listRooms())
+        }
+
+        get("/rooms/{chatId}/members") {
+            if (!requireBotToken(call)) return@get
+            val chatId = call.parameters["chatId"]?.toLongOrNull()
+                ?: invalidRequest("chatId must be a number")
+            call.respond(repo.listMembers(chatId))
+        }
+
+        get("/rooms/{chatId}/info") {
+            if (!requireBotToken(call)) return@get
+            val chatId = call.parameters["chatId"]?.toLongOrNull()
+                ?: invalidRequest("chatId must be a number")
+            call.respond(repo.roomInfo(chatId))
+        }
+
+        get("/rooms/{chatId}/stats") {
+            if (!requireBotToken(call)) return@get
+            val chatId = call.parameters["chatId"]?.toLongOrNull()
+                ?: invalidRequest("chatId must be a number")
+            val period = call.request.queryParameters["period"]
+            val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 20
+            call.respond(repo.roomStats(chatId, period, limit))
+        }
+
+        get("/rooms/{chatId}/members/{userId}/activity") {
+            if (!requireBotToken(call)) return@get
+            val chatId = call.parameters["chatId"]?.toLongOrNull()
+                ?: invalidRequest("chatId must be a number")
+            val userId = call.parameters["userId"]?.toLongOrNull()
+                ?: invalidRequest("userId must be a number")
+            val period = call.request.queryParameters["period"]
+            call.respond(repo.memberActivity(chatId, userId, period))
+        }
+
+        if (bus != null) {
+            get("/events/stream") {
+                if (!requireBotToken(call)) return@get
+                val lastEventId = call.request.headers["Last-Event-ID"]?.toLongOrNull() ?: 0L
+                call.respondBytesWriter(contentType = ContentType.Text.EventStream) {
+                    // Replay buffered events
+                    for ((id, data) in bus.replayFrom(lastEventId)) {
+                        writeStringUtf8("id: $id\ndata: $data\n\n")
+                        flush()
+                    }
+                    // Subscribe to live events
+                    val channel = kotlinx.coroutines.channels.Channel<Pair<Long, String>>(64)
+                    val listener: (Long, String) -> Unit = { id, data -> channel.trySend(id to data) }
+                    bus.listeners.add(listener)
+                    try {
+                        for ((id, data) in channel) {
+                            writeStringUtf8("id: $id\ndata: $data\n\n")
+                            flush()
+                        }
+                    } finally {
+                        bus.listeners.remove(listener)
+                        channel.close()
+                    }
+                }
+            }
+        }
     }
 
     private suspend fun requireBotToken(call: ApplicationCall): Boolean {
