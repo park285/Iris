@@ -29,6 +29,8 @@ local.properties
 .tasklists/
 .cursor/
 .aider*
+CLAUDE.md
+AGENTS.md
 
 # Serena MCP
 .serena/
