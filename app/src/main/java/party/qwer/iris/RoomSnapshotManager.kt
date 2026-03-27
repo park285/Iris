@@ -1,0 +1,84 @@
+package party.qwer.iris
+
+import party.qwer.iris.model.MemberEvent
+import party.qwer.iris.model.NicknameChangeEvent
+import party.qwer.iris.model.ProfileChangeEvent
+import party.qwer.iris.model.RoleChangeEvent
+import party.qwer.iris.model.roleCodeToName
+
+class RoomSnapshotManager {
+
+    fun diff(prev: RoomSnapshotData, curr: RoomSnapshotData): List<Any> {
+        val events = mutableListOf<Any>()
+        val now = System.currentTimeMillis() / 1000
+
+        // Join events
+        val joined = curr.memberIds - prev.memberIds
+        for (uid in joined) {
+            events.add(
+                MemberEvent(
+                    event = "join", chatId = curr.chatId, linkId = curr.linkId,
+                    userId = uid, nickname = curr.nicknames[uid],
+                    estimated = false, timestamp = now,
+                ),
+            )
+        }
+
+        // Leave / kick events
+        val left = prev.memberIds - curr.memberIds
+        for (uid in left) {
+            val isKicked = uid in curr.blindedIds && uid !in prev.blindedIds
+            events.add(
+                MemberEvent(
+                    event = if (isKicked) "kick" else "leave",
+                    chatId = curr.chatId, linkId = curr.linkId,
+                    userId = uid, nickname = prev.nicknames[uid],
+                    estimated = !isKicked, timestamp = now,
+                ),
+            )
+        }
+
+        // Nickname changes (only for members still present)
+        val commonMembers = prev.memberIds.intersect(curr.memberIds)
+        for (uid in commonMembers) {
+            val oldNick = prev.nicknames[uid]
+            val newNick = curr.nicknames[uid]
+            if (oldNick != null && newNick != null && oldNick != newNick) {
+                events.add(
+                    NicknameChangeEvent(
+                        chatId = curr.chatId, linkId = curr.linkId,
+                        userId = uid, oldNickname = oldNick, newNickname = newNick,
+                        timestamp = now,
+                    ),
+                )
+            }
+
+            // Role changes
+            val oldRole = prev.roles[uid]
+            val newRole = curr.roles[uid]
+            if (oldRole != null && newRole != null && oldRole != newRole) {
+                events.add(
+                    RoleChangeEvent(
+                        chatId = curr.chatId, linkId = curr.linkId,
+                        userId = uid, oldRole = roleCodeToName(oldRole), newRole = roleCodeToName(newRole),
+                        timestamp = now,
+                    ),
+                )
+            }
+
+            // Profile image changes
+            val oldImg = prev.profileImages[uid]
+            val newImg = curr.profileImages[uid]
+            if (oldImg != null && newImg != null && oldImg != newImg) {
+                events.add(
+                    ProfileChangeEvent(
+                        chatId = curr.chatId, linkId = curr.linkId,
+                        userId = uid, timestamp = now,
+                    ),
+                )
+            }
+        }
+
+        return events
+    }
+}
