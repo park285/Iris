@@ -72,6 +72,7 @@ class Main {
                             replyStatusProvider = replyService::replyStatusOrNull,
                             memberRepo = memberRepo,
                             sseEventBus = sseEventBus,
+                            // chatRoomIntrospectProvider requires bridge IPC — wire when ImageBridgeServer exposes introspection.
                         ).also {
                             it.startServer()
                             IrisLogger.info("Iris Server started")

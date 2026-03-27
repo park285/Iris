@@ -2,6 +2,7 @@ package party.qwer.iris
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class MemberRepositoryTest {
     @Test
@@ -59,5 +60,41 @@ class MemberRepositoryTest {
         assertEquals(30 * 86400L, repo.parsePeriodSeconds("30d"))
         assertEquals(null, repo.parsePeriodSeconds("all"))
         assertEquals(7 * 86400L, repo.parsePeriodSeconds("invalid"))
+    }
+
+    @Test
+    fun `roomStats keeps totals before top member limit`() {
+        val chatId = 100L
+        val repo =
+            MemberRepository(
+                executeQuery = { sqlQuery, bindArgs, _ ->
+                    when {
+                        sqlQuery.contains("FROM chat_logs WHERE chat_id = ? AND created_at >= ?") ->
+                            listOf(
+                                mapOf("user_id" to "1", "type" to "0", "cnt" to "10", "last_active" to "1000"),
+                                mapOf("user_id" to "2", "type" to "0", "cnt" to "7", "last_active" to "900"),
+                                mapOf("user_id" to "3", "type" to "0", "cnt" to "3", "last_active" to "800"),
+                            )
+                        sqlQuery == "SELECT nickname, enc FROM db2.open_chat_member WHERE user_id = ? LIMIT 1" ->
+                            listOf(
+                                mapOf(
+                                    "nickname" to "user-${bindArgs?.get(0)}",
+                                    "enc" to "0",
+                                ),
+                            )
+                        else -> emptyList()
+                    }
+                },
+                decrypt = { _, raw, _ -> raw },
+                botId = 1L,
+            )
+
+        val stats = repo.roomStats(chatId = chatId, period = "all", limit = 2)
+
+        assertEquals(20, stats.totalMessages)
+        assertEquals(3, stats.activeMembers)
+        assertEquals(2, stats.topMembers.size)
+        assertEquals(listOf(1L, 2L), stats.topMembers.map { it.userId })
+        assertTrue(stats.topMembers.all { it.userId != 3L || it.messageCount == 3 })
     }
 }

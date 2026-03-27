@@ -40,17 +40,18 @@ class ObserverHelper(
         if (lastLogId == 0L) {
             lastLogId = db.latestLogId()
             IrisLogger.debug("Initial lastLogId: $lastLogId")
+            if (snapshotManager != null && memberRepo != null && sseEventBus != null) {
+                runSnapshotDiff()
+            }
             return
         }
 
         val newLogs = db.pollChatLogsAfter(lastLogId)
-        if (newLogs.isEmpty()) {
-            return
-        }
-
-        for (logEntry in newLogs) {
-            if (!processLogEntry(logEntry)) {
-                return
+        if (newLogs.isNotEmpty()) {
+            for (logEntry in newLogs) {
+                if (!processLogEntry(logEntry)) {
+                    break
+                }
             }
         }
 

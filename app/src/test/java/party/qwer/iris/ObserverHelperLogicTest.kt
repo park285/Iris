@@ -82,7 +82,7 @@ class ObserverHelperLogicTest {
     }
 
     @Test
-    fun `snapshot diff emits member events after prior snapshot exists`() {
+    fun `snapshot diff primes on first run and emits during quiet polling cycle`() {
         val roomList =
             party.qwer.iris.model.RoomListResponse(
                 rooms =
@@ -120,44 +120,13 @@ class ObserverHelperLogicTest {
         helper.checkChange()
         val firstReplay = bus.replayFrom(0)
 
-        chatLogRepo.latestLogId = 2L
-        chatLogRepo.polledLogs =
-            listOf(
-                KakaoDB.ChatLogEntry(
-                    id = 2L,
-                    chatId = 100L,
-                    userId = 9L,
-                    message = "not a command",
-                    metadata = "{\"enc\":0,\"origin\":\"CHATLOG\"}",
-                    createdAt = "2026-03-27T00:00:00Z",
-                    messageType = "0",
-                ),
-            )
-
+        chatLogRepo.polledLogs = emptyList()
         helper.checkChange()
         val secondReplay = bus.replayFrom(0)
 
-        chatLogRepo.latestLogId = 3L
-        chatLogRepo.polledLogs =
-            listOf(
-                KakaoDB.ChatLogEntry(
-                    id = 3L,
-                    chatId = 100L,
-                    userId = 9L,
-                    message = "still not a command",
-                    metadata = "{\"enc\":0,\"origin\":\"CHATLOG\"}",
-                    createdAt = "2026-03-27T00:00:01Z",
-                    messageType = "0",
-                ),
-            )
-
-        helper.checkChange()
-        val thirdReplay = bus.replayFrom(0)
-
         assertTrue(firstReplay.isEmpty())
-        assertTrue(secondReplay.isEmpty())
-        assertEquals(1, thirdReplay.size)
-        val eventJson = json.parseToJsonElement(thirdReplay.single().second).jsonObject
+        assertEquals(1, secondReplay.size)
+        val eventJson = json.parseToJsonElement(secondReplay.single().second).jsonObject
         assertEquals("join", eventJson.getValue("event").jsonPrimitive.content)
         assertEquals("2", eventJson.getValue("userId").jsonPrimitive.content)
 

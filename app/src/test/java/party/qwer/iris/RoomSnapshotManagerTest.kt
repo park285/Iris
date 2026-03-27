@@ -2,9 +2,11 @@ package party.qwer.iris
 
 import party.qwer.iris.model.MemberEvent
 import party.qwer.iris.model.NicknameChangeEvent
+import party.qwer.iris.model.ProfileChangeEvent
 import party.qwer.iris.model.RoleChangeEvent
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class RoomSnapshotManagerTest {
@@ -82,6 +84,18 @@ class RoomSnapshotManagerTest {
         val event = events[0] as RoleChangeEvent
         assertEquals("member", event.oldRole)
         assertEquals("admin", event.newRole)
+    }
+
+    @Test
+    fun `detects profile image transition from null to value`() {
+        val manager = RoomSnapshotManager()
+        val prev = snap(memberIds = setOf(1L), profileImages = emptyMap())
+        val curr = snap(memberIds = setOf(1L), profileImages = mapOf(1L to "https://example.com/p.png"))
+
+        val events = manager.diff(prev, curr)
+
+        assertEquals(1, events.size)
+        assertIs<ProfileChangeEvent>(events[0])
     }
 
     @Test

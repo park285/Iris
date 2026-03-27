@@ -200,14 +200,17 @@ class MemberRepository(
                     }
                     MemberStats(userId, resolveNickname(userId), total, lastActive, types)
                 }.sortedByDescending { it.messageCount }
-                .take(limit)
+
+        val totalMessages = memberStats.sumOf { it.messageCount }
+        val activeMembers = memberStats.size
+        val topMembers = memberStats.take(limit)
 
         return StatsResponse(
             chatId = chatId,
             period = PeriodRange(from, now),
-            totalMessages = memberStats.sumOf { it.messageCount },
-            activeMembers = memberStats.size,
-            topMembers = memberStats,
+            totalMessages = totalMessages,
+            activeMembers = activeMembers,
+            topMembers = topMembers,
         )
     }
 

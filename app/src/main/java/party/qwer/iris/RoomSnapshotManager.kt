@@ -84,7 +84,7 @@ class RoomSnapshotManager {
             // Profile image changes
             val oldImg = prev.profileImages[uid]
             val newImg = curr.profileImages[uid]
-            if (oldImg != null && newImg != null && oldImg != newImg) {
+            if (oldImg != newImg) {
                 events.add(
                     ProfileChangeEvent(
                         chatId = curr.chatId,
