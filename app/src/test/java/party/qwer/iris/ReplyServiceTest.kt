@@ -342,16 +342,6 @@ class ReplyServiceTest {
     }
 
     @Test
-    fun `threaded native image reply is routed through share intent path`() {
-        val service = ReplyService(testConfig)
-
-        assertTrue(service.shouldRouteThreadImageViaShareIntentForTest(3805486995143352321L, 3))
-        assertTrue(service.shouldRouteThreadImageViaShareIntentForTest(3805486995143352321L, 2))
-        assertFalse(service.shouldRouteThreadImageViaShareIntentForTest(3805486995143352321L, 1))
-        assertFalse(service.shouldRouteThreadImageViaShareIntentForTest(null, null))
-    }
-
-    @Test
     fun `sendNativePhoto rejects payload with invalid trailing base64 data`() {
         val service = ReplyService(testConfig)
         service.start()

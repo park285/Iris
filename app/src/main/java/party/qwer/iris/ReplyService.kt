@@ -295,23 +295,17 @@ internal class ReplyService(
         threadId: Long?,
         threadScope: Int?,
         requestId: String?,
-    ): ReplyAdmissionResult {
-        val useThreadImageShareIntent = shouldRouteThreadImageViaShareIntent(threadId, threadScope)
-        return enqueueImages(
+    ): ReplyAdmissionResult =
+        enqueueImages(
             room = room,
             base64ImageDataStrings = base64ImageDataStrings,
             threadId = threadId,
-            lane = if (useThreadImageShareIntent) ReplySendLane.SHARE_INTENT else ReplySendLane.NATIVE_IMAGE,
+            lane = ReplySendLane.NATIVE_IMAGE,
             requestId = requestId,
             dispatch = { preparedImages ->
-                if (useThreadImageShareIntent) {
-                    sendPreparedImages(preparedImages, threadId, threadScope)
-                } else {
-                    sendPreparedImagesNative(preparedImages, threadId, threadScope, requestId)
-                }
+                sendPreparedImagesNative(preparedImages, threadId, threadScope, requestId)
             },
         )
-    }
 
     private fun enqueueImages(
         room: Long,
@@ -628,16 +622,6 @@ internal class ReplyService(
     private fun mutexFor(lane: ReplySendLane): Mutex = laneMutexes.getValue(lane)
 
     private fun isDecodableBase64Payload(value: String): Boolean = runCatching { decodeBase64Image(value) }.isSuccess
-
-    internal fun shouldRouteThreadImageViaShareIntentForTest(
-        threadId: Long?,
-        threadScope: Int?,
-    ): Boolean = shouldRouteThreadImageViaShareIntent(threadId, threadScope)
-
-    private fun shouldRouteThreadImageViaShareIntent(
-        threadId: Long?,
-        threadScope: Int?,
-    ): Boolean = threadId != null && threadScope != null && threadScope >= 2
 
     internal fun replyStatusOrNull(requestId: String): ReplyStatusSnapshot? = statusStore.get(requestId)
 }
