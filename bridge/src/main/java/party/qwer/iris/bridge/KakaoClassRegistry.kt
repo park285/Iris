@@ -177,8 +177,15 @@ internal class KakaoClassRegistry(
                         m.returnType != masterDb &&
                         m.returnType != Any::class.java &&
                         m.returnType.methods.any { daoMethod ->
-                            daoMethod.parameterTypes.contentEquals(arrayOf(Long::class.javaPrimitiveType)) &&
-                                daoMethod.returnType != Void.TYPE
+                            !Modifier.isStatic(daoMethod.modifiers) &&
+                                daoMethod.parameterTypes.contentEquals(arrayOf(Long::class.javaPrimitiveType)) &&
+                                !daoMethod.returnType.isPrimitive &&
+                                daoMethod.returnType != Void.TYPE &&
+                                daoMethod.returnType != Any::class.java &&
+                                daoMethod.returnType != java.lang.Integer::class.java &&
+                                daoMethod.returnType != java.lang.Long::class.java &&
+                                daoMethod.returnType != java.lang.Boolean::class.java &&
+                                daoMethod.returnType != String::class.java
                         }
                 } ?: error(
                     "MasterDatabase roomDao accessor not found: expected 0-param method returning DAO on ${masterDb.name}",
@@ -189,8 +196,14 @@ internal class KakaoClassRegistry(
                 daoClass.methods.firstOrNull { m ->
                     !Modifier.isStatic(m.modifiers) &&
                         m.parameterTypes.contentEquals(arrayOf(Long::class.javaPrimitiveType)) &&
+                        !m.returnType.isPrimitive &&
                         m.returnType != Void.TYPE &&
-                        m.returnType != daoClass
+                        m.returnType != daoClass &&
+                        m.returnType != Any::class.java &&
+                        m.returnType != java.lang.Integer::class.java &&
+                        m.returnType != java.lang.Long::class.java &&
+                        m.returnType != java.lang.Boolean::class.java &&
+                        m.returnType != String::class.java
                 } ?: error(
                     "RoomDao entity lookup not found: expected (long)->entity on ${daoClass.name}",
                 )
