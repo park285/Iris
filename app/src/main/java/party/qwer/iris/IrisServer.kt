@@ -597,15 +597,6 @@ internal class IrisServer(
                 requiredHooksReady
         }
 
-        private fun mapApiErrorCode(status: HttpStatusCode): String =
-            when (status) {
-                HttpStatusCode.BadRequest -> "INVALID_REQUEST"
-                HttpStatusCode.NotFound -> "NOT_FOUND"
-                HttpStatusCode.Unauthorized -> "UNAUTHORIZED"
-                HttpStatusCode.Forbidden -> "FORBIDDEN"
-                else -> "INTERNAL_ERROR"
-            }
-
         private fun initialSseFrames(replay: List<Pair<Long, String>>): String =
             buildString {
                 append(": connected\n\n")
@@ -741,11 +732,6 @@ internal data class RequestBodyReadResult(
     val sha256Hex: String,
 )
 
-internal class ApiRequestException(
-    override val message: String,
-    val status: HttpStatusCode = HttpStatusCode.BadRequest,
-) : RuntimeException(message)
-
 internal fun validateReplyThreadScope(
     replyType: ReplyType,
     threadId: Long?,
@@ -788,15 +774,6 @@ internal fun validateReplyImageThreadScope(
     // thread-only 기본 동작이 필요하면 caller가 2를 명시해야 한다.
     return replyImageScope
 }
-
-private fun invalidRequest(message: String): Nothing = throw ApiRequestException(message)
-
-private fun internalServerFailure(message: String): Nothing = throw ApiRequestException(message, HttpStatusCode.InternalServerError)
-
-private fun requestRejected(
-    message: String,
-    status: HttpStatusCode,
-): Nothing = throw ApiRequestException(message, status)
 
 private fun requireQueryText(query: String) {
     if (query.isBlank()) {
