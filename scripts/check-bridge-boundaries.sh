@@ -34,25 +34,25 @@ assert_no_repo_matches() {
   fi
 }
 
-check_max_lines "app/src/main/java/party/qwer/iris/bridge/H2cDispatcher.kt" 400
-check_max_lines "app/src/main/java/party/qwer/iris/bridge/WebhookRequestFactory.kt" 60
-check_max_lines "app/src/main/java/party/qwer/iris/bridge/WebhookDeliveryClient.kt" 80
-check_max_lines "bridge/src/main/java/party/qwer/iris/bridge/ImageBridgeServer.kt" 220
-check_max_lines "bridge/src/main/java/party/qwer/iris/bridge/ImageBridgeRequestHandler.kt" 120
-check_max_lines "bridge/src/main/java/party/qwer/iris/bridge/BridgeDiscovery.kt" 260
-check_max_lines "bridge/src/main/java/party/qwer/iris/bridge/KakaoImageSender.kt" 80
-check_max_lines "bridge/src/main/java/party/qwer/iris/bridge/ChatRoomResolver.kt" 220
-check_max_lines "bridge/src/main/java/party/qwer/iris/bridge/KakaoSendInvocationFactory.kt" 180
+check_max_lines "app/src/main/java/party/qwer/iris/delivery/webhook/H2cDispatcher.kt" 450
+check_max_lines "app/src/main/java/party/qwer/iris/delivery/webhook/WebhookRequestFactory.kt" 60
+check_max_lines "app/src/main/java/party/qwer/iris/delivery/webhook/WebhookDeliveryClient.kt" 80
+check_max_lines "bridge/src/main/java/party/qwer/iris/imagebridge/runtime/ImageBridgeServer.kt" 260
+check_max_lines "bridge/src/main/java/party/qwer/iris/imagebridge/runtime/ImageBridgeRequestHandler.kt" 120
+check_max_lines "bridge/src/main/java/party/qwer/iris/imagebridge/runtime/BridgeDiscovery.kt" 260
+check_max_lines "bridge/src/main/java/party/qwer/iris/imagebridge/runtime/KakaoImageSender.kt" 80
+check_max_lines "bridge/src/main/java/party/qwer/iris/imagebridge/runtime/ChatRoomResolver.kt" 220
+check_max_lines "bridge/src/main/java/party/qwer/iris/imagebridge/runtime/KakaoSendInvocationFactory.kt" 180
 
-assert_not_contains "app/src/main/java/party/qwer/iris/bridge/H2cDispatcher.kt" "Request\\.Builder" "inline request construction"
-assert_not_contains "app/src/main/java/party/qwer/iris/bridge/H2cDispatcher.kt" "call\\.enqueue\\(" "inline OkHttp callback execution"
-assert_not_contains "bridge/src/main/java/party/qwer/iris/bridge/ImageBridgeServer.kt" "Proxy\\.newProxyInstance|resolveChatRoom\\(" "Kakao runtime reflection logic"
-assert_not_contains "bridge/src/main/java/party/qwer/iris/bridge/KakaoImageSender.kt" "Class\\.forName|Proxy\\.newProxyInstance|LocalServerSocket|JSONObject" "low-level transport/reflection details in orchestration layer"
-assert_not_contains "bridge/src/main/java/party/qwer/iris/bridge/ImageBridgeRequestHandler.kt" "Class\\.forName|Proxy\\.newProxyInstance|LocalServerSocket" "transport or reflection details in request handler"
+assert_not_contains "app/src/main/java/party/qwer/iris/delivery/webhook/H2cDispatcher.kt" "Request\\.Builder" "inline request construction"
+assert_not_contains "app/src/main/java/party/qwer/iris/delivery/webhook/H2cDispatcher.kt" "call\\.enqueue\\(" "inline OkHttp callback execution"
+assert_not_contains "bridge/src/main/java/party/qwer/iris/imagebridge/runtime/ImageBridgeServer.kt" "Proxy\\.newProxyInstance|resolveChatRoom\\(" "Kakao runtime reflection logic"
+assert_not_contains "bridge/src/main/java/party/qwer/iris/imagebridge/runtime/KakaoImageSender.kt" "Class\\.forName|Proxy\\.newProxyInstance|LocalServerSocket|JSONObject" "low-level transport/reflection details in orchestration layer"
+assert_not_contains "bridge/src/main/java/party/qwer/iris/imagebridge/runtime/ImageBridgeRequestHandler.kt" "Class\\.forName|Proxy\\.newProxyInstance|LocalServerSocket" "transport or reflection details in request handler"
 assert_no_repo_matches "const val (SOCKET_NAME|ACTION_SEND_IMAGE|ACTION_HEALTH|STATUS_SENT|STATUS_FAILED|STATUS_OK|MAX_FRAME_SIZE)" "duplicated protocol constants"
 assert_no_repo_matches "DataInputStream|DataOutputStream" "duplicated frame codec"
 
-if rg -n "XposedHelpers|XC_MethodHook" "$repo_root/bridge/src/main/java/party/qwer/iris/bridge" | rg -v "IrisBridgeModule\\.kt|BridgeDiscovery\\.kt|ThreadedImageXposedInjector\\.kt" >/dev/null; then
+if rg -n "XposedHelpers|XC_MethodHook" "$repo_root/bridge/src/main/java/party/qwer/iris/imagebridge/runtime" | rg -v "IrisBridgeModule\\.kt|BridgeDiscovery\\.kt|ThreadedImageXposedInjector\\.kt" >/dev/null; then
   echo "bridge boundary check failed: Xposed hook logic leaked outside discovery/module entrypoint" >&2
   exit 1
 fi

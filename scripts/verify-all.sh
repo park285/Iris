@@ -16,12 +16,20 @@ cd "$repo_root"
 run_step "Gradle lint/format checks/tests" ./gradlew \
   :imagebridge-protocol:ktlintCheck \
   :imagebridge-protocol:test \
+  :app:assembleDebug \
+  :app:assembleRelease \
   :app:ktlintCheck \
   :bridge:ktlintCheck \
+  :bridge:assembleDebug \
+  :bridge:assembleRelease \
   :app:lint \
   :bridge:lint \
   :app:testDebugUnitTest \
   :bridge:testDebugUnitTest
+
+run_step "Rust format" cargo fmt --manifest-path "$repo_root/tools/iris-ctl/Cargo.toml" --check
+run_step "Rust lint" cargo clippy --manifest-path "$repo_root/tools/iris-ctl/Cargo.toml" --all-targets -- -D warnings
+run_step "Rust tests" cargo test --manifest-path "$repo_root/tools/iris-ctl/Cargo.toml"
 
 run_step "Bridge architecture guardrails" "$repo_root/scripts/check-bridge-boundaries.sh"
 

@@ -24,8 +24,8 @@ Webhook JSON payload에 두 개의 **optional** 필드가 추가됩니다.
 
 ```json
 {
-  "route": "hololive",
-  "messageId": "kakao-log-12345-hololive",
+  "route": "default",
+  "messageId": "kakao-log-12345-default",
   "sourceLogId": 12345,
   "text": "!명령어",
   "room": "67890",
@@ -39,8 +39,8 @@ Webhook JSON payload에 두 개의 **optional** 필드가 추가됩니다.
 
 ```json
 {
-  "route": "hololive",
-  "messageId": "kakao-log-12346-hololive",
+  "route": "default",
+  "messageId": "kakao-log-12346-default",
   "sourceLogId": 12346,
   "text": "!명령어",
   "room": "67890",
@@ -57,8 +57,8 @@ Webhook JSON payload에 두 개의 **optional** 필드가 추가됩니다.
 
 ```json
 {
-  "route": "hololive",
-  "messageId": "kakao-log-12347-hololive",
+  "route": "default",
+  "messageId": "kakao-log-12347-default",
   "sourceLogId": 12347,
   "text": "!명령어",
   "room": "67890",
@@ -73,7 +73,7 @@ Webhook JSON payload에 두 개의 **optional** 필드가 추가됩니다.
 
 | 필드 | 타입 | 필수 | 설명 |
 |------|------|------|------|
-| `route` | string | O | webhook route 이름 (`hololive`, `chatbotgo`, `settlement`) |
+| `route` | string | O | webhook route 이름 (`default`, `chatbotgo`, `settlement`) |
 | `messageId` | string | O | `kakao-log-{sourceLogId}-{route}` |
 | `sourceLogId` | number | O | chat_logs `_id` |
 | `text` | string | O | 명령어 텍스트 (prefix 제거 후) |
@@ -121,25 +121,32 @@ Webhook JSON payload에 두 개의 **optional** 필드가 추가됩니다.
 
 ```
 POST /query
-X-Bot-Token: {botToken}
+X-Iris-Timestamp: {timestamp}
+X-Iris-Nonce: {nonce}
+X-Iris-Signature: {signature}
 Content-Type: application/json
 
 {
   "query": "SELECT * FROM chat_logs WHERE _id = ?",
-  "bind": [12345]
+  "bind": [12345],
+  "decrypt": true
 }
 ```
 
-응답의 `attachment` 필드가 **자동 복호화**되어 반환됩니다:
+응답은 typed `columns` + `rows` shape를 사용하고, `decrypt: true`일 때만 decrypt overlay가 적용됩니다:
 
 ```json
 {
   "rowCount": 1,
-  "data": [
-    {
-      "_id": "12345",
-      "attachment": "{\"url\":\"http://...\",\"size\":12345,\"width\":640,\"height\":480}"
-    }
+  "columns": [
+    { "name": "_id", "sqliteType": "INTEGER" },
+    { "name": "attachment", "sqliteType": "TEXT" }
+  ],
+  "rows": [
+    [
+      12345,
+      "{\"url\":\"http://...\",\"size\":12345,\"width\":640,\"height\":480}"
+    ]
   ]
 }
 ```

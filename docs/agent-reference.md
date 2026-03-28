@@ -31,8 +31,10 @@ DBObserver -> ObserverHelper
     | decrypt + parse command
     | CommandParser (!, /, // prefix)
     | resolveWebhookRoute
-H2cDispatcher
-    | per-route coroutine Channel worker
+OutboxRoutingGateway
+    | file-backed outbox + checkpoint advance
+WebhookOutboxDispatcher
+    | route/room partition coroutine worker
     | OkHttp (h2c prior-knowledge or HTTP/1.1)
 Webhook endpoint (external bot)
     |
@@ -67,6 +69,8 @@ markdown reply는 `/reply-markdown` route가 Kakao share intent를 열고, LSPos
 
 - `app/` — HTTP admission, queueing, UDS client, webhook dispatch
 - `bridge/` — LSPosed/Xposed image bridge module and in-process Kakao sender integration
+- `bridge/src/main/java/party/qwer/iris/imagebridge/runtime/` — image bridge runtime (class discovery, sender, thread graft)
+- `app/src/main/java/party/qwer/iris/delivery/webhook/` — webhook delivery and outbox path
 
 ## Testing Conventions
 
@@ -80,8 +84,10 @@ markdown reply는 `/reply-markdown` route가 Kakao share intent를 열고, LSPos
 | Variable                        | Default                       | Purpose                       |
 | ------------------------------- | ----------------------------- | ----------------------------- |
 | `IRIS_CONFIG_PATH`              | `/data/local/tmp/config.json` | Config file path              |
-| `IRIS_BOT_TOKEN`                | (none)                        | botToken env source           |
-| `IRIS_WEBHOOK_TOKEN`            | (none)                        | webhookToken env source       |
+| `IRIS_BRIDGE_TOKEN`             | (none)                        | bridge handshake token        |
+| `IRIS_BIND_HOST`                | `127.0.0.1`                   | Iris HTTP bind host           |
+| `IRIS_HTTP_WORKER_THREADS`      | `2`                           | Netty worker thread count     |
+| `IRIS_BRIDGE_HEALTH_REFRESH_MS` | `5000`                        | bridge health snapshot refresh |
 | `IRIS_WEBHOOK_TRANSPORT`        | `h2c`                         | `http1` for HTTP/1.1          |
 | `IRIS_LOG_LEVEL`                | `ERROR`                       | `DEBUG`/`INFO`/`ERROR`/`NONE` |
 | `IRIS_DISABLE_HTTP`             | unset                         | `1` = disable IrisServer      |
@@ -89,7 +95,7 @@ markdown reply는 `/reply-markdown` route가 Kakao share intent를 열고, LSPos
 | `IRIS_IMAGE_DELETE_INTERVAL_MS` | 3600000                       | Image cleanup interval        |
 | `IRIS_IMAGE_RETENTION_MS`       | 86400000                      | Image retention period        |
 | `IRIS_NOTIFICATION_REFERER`     | KakaoTalk prefs / `"Iris"`    | noti_referer value            |
-| `IRIS_RUNNER`                   | `com.android.shell`           | calling package               |
+| `IRIS_RUNNER`                   | `com.kakao.talk` (AndroidHiddenApi) / `com.android.shell` (HiddenNotificationFeed) | calling package (용도별 기본값 상이) |
 | `KAKAOTALK_APP_UID`             | `0`                           | data mirror path uid          |
 
 ## Platform Notes
@@ -100,5 +106,6 @@ markdown reply는 `/reply-markdown` route가 Kakao share intent를 열고, LSPos
 - Use `CommandFingerprint(chatId, userId, createdAt, message)` with LRU 256 for dedup.
 - Skip `SYNCMSG` / `MCHATLOGS` messages with `NONE` kind to filter bot-origin messages.
 - Use `/sdcard/Android/data/com.kakao.talk/files/iris-outbox-images` for outbound image storage.
+- Default webhook route is `default`.
 - Use h2c for cleartext and fall back to HTTP/1.1 automatically for `https://` URLs.
-- Save config with atomic move first and use `REPLACE_EXISTING` as the compatibility path.
+- Save config with temp write + `fd.sync()` + atomic move.
