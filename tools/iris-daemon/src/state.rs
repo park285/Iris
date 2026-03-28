@@ -12,11 +12,11 @@ pub enum State {
 impl fmt::Display for State {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            State::Starting => write!(f, "Starting"),
-            State::Healthy => write!(f, "Healthy"),
-            State::Degraded => write!(f, "Degraded"),
-            State::Recovering => write!(f, "Recovering"),
-            State::RollbackNeeded => write!(f, "RollbackNeeded"),
+            Self::Starting => write!(f, "Starting"),
+            Self::Healthy => write!(f, "Healthy"),
+            Self::Degraded => write!(f, "Degraded"),
+            Self::Recovering => write!(f, "Recovering"),
+            Self::RollbackNeeded => write!(f, "RollbackNeeded"),
         }
     }
 }
@@ -38,7 +38,7 @@ pub struct StateMachine {
 }
 
 impl StateMachine {
-    pub fn new(health_fail_threshold: u32, max_consecutive_failures: u32) -> Self {
+    pub const fn new(health_fail_threshold: u32, max_consecutive_failures: u32) -> Self {
         Self {
             state: State::Starting,
             fail_count: 0,

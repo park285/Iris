@@ -6,6 +6,8 @@ use std::time::Duration;
 const IRIS_PROCESS_NAME: &str = "party.qwer.iris.Main";
 const KAKAOTALK_PACKAGE: &str = "com.kakao.talk";
 const SIGTERM_WAIT_SECS: u64 = 5;
+const STARTUP_RETRY_COUNT: usize = 10;
+const KILL_RETRY_WAIT_SECS: u64 = 1;
 
 pub async fn iris_pid(adb: &Adb) -> Option<u32> {
     let output = adb
@@ -25,45 +27,64 @@ pub async fn iris_pid(adb: &Adb) -> Option<u32> {
     None
 }
 
+async fn wait_for_process_exit(wait_secs: u64) {
+    tokio::time::sleep(Duration::from_secs(wait_secs)).await;
+}
+
+async fn send_kill(adb: &Adb, pid: u32, signal: Option<&str>) {
+    let command = signal.map_or_else(
+        || format!("kill {pid}"),
+        |signal| format!("kill -{signal} {pid}"),
+    );
+    let _ = adb.shell(&command).await;
+}
+
+async fn ensure_process_exited(adb: &Adb, pid: u32) -> Result<()> {
+    if iris_pid(adb).await.is_some() {
+        bail!("Iris 프로세스 종료 실패 (PID: {pid})");
+    }
+    Ok(())
+}
+
+async fn force_kill_if_needed(adb: &Adb, pid: u32) -> Result<()> {
+    if iris_pid(adb).await.is_none() {
+        return Ok(());
+    }
+
+    tracing::warn!(pid = pid, "SIGTERM 무응답, SIGKILL 전송");
+    send_kill(adb, pid, Some("9")).await;
+    wait_for_process_exit(KILL_RETRY_WAIT_SECS).await;
+    ensure_process_exited(adb, pid).await
+}
+
 pub async fn stop_iris(adb: &Adb) -> Result<()> {
     let Some(pid) = iris_pid(adb).await else {
         tracing::info!("Iris 프로세스 미실행, 종료 불필요");
         return Ok(());
     };
+
     tracing::info!(pid = pid, "Iris 프로세스 종료 시도 (SIGTERM)");
-    let _ = adb.shell(&format!("kill {pid}")).await;
-    tokio::time::sleep(Duration::from_secs(SIGTERM_WAIT_SECS)).await;
-    if iris_pid(adb).await.is_some() {
-        tracing::warn!(pid = pid, "SIGTERM 무응답, SIGKILL 전송");
-        let _ = adb.shell(&format!("kill -9 {pid}")).await;
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    }
-    if iris_pid(adb).await.is_some() {
-        bail!("Iris 프로세스 종료 실패 (PID: {pid})");
-    }
+    send_kill(adb, pid, None).await;
+    wait_for_process_exit(SIGTERM_WAIT_SECS).await;
+    force_kill_if_needed(adb, pid).await?;
     tracing::info!(pid = pid, "Iris 프로세스 종료 완료");
     Ok(())
 }
 
-pub async fn start_iris(adb: &Adb, cfg: &DaemonConfig) -> Result<()> {
-    if iris_pid(adb).await.is_some() {
-        tracing::warn!("Iris 프로세스 이미 실행 중, 시작 건너뜀");
-        return Ok(());
-    }
-    let health_url = &cfg.iris.health_url;
-    let token = &cfg.iris.shared_token;
-    let cmd = format!(
+fn start_command(cfg: &DaemonConfig) -> String {
+    format!(
         "nohup app_process -Djava.class.path={apk} / {main} \
          --health-url={url} --shared-token={tok} \
          > /dev/null 2>&1 &",
         apk = cfg.init.apk_dest,
         main = IRIS_PROCESS_NAME,
-        url = health_url,
-        tok = token,
-    );
-    adb.shell(&cmd).await?;
-    tracing::info!("Iris 프로세스 시작 명령 전송");
-    for _ in 0..10 {
+        url = cfg.iris.health_url,
+        tok = cfg.iris.shared_token,
+    )
+}
+
+async fn wait_for_process_start(adb: &Adb) -> Result<()> {
+    for _ in 0..STARTUP_RETRY_COUNT {
         tokio::time::sleep(Duration::from_secs(1)).await;
         if iris_pid(adb).await.is_some() {
             tracing::info!("Iris 프로세스 시작 확인");
@@ -71,6 +92,17 @@ pub async fn start_iris(adb: &Adb, cfg: &DaemonConfig) -> Result<()> {
         }
     }
     bail!("Iris 프로세스 시작 실패 (10초 timeout)");
+}
+
+pub async fn start_iris(adb: &Adb, cfg: &DaemonConfig) -> Result<()> {
+    if iris_pid(adb).await.is_some() {
+        tracing::warn!("Iris 프로세스 이미 실행 중, 시작 건너뜀");
+        return Ok(());
+    }
+
+    adb.shell(&start_command(cfg)).await?;
+    tracing::info!("Iris 프로세스 시작 명령 전송");
+    wait_for_process_start(adb).await
 }
 
 pub async fn restart_iris(adb: &Adb, cfg: &DaemonConfig) -> Result<()> {
@@ -97,5 +129,15 @@ mod tests {
         assert_eq!(IRIS_PROCESS_NAME, "party.qwer.iris.Main");
         assert_eq!(KAKAOTALK_PACKAGE, "com.kakao.talk");
         assert_eq!(SIGTERM_WAIT_SECS, 5);
+    }
+
+    #[test]
+    fn start_command_includes_runtime_arguments() {
+        let cfg = DaemonConfig::default();
+        let command = start_command(&cfg);
+
+        assert!(command.contains(IRIS_PROCESS_NAME));
+        assert!(command.contains("--health-url=http://localhost:3000"));
+        assert!(command.contains("--shared-token="));
     }
 }

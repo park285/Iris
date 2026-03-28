@@ -32,7 +32,7 @@ impl fmt::Display for HealthReport {
     }
 }
 
-fn probe_display(result: &ProbeResult) -> &str {
+const fn probe_display(result: &ProbeResult) -> &str {
     match result {
         ProbeResult::Ok => "ok",
         ProbeResult::Fail(_) => "fail",

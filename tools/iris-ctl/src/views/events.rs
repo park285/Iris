@@ -89,7 +89,7 @@ impl EventsView {
                     || e.contains("KICK")
                     || e.contains("NICK")
             })
-            .map(std::string::String::as_str)
+            .map(String::as_str)
             .collect()
     }
 
@@ -100,7 +100,7 @@ impl EventsView {
 }
 
 impl View for EventsView {
-    fn render(&self, frame: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame<'_>, area: Rect) {
         let title = if self.paused {
             if self.filter_active {
                 " Events (PAUSED, FILTERED) "
@@ -112,7 +112,7 @@ impl View for EventsView {
         } else {
             " Events (LIVE) "
         };
-        let items: Vec<ListItem> = self
+        let items: Vec<ListItem<'_>> = self
             .visible_events()
             .into_iter()
             .map(ListItem::new)

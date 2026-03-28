@@ -36,6 +36,7 @@ pub fn signed_headers(token: &str, method: &str, target: &str, body: &[u8]) -> R
 }
 
 /// 테스트용: timestamp와 nonce를 직접 지정하여 서명 헤더를 생성한다.
+#[allow(clippy::too_many_arguments)] // HMAC 프로토콜 필드가 6개 — 구조체화하면 호출측이 더 복잡
 pub fn signed_headers_with(
     token: &str,
     method: &str,

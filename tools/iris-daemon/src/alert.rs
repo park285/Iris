@@ -2,7 +2,9 @@ use crate::config::DaemonConfig;
 use crate::state::Transition;
 use anyhow::anyhow;
 use serde::Serialize;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+const ALERT_TIMEOUT_SECS: u64 = 5;
 
 #[derive(Serialize, Debug)]
 struct AlertPayload {
@@ -14,7 +16,7 @@ struct AlertPayload {
 }
 
 pub async fn send_transition_alert(cfg: &DaemonConfig, transition: &Transition) {
-    if !cfg.alert.enabled || cfg.alert.webhook_url.is_empty() {
+    if !should_send_alert(cfg) {
         return;
     }
 
@@ -26,34 +28,49 @@ pub async fn send_transition_alert(cfg: &DaemonConfig, transition: &Transition) 
         details: transition.reason.clone(),
     };
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build();
-
-    let client = match client {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!(error = %e, "알림 HTTP 클라이언트 생성 실패");
-            return;
-        }
+    let Some(client) = build_alert_client() else {
+        return;
     };
 
-    match client
-        .post(&cfg.alert.webhook_url)
-        .json(&payload)
-        .send()
-        .await
+    send_alert_request(&client, &cfg.alert.webhook_url, transition, &payload).await;
+}
+
+fn should_send_alert(cfg: &DaemonConfig) -> bool {
+    cfg.alert.enabled && !cfg.alert.webhook_url.is_empty()
+}
+
+fn build_alert_client() -> Option<reqwest::Client> {
+    match reqwest::Client::builder()
+        .timeout(Duration::from_secs(ALERT_TIMEOUT_SECS))
+        .build()
     {
-        Ok(response) => {
-            if response.status().is_success() {
-                tracing::info!(url = %cfg.alert.webhook_url, from = %transition.from, to = %transition.to, "알림 전송 성공");
-            } else {
-                tracing::warn!(url = %cfg.alert.webhook_url, status = %response.status(), "알림 전송 실패 (HTTP 에러)");
-            }
+        Ok(client) => Some(client),
+        Err(error) => {
+            tracing::warn!(error = %error, "알림 HTTP 클라이언트 생성 실패");
+            None
         }
-        Err(e) => {
-            tracing::warn!(url = %cfg.alert.webhook_url, error = %e, "알림 전송 실패 (네트워크 에러)");
+    }
+}
+
+async fn send_alert_request(
+    client: &reqwest::Client,
+    webhook_url: &str,
+    transition: &Transition,
+    payload: &AlertPayload,
+) {
+    match client.post(webhook_url).json(payload).send().await {
+        Ok(response) => log_alert_response(webhook_url, transition, response.status()),
+        Err(error) => {
+            tracing::warn!(url = webhook_url, error = %error, "알림 전송 실패 (네트워크 에러)");
         }
+    }
+}
+
+fn log_alert_response(webhook_url: &str, transition: &Transition, status: reqwest::StatusCode) {
+    if status.is_success() {
+        tracing::info!(url = webhook_url, from = %transition.from, to = %transition.to, "알림 전송 성공");
+    } else {
+        tracing::warn!(url = webhook_url, status = %status, "알림 전송 실패 (HTTP 에러)");
     }
 }
 
@@ -97,7 +114,7 @@ fn current_timestamp_iso() -> String {
     format!("{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
 }
 
-fn is_leap_year(year: i32) -> bool {
+const fn is_leap_year(year: i32) -> bool {
     (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }
 
@@ -139,8 +156,8 @@ mod tests {
         assert!(!is_leap_year(2023));
     }
 
-    #[tokio::test]
-    async fn send_alert_with_disabled_config_does_nothing() {
+    #[test]
+    fn disabled_alerts_are_skipped() {
         let cfg = DaemonConfig {
             alert: crate::config::AlertConfig {
                 enabled: false,
@@ -148,16 +165,12 @@ mod tests {
             },
             ..DaemonConfig::default()
         };
-        let transition = Transition {
-            from: State::Degraded,
-            to: State::Recovering,
-            reason: "test".to_string(),
-        };
-        send_transition_alert(&cfg, &transition).await;
+
+        assert!(!should_send_alert(&cfg));
     }
 
-    #[tokio::test]
-    async fn send_alert_with_empty_url_does_nothing() {
+    #[test]
+    fn empty_alert_url_is_skipped() {
         let cfg = DaemonConfig {
             alert: crate::config::AlertConfig {
                 enabled: true,
@@ -165,11 +178,23 @@ mod tests {
             },
             ..DaemonConfig::default()
         };
+
+        assert!(!should_send_alert(&cfg));
+    }
+
+    #[test]
+    fn log_alert_response_accepts_transition_status_pairs() {
         let transition = Transition {
             from: State::Healthy,
             to: State::Degraded,
             reason: "test".to_string(),
         };
-        send_transition_alert(&cfg, &transition).await;
+
+        log_alert_response("http://example.com", &transition, reqwest::StatusCode::OK);
+        log_alert_response(
+            "http://example.com",
+            &transition,
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+        );
     }
 }

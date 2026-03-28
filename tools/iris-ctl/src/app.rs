@@ -31,7 +31,7 @@ impl App {
             status: "Ready".to_string(),
         }
     }
-    pub fn render(&self, frame: &mut Frame) {
+    pub fn render(&self, frame: &mut Frame<'_>) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -40,7 +40,7 @@ impl App {
                 Constraint::Length(1),
             ])
             .split(frame.area());
-        let tabs = Tabs::new(TabId::all().iter().map(super::views::TabId::label))
+        let tabs = Tabs::new(TabId::all().iter().map(TabId::label))
             .block(Block::bordered().title(" Iris Control "))
             .select(self.active_tab.index())
             .highlight_style(ratatui::style::Style::default().yellow().bold());

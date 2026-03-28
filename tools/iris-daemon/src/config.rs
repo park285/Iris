@@ -81,16 +81,19 @@ impl Default for WatchConfig {
     }
 }
 
-fn default_check_interval() -> u64 {
+const fn default_check_interval() -> u64 {
     30
 }
-fn default_health_fail_threshold() -> u32 {
+
+const fn default_health_fail_threshold() -> u32 {
     2
 }
-fn default_curl_timeout() -> u64 {
+
+const fn default_curl_timeout() -> u64 {
     3
 }
-fn default_config_check_every() -> u32 {
+
+const fn default_config_check_every() -> u32 {
     10
 }
 
@@ -122,9 +125,10 @@ impl Default for RollbackConfig {
     }
 }
 
-fn default_max_consecutive_failures() -> u32 {
+const fn default_max_consecutive_failures() -> u32 {
     5
 }
+
 fn default_backup_dir() -> String {
     "/root/work/Iris/.backup-latest".to_string()
 }
@@ -155,18 +159,22 @@ impl Default for InitConfig {
     }
 }
 
-fn default_phantom_killer_disable() -> bool {
+const fn default_phantom_killer_disable() -> bool {
     true
 }
-fn default_boot_timeout() -> u64 {
+
+const fn default_boot_timeout() -> u64 {
     120
 }
+
 fn default_config_template() -> String {
     "/root/work/arm-iris-runtime/configs/iris/config.json".to_string()
 }
+
 fn default_config_dest() -> String {
     "/data/local/tmp/config.json".to_string()
 }
+
 fn default_apk_dest() -> String {
     "/data/local/tmp/Iris.apk".to_string()
 }
@@ -175,6 +183,7 @@ impl IrisConnection for DaemonConfig {
     fn base_url(&self) -> &str {
         &self.iris.health_url
     }
+
     fn token(&self) -> &str {
         &self.iris.shared_token
     }
@@ -183,24 +192,28 @@ impl IrisConnection for DaemonConfig {
 impl DaemonConfig {
     pub fn load(path: Option<&Path>) -> Result<Self> {
         let config_path = path.map_or_else(default_config_path, PathBuf::from);
-        let mut config: DaemonConfig = if config_path.exists() {
+        let mut config: Self = if config_path.exists() {
             let content = std::fs::read_to_string(&config_path)
                 .with_context(|| format!("설정 파일 읽기 실패: {}", config_path.display()))?;
             toml::from_str(&content)
                 .with_context(|| format!("설정 파일 파싱 실패: {}", config_path.display()))?
         } else {
-            DaemonConfig::default()
+            Self::default()
         };
-        if let Ok(url) = std::env::var("IRIS_HEALTH_URL") {
-            config.iris.health_url = url;
-        }
-        if let Ok(token) = std::env::var("IRIS_SHARED_TOKEN") {
-            config.iris.shared_token = token;
-        }
-        if let Ok(device) = std::env::var("IRIS_DEVICE") {
-            config.adb.device = device;
-        }
+        apply_env_overrides(&mut config);
         Ok(config)
+    }
+}
+
+fn apply_env_overrides(config: &mut DaemonConfig) {
+    if let Ok(url) = std::env::var("IRIS_HEALTH_URL") {
+        config.iris.health_url = url;
+    }
+    if let Ok(token) = std::env::var("IRIS_SHARED_TOKEN") {
+        config.iris.shared_token = token;
+    }
+    if let Ok(device) = std::env::var("IRIS_DEVICE") {
+        config.adb.device = device;
     }
 }
 
@@ -211,6 +224,56 @@ fn default_config_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn full_toml_fixture() -> &'static str {
+        r#"
+[iris]
+health_url = "http://10.0.0.1:3000"
+shared_token = "tok"
+
+[adb]
+device = "10.0.0.2:5555"
+
+[watch]
+check_interval_secs = 15
+health_fail_threshold = 3
+curl_timeout_secs = 5
+config_check_every = 5
+
+[alert]
+enabled = true
+webhook_url = "http://hooks.example.com/iris"
+
+[rollback]
+enabled = true
+max_consecutive_failures = 3
+backup_dir = "/opt/backup"
+
+[init]
+phantom_killer_disable = false
+boot_timeout_secs = 60
+config_template = "/etc/iris/template.json"
+config_dest = "/data/config.json"
+apk_dest = "/data/Iris.apk"
+"#
+    }
+
+    fn assert_watch_config(config: &DaemonConfig) {
+        assert_eq!(config.watch.check_interval_secs, 15);
+        assert_eq!(config.watch.health_fail_threshold, 3);
+    }
+
+    fn assert_alert_config(config: &DaemonConfig) {
+        assert!(config.alert.enabled);
+        assert_eq!(config.alert.webhook_url, "http://hooks.example.com/iris");
+    }
+
+    fn assert_rollback_and_init_config(config: &DaemonConfig) {
+        assert!(config.rollback.enabled);
+        assert_eq!(config.rollback.max_consecutive_failures, 3);
+        assert!(!config.init.phantom_killer_disable);
+        assert_eq!(config.init.boot_timeout_secs, 60);
+    }
 
     #[test]
     fn default_config_has_sane_values() {
@@ -242,45 +305,11 @@ device = "10.0.0.2:5555"
 
     #[test]
     fn parse_full_toml() {
-        let toml_str = r#"
-[iris]
-health_url = "http://10.0.0.1:3000"
-shared_token = "tok"
+        let config: DaemonConfig = toml::from_str(full_toml_fixture()).unwrap();
 
-[adb]
-device = "10.0.0.2:5555"
-
-[watch]
-check_interval_secs = 15
-health_fail_threshold = 3
-curl_timeout_secs = 5
-config_check_every = 5
-
-[alert]
-enabled = true
-webhook_url = "http://hooks.example.com/iris"
-
-[rollback]
-enabled = true
-max_consecutive_failures = 3
-backup_dir = "/opt/backup"
-
-[init]
-phantom_killer_disable = false
-boot_timeout_secs = 60
-config_template = "/etc/iris/template.json"
-config_dest = "/data/config.json"
-apk_dest = "/data/Iris.apk"
-"#;
-        let config: DaemonConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.watch.check_interval_secs, 15);
-        assert_eq!(config.watch.health_fail_threshold, 3);
-        assert!(config.alert.enabled);
-        assert_eq!(config.alert.webhook_url, "http://hooks.example.com/iris");
-        assert!(config.rollback.enabled);
-        assert_eq!(config.rollback.max_consecutive_failures, 3);
-        assert!(!config.init.phantom_killer_disable);
-        assert_eq!(config.init.boot_timeout_secs, 60);
+        assert_watch_config(&config);
+        assert_alert_config(&config);
+        assert_rollback_and_init_config(&config);
     }
 
     #[test]

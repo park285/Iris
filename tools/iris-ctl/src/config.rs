@@ -31,7 +31,7 @@ impl Default for UiConfig {
     }
 }
 
-fn default_poll_interval() -> u64 {
+const fn default_poll_interval() -> u64 {
     5
 }
 
@@ -52,7 +52,7 @@ impl Config {
                 );
             }
         }
-        let mut config: Config = toml::from_str(&content)?;
+        let mut config: Self = toml::from_str(&content)?;
         if let Ok(token) = std::env::var("IRIS_TOKEN") {
             config.server.token = token;
         }

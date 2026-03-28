@@ -5,23 +5,56 @@ use crate::process;
 use anyhow::{Result, bail};
 use std::time::Duration;
 
+const PHANTOM_KILLER_COMMANDS: [&str; 2] = [
+    "settings put global settings_enable_monitor_phantom_procs false",
+    "setprop persist.sys.fflag.override.settings_enable_monitor_phantom_procs false",
+];
+
 pub async fn run_init(cfg: &DaemonConfig) -> Result<()> {
     let adb = Adb::new(&cfg.adb.device);
     tracing::info!(device = %cfg.adb.device, "init 시작");
-    let connect_result = adb.connect().await?;
-    tracing::info!(result = %connect_result, "ADB 연결");
-    wait_for_boot(&adb, cfg.init.boot_timeout_secs).await?;
-    if cfg.init.phantom_killer_disable {
-        disable_phantom_killer(&adb).await;
-    }
+
+    prepare_device(&adb, cfg).await?;
     config_sync::render_and_push(&adb, cfg).await?;
-    if !process::kakaotalk_alive(&adb).await {
-        tracing::warn!("KakaoTalk 미실행 — Iris 시작 전에 KakaoTalk이 실행 중이어야 합니다");
-    }
-    process::stop_iris(&adb).await?;
-    process::start_iris(&adb, cfg).await?;
+    ensure_runtime_ready(&adb, cfg).await?;
+
     tracing::info!("init 완료");
     Ok(())
+}
+
+async fn prepare_device(adb: &Adb, cfg: &DaemonConfig) -> Result<()> {
+    connect_adb(adb).await?;
+    wait_for_boot(adb, cfg.init.boot_timeout_secs).await?;
+    maybe_disable_phantom_killer(adb, cfg).await;
+    Ok(())
+}
+
+async fn ensure_runtime_ready(adb: &Adb, cfg: &DaemonConfig) -> Result<()> {
+    warn_if_kakaotalk_not_running(adb).await;
+    restart_iris_process(adb, cfg).await
+}
+
+async fn connect_adb(adb: &Adb) -> Result<()> {
+    let connect_result = adb.connect().await?;
+    tracing::info!(result = %connect_result, "ADB 연결");
+    Ok(())
+}
+
+async fn maybe_disable_phantom_killer(adb: &Adb, cfg: &DaemonConfig) {
+    if cfg.init.phantom_killer_disable {
+        disable_phantom_killer(adb).await;
+    }
+}
+
+async fn warn_if_kakaotalk_not_running(adb: &Adb) {
+    if !process::kakaotalk_alive(adb).await {
+        tracing::warn!("KakaoTalk 미실행 — Iris 시작 전에 KakaoTalk이 실행 중이어야 합니다");
+    }
+}
+
+async fn restart_iris_process(adb: &Adb, cfg: &DaemonConfig) -> Result<()> {
+    process::stop_iris(adb).await?;
+    process::start_iris(adb, cfg).await
 }
 
 async fn wait_for_boot(adb: &Adb, timeout_secs: u64) -> Result<()> {
@@ -40,28 +73,28 @@ async fn wait_for_boot(adb: &Adb, timeout_secs: u64) -> Result<()> {
 }
 
 async fn disable_phantom_killer(adb: &Adb) {
-    let commands = [
-        "settings put global settings_enable_monitor_phantom_procs false",
-        "setprop persist.sys.fflag.override.settings_enable_monitor_phantom_procs false",
-    ];
-    for cmd in &commands {
-        match adb.shell(cmd).await {
-            Ok(_) => tracing::debug!(cmd = cmd, "phantom killer 비활성화 명령 성공"),
-            Err(e) => {
-                tracing::warn!(cmd = cmd, error = %e, "phantom killer 비활성화 명령 실패 (무시)");
-            }
-        }
+    for command in PHANTOM_KILLER_COMMANDS {
+        run_phantom_killer_command(adb, command).await;
     }
     tracing::info!("phantom process killer 비활성화 완료");
 }
 
+async fn run_phantom_killer_command(adb: &Adb, command: &str) {
+    match adb.shell(command).await {
+        Ok(_) => tracing::debug!(cmd = command, "phantom killer 비활성화 명령 성공"),
+        Err(error) => {
+            tracing::warn!(cmd = command, error = %error, "phantom killer 비활성화 명령 실패 (무시)");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn phantom_killer_commands_are_correct() {
-        let cmd1 = "settings put global settings_enable_monitor_phantom_procs false";
-        let cmd2 = "setprop persist.sys.fflag.override.settings_enable_monitor_phantom_procs false";
-        assert!(cmd1.contains("settings_enable_monitor_phantom_procs"));
-        assert!(cmd2.contains("persist.sys.fflag.override"));
+        assert!(PHANTOM_KILLER_COMMANDS[0].contains("settings_enable_monitor_phantom_procs"));
+        assert!(PHANTOM_KILLER_COMMANDS[1].contains("persist.sys.fflag.override"));
     }
 }

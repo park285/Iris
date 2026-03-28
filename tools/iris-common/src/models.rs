@@ -146,7 +146,7 @@ pub struct SseEvent {
 }
 
 impl RoomSummary {
-    pub fn role_name(&self) -> &str {
+    pub const fn role_name(&self) -> &str {
         match self.bot_role {
             Some(1) => "owner",
             Some(4) => "admin",

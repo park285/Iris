@@ -35,11 +35,11 @@ impl RoomsView {
 }
 
 impl View for RoomsView {
-    fn render(&self, frame: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame<'_>, area: Rect) {
         let header = Row::new(["#", "Room", "Type", "Members", "Role", "Link"])
             .bold()
             .bottom_margin(1);
-        let rows: Vec<Row> = self
+        let rows: Vec<Row<'_>> = self
             .rooms
             .iter()
             .enumerate()
