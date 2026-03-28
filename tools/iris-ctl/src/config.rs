@@ -23,10 +23,16 @@ pub struct UiConfig {
 }
 
 impl Default for UiConfig {
-    fn default() -> Self { Self { poll_interval_secs: 5 } }
+    fn default() -> Self {
+        Self {
+            poll_interval_secs: 5,
+        }
+    }
 }
 
-fn default_poll_interval() -> u64 { 5 }
+fn default_poll_interval() -> u64 {
+    5
+}
 
 impl Config {
     pub fn load() -> Result<Self> {
@@ -38,7 +44,11 @@ impl Config {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::metadata(&path)?.permissions().mode() & 0o777;
             if mode & 0o077 != 0 {
-                eprintln!("WARNING: {} has permissions {:o}, should be 600", path.display(), mode);
+                eprintln!(
+                    "WARNING: {} has permissions {:o}, should be 600",
+                    path.display(),
+                    mode
+                );
             }
         }
         let mut config: Config = toml::from_str(&content)?;
@@ -47,8 +57,12 @@ impl Config {
         }
         Ok(config)
     }
-    pub fn token(&self) -> &str { &self.server.token }
-    pub fn base_url(&self) -> &str { &self.server.url }
+    pub fn token(&self) -> &str {
+        &self.server.token
+    }
+    pub fn base_url(&self) -> &str {
+        &self.server.url
+    }
 }
 
 fn config_path() -> PathBuf {
