@@ -14,6 +14,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
+import party.qwer.iris.model.ReplyLifecycleState
 import party.qwer.iris.model.ReplyStatusSnapshot
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -372,16 +373,16 @@ internal class ReplyService(
                         }
 
                         try {
-                            request.requestId?.let { statusStore.update(it, "preparing") }
+                            request.requestId?.let { statusStore.update(it, ReplyLifecycleState.PREPARING) }
                             request.prepare()
-                            request.requestId?.let { statusStore.update(it, "prepared") }
+                            request.requestId?.let { statusStore.update(it, ReplyLifecycleState.PREPARED) }
                             dispatchGate.dispatch {
-                                request.requestId?.let { statusStore.update(it, "sending") }
+                                request.requestId?.let { statusStore.update(it, ReplyLifecycleState.SENDING) }
                                 request.send()
                             }
-                            request.requestId?.let { statusStore.update(it, "handoff_completed") }
+                            request.requestId?.let { statusStore.update(it, ReplyLifecycleState.HANDOFF_COMPLETED) }
                         } catch (e: Exception) {
-                            request.requestId?.let { statusStore.update(it, "failed", e.message) }
+                            request.requestId?.let { statusStore.update(it, ReplyLifecycleState.FAILED, e.message) }
                             IrisLogger.error("[ReplyService] worker($key) send error: ${e.message}", e)
                         }
                     }
@@ -430,7 +431,7 @@ internal class ReplyService(
         return when {
             sendResult.isSuccess -> {
                 IrisLogger.debug("[ReplyService] Message queued to worker($key)")
-                request.requestId?.let { statusStore.update(it, "queued") }
+                request.requestId?.let { statusStore.update(it, ReplyLifecycleState.QUEUED) }
                 ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
             }
             sendResult.isClosed -> {

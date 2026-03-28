@@ -2,6 +2,7 @@ package party.qwer.iris
 
 import kotlinx.coroutines.delay
 import java.io.File
+import party.qwer.iris.model.ReplyLifecycleState
 import java.nio.file.Files
 import java.util.Base64
 import java.util.concurrent.CopyOnWriteArrayList
@@ -500,13 +501,13 @@ class ReplyServiceTest {
         assertTrue(latch.await(5, TimeUnit.SECONDS))
         var finalState = service.replyStatusOrNull(requestId)?.state
         repeat(20) {
-            if (finalState == "handoff_completed") {
+            if (finalState == ReplyLifecycleState.HANDOFF_COMPLETED) {
                 return@repeat
             }
             Thread.sleep(50)
             finalState = service.replyStatusOrNull(requestId)?.state
         }
-        assertEquals("handoff_completed", finalState)
+        assertEquals(ReplyLifecycleState.HANDOFF_COMPLETED, finalState)
         service.shutdown()
     }
 

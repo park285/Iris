@@ -1,5 +1,6 @@
 package party.qwer.iris
 
+import party.qwer.iris.model.ReplyLifecycleState
 import party.qwer.iris.model.ReplyStatusSnapshot
 import java.time.Duration
 import java.util.LinkedHashMap
@@ -20,7 +21,7 @@ internal class ReplyStatusStore(
 
     fun update(
         requestId: String,
-        state: String,
+        state: ReplyLifecycleState,
         detail: String? = null,
     ) {
         synchronized(lock) {
