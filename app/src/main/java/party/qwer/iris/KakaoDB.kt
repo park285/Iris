@@ -34,6 +34,12 @@ class KakaoDB(
         userDisplayNames: Map<Long, String>,
     ) = metadataStore.learnObservedProfileUserMappings(chatId, userDisplayNames)
 
+    override fun learnFromTimestampCorrelation(
+        chatId: Long,
+        userId: Long,
+        messageCreatedAtMs: Long,
+    ) = metadataStore.learnFromTimestampCorrelation(chatId, userId, messageCreatedAtMs)
+
     override fun resolveObservedDisplayName(
         userId: Long,
         chatId: Long?,

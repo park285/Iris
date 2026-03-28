@@ -9,6 +9,7 @@ xposedApi = "82"
 slf4j = "2.0.17"
 okhttp = "5.3.2"
 orgJson = "20250107"
+robolectric = "4.16"
 
 [libraries]
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
@@ -19,6 +20,7 @@ ktor-server-status-pages = { module = "io.ktor:ktor-server-status-pages", versio
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 org-json = { module = "org.json:json", version.ref = "orgJson" }
 slf4j-nop = { module = "org.slf4j:slf4j-nop", version.ref = "slf4j" }
+robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
 xposed-api = { module = "de.robv.android.xposed:api", version.ref = "xposedApi" }
 
 [plugins]

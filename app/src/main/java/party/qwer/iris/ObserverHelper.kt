@@ -15,6 +15,7 @@ class ObserverHelper(
     private val sseEventBus: SseEventBus? = null,
     private val checkpointStore: CheckpointStore = FileCheckpointStore(),
     private val routingGateway: RoutingGateway? = null,
+    private val learnFromTimestampCorrelation: ((chatId: Long, userId: Long, messageCreatedAtMs: Long) -> Unit)? = null,
 ) : Closeable {
     @Volatile
     private var lastLogId: Long = 0
@@ -172,6 +173,7 @@ class ObserverHelper(
         val parsedCommand = CommandParser.parse(decryptedMessage)
 
         logObservedEntry(logEntry, metadata.origin, parsedCommand)
+        tryTimestampCorrelation(logEntry)
         if (shouldSkipOrigin(metadata.origin, parsedCommand)) {
             IrisLogger.debug(
                 "[ObserverHelper] Skipping origin=${metadata.origin} for logId=${logEntry.id}, " +
@@ -228,6 +230,13 @@ class ObserverHelper(
             "[ObserverHelper] _id=${logEntry.id}, origin=$origin, userId=${logEntry.userId}, " +
                 "messageLength=${message.length}, messageHash=${message.stableLogHash()}, kind=${parsedCommand.kind}"
         }
+    }
+
+    private fun tryTimestampCorrelation(logEntry: KakaoDB.ChatLogEntry) {
+        if (learnFromTimestampCorrelation == null) return
+        if (isOwnBotMessage(logEntry.userId, config.botId)) return
+        val createdAtMs = logEntry.createdAt?.toLongOrNull()?.let { it * 1000 } ?: return
+        learnFromTimestampCorrelation.invoke(logEntry.chatId, logEntry.userId, createdAtMs)
     }
 
     private fun shouldRouteCommand(

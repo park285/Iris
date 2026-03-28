@@ -60,7 +60,7 @@ internal fun matchObservedProfileUserLinks(
 }
 
 internal class IrisMetadataStore(
-    databasePath: String = "${PathUtils.getAppPath()}databases/iris.db",
+    private val databasePath: String = "${PathUtils.getAppPath()}databases/iris.db",
 ) : ProfileRepository,
     Closeable {
     private val db: SQLiteDatabase
@@ -163,6 +163,85 @@ internal class IrisMetadataStore(
                     ),
                 )
             }
+        }
+    }
+
+    override fun learnFromTimestampCorrelation(
+        chatId: Long,
+        userId: Long,
+        messageCreatedAtMs: Long,
+    ) {
+        synchronized(dbLock) {
+            db
+                .rawQuery(
+                    """
+                    SELECT 1
+                    FROM observed_profile_user_links
+                    WHERE user_id = ? AND chat_id = ?
+                    LIMIT 1
+                    """.trimIndent(),
+                    arrayOf(userId.toString(), chatId.toString()),
+                ).use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        return
+                    }
+                }
+
+            val candidates =
+                db
+                    .rawQuery(
+                        """
+                        SELECT op.stable_id, op.display_name, op.room_name
+                        FROM observed_profiles op
+                        LEFT JOIN observed_profile_user_links opl ON op.stable_id = opl.stable_id
+                        WHERE op.chat_id = ?
+                          AND op.posted_at BETWEEN ? AND ?
+                          AND opl.stable_id IS NULL
+                        """.trimIndent(),
+                        arrayOf(
+                            chatId.toString(),
+                            (messageCreatedAtMs - CORRELATION_WINDOW_MS).toString(),
+                            (messageCreatedAtMs + CORRELATION_WINDOW_MS).toString(),
+                        ),
+                    ).use { cursor ->
+                        buildList {
+                            while (cursor.moveToNext()) {
+                                add(
+                                    ObservedProfileRecord(
+                                        stableId = cursor.getString(cursor.getColumnIndexOrThrow("stable_id"))?.trim().orEmpty(),
+                                        displayName = cursor.getString(cursor.getColumnIndexOrThrow("display_name"))?.trim().orEmpty(),
+                                        roomName = cursor.getString(cursor.getColumnIndexOrThrow("room_name"))?.trim().orEmpty(),
+                                    ),
+                                )
+                            }
+                        }
+                    }
+
+            if (candidates.size != 1) {
+                return
+            }
+
+            val link = candidates.single()
+            db.execSQL(
+                """
+                INSERT OR REPLACE INTO observed_profile_user_links (
+                    stable_id,
+                    user_id,
+                    chat_id,
+                    display_name,
+                    room_name,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """.trimIndent(),
+                arrayOf<Any?>(
+                    link.stableId,
+                    userId,
+                    chatId,
+                    link.displayName,
+                    link.roomName,
+                    System.currentTimeMillis(),
+                ),
+            )
         }
     }
 
@@ -298,5 +377,9 @@ internal class IrisMetadataStore(
                 )
             }
         }
+    }
+
+    companion object {
+        private const val CORRELATION_WINDOW_MS = 5_000L
     }
 }

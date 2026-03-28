@@ -282,6 +282,42 @@ class ObserverHelperLogicTest {
         assertEquals("재균", routingGateway.commands.single().sender)
         helper.close()
     }
+
+    @Test
+    fun `process log entry triggers timestamp correlation learning`() {
+        val checkpointStore = FakeCheckpointStore(initial = mapOf("chat_logs" to 10L))
+        val chatLogRepo =
+            FakeChatLogRepository(
+                latestLogId = 10L,
+                polledLogs =
+                    listOf(
+                        webhookChatLogEntry(
+                            id = 11L,
+                            chatId = 123L,
+                            userId = 456L,
+                            message = "!ping",
+                            createdAt = "1711111111",
+                        ),
+                    ),
+            )
+        val calls = mutableListOf<Triple<Long, Long, Long>>()
+        val helper =
+            ObserverHelper(
+                db = chatLogRepo,
+                config = config,
+                checkpointStore = checkpointStore,
+                routingGateway = FakeRoutingGateway(result = RoutingResult.ACCEPTED),
+                learnFromTimestampCorrelation = { chatId, userId, messageCreatedAtMs ->
+                    calls += Triple(chatId, userId, messageCreatedAtMs)
+                },
+            )
+
+        helper.checkChange()
+        helper.checkChange()
+
+        assertEquals(listOf(Triple(123L, 456L, 1_711_111_111_000L)), calls)
+        helper.close()
+    }
 }
 
 private class FakeChatLogRepository(
@@ -345,6 +381,7 @@ private fun webhookChatLogEntry(
     message: String,
     chatId: Long = 100L,
     userId: Long = 200L,
+    createdAt: String = "2026-03-27T00:00:00Z",
 ): KakaoDB.ChatLogEntry =
     KakaoDB.ChatLogEntry(
         id = id,
@@ -352,7 +389,7 @@ private fun webhookChatLogEntry(
         userId = userId,
         message = message,
         metadata = """{"enc":0,"origin":"CHATLOG"}""",
-        createdAt = "2026-03-27T00:00:00Z",
+        createdAt = createdAt,
     )
 
 private fun snapshotSequenceMemberRepository(

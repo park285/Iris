@@ -64,6 +64,7 @@ internal class AppRuntime(
                 snapshotManager = snapshotManager,
                 sseEventBus = sseEventBus,
                 routingGateway = OutboxRoutingGateway(configManager, webhookOutboxStore),
+                learnFromTimestampCorrelation = kakaoDb::learnFromTimestampCorrelation,
             )
 
         dbObserver = DBObserver(observerHelper, configManager)
