@@ -1,16 +1,44 @@
 package party.qwer.iris
 
+import kotlinx.serialization.json.JsonPrimitive
+import party.qwer.iris.model.QueryColumn
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+
+private fun stubResult(
+    columns: List<String>,
+    rows: List<Map<String, String?>>,
+): QueryExecutionResult {
+    val cols = columns.map { QueryColumn(name = it, sqliteType = "TEXT") }
+    val jsonRows = rows.map { row ->
+        columns.map { col ->
+            row[col]?.let { JsonPrimitive(it) }
+        }
+    }
+    return QueryExecutionResult(cols, jsonRows)
+}
+
+private fun emptyResult(): QueryExecutionResult = QueryExecutionResult(emptyList(), emptyList())
+
+private fun legacyQuery(block: (String, Array<String?>?, Int) -> List<Map<String, String?>>):
+    (String, Array<String?>?, Int) -> QueryExecutionResult = { sql, args, maxRows ->
+        val rows = block(sql, args, maxRows)
+        val columns = rows.firstOrNull()?.keys?.toList().orEmpty()
+        if (columns.isEmpty()) {
+            emptyResult()
+        } else {
+            stubResult(columns, rows)
+        }
+    }
 
 class MemberRepositoryQueryTest {
     @Test
     fun `observed profile query uses chat_id equality not LIKE`() {
         val executedQueries = mutableListOf<Pair<String, List<String?>>>()
         val repo = MemberRepository(
-            executeQuery = { sql, args, _ ->
+            executeQueryTyped = legacyQuery { sql, args, _ ->
                 executedQueries.add(sql to (args?.toList() ?: emptyList()))
                 when {
                     sql.contains("FROM chat_rooms cr") ->
@@ -51,7 +79,7 @@ class MemberRepositoryQueryTest {
     fun `batch nickname resolution reduces query count`() {
         val queryCount = java.util.concurrent.atomic.AtomicInteger(0)
         val repo = MemberRepository(
-            executeQuery = { sql, args, _ ->
+            executeQueryTyped = legacyQuery { sql, args, _ ->
                 queryCount.incrementAndGet()
                 when {
                     sql.contains("open_chat_member") -> {
@@ -87,7 +115,7 @@ class MemberRepositoryQueryTest {
     @Test
     fun `batch nickname falls back through open, friends, observed`() {
         val repo = MemberRepository(
-            executeQuery = { sql, _, _ ->
+            executeQueryTyped = legacyQuery { sql, _, _ ->
                 when {
                     sql.contains("open_chat_member") ->
                         listOf(mapOf("user_id" to "1", "nickname" to "open-nick", "enc" to "0"))
@@ -112,5 +140,49 @@ class MemberRepositoryQueryTest {
         assertEquals("friend-nick", result[2L])
         assertEquals("observed-nick", result[3L])
         assertEquals("4", result[4L], "Unresolved userId should fall back to string")
+    }
+
+    @Test
+    fun `MemberRepository accepts QueryExecutionResult directly`() {
+        val repo = MemberRepository(
+            executeQueryTyped = { _, _, _ ->
+                QueryExecutionResult(
+                    columns = listOf(
+                        QueryColumn(name = "id", sqliteType = "TEXT"),
+                        QueryColumn(name = "type", sqliteType = "TEXT"),
+                        QueryColumn(name = "members", sqliteType = "TEXT"),
+                        QueryColumn(name = "link_id", sqliteType = "TEXT"),
+                        QueryColumn(name = "active_members_count", sqliteType = "TEXT"),
+                        QueryColumn(name = "meta", sqliteType = "TEXT"),
+                        QueryColumn(name = "link_name", sqliteType = "TEXT"),
+                        QueryColumn(name = "link_url", sqliteType = "TEXT"),
+                        QueryColumn(name = "member_limit", sqliteType = "TEXT"),
+                        QueryColumn(name = "searchable", sqliteType = "TEXT"),
+                        QueryColumn(name = "bot_role", sqliteType = "TEXT"),
+                    ),
+                    rows = listOf(
+                        listOf(
+                            JsonPrimitive("42"),
+                            JsonPrimitive("0"),
+                            JsonPrimitive("[1,2]"),
+                            null,
+                            JsonPrimitive("2"),
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                        ),
+                    ),
+                )
+            },
+            decrypt = { _, s, _ -> s },
+            botId = 1L,
+        )
+
+        val rooms = repo.listRooms()
+        assertEquals(1, rooms.rooms.size)
+        assertEquals(42L, rooms.rooms[0].chatId)
     }
 }

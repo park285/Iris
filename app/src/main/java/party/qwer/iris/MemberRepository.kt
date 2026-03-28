@@ -1,6 +1,8 @@
 package party.qwer.iris
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -20,7 +22,7 @@ import party.qwer.iris.model.StatsResponse
 import party.qwer.iris.model.roleCodeToName
 
 class MemberRepository(
-    private val executeQuery: (String, Array<String?>?, Int) -> List<Map<String, String?>>,
+    private val executeQueryTyped: (String, Array<String?>?, Int) -> QueryExecutionResult,
     private val decrypt: (Int, String, Long) -> String,
     private val botId: Long,
     private val learnObservedProfileUserMappings: (Long, Map<Long, String>) -> Unit = { _, _ -> },
@@ -35,6 +37,25 @@ class MemberRepository(
         val cachedAtMs: Long,
         val activityByUser: Map<Long, Map<String, String?>>,
     )
+
+    private class QueryRow(
+        private val columnIndex: Map<String, Int>,
+        private val values: List<JsonElement?>,
+    ) {
+        fun string(name: String): String? =
+            columnIndex[name]?.let { idx ->
+                values.getOrNull(idx)?.let { elem ->
+                    (elem as? JsonPrimitive)?.content
+                }
+            }
+
+        fun long(name: String): Long? = string(name)?.toLongOrNull()
+
+        fun int(name: String): Int? = string(name)?.toIntOrNull()
+
+        fun toMap(columns: List<String>): Map<String, String?> =
+            columns.associateWith { col -> string(col) }
+    }
 
     companion object {
         private const val MAX_ROWS = 2000
@@ -56,6 +77,15 @@ class MemberRepository(
     }
 
     private val memberActivityCache = mutableMapOf<Long, MemberActivityCacheEntry>()
+
+    private fun executeQuery(sql: String, args: Array<String?>?, maxRows: Int): List<Map<String, String?>> {
+        val result = executeQueryTyped(sql, args, maxRows)
+        val columns = result.columns.map { it.name }
+        val index = result.columns.mapIndexed { i, col -> col.name to i }.toMap()
+        return result.rows.map { row ->
+            QueryRow(index, row).toMap(columns)
+        }
+    }
 
     fun listRooms(): RoomListResponse {
         val rows =

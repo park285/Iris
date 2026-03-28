@@ -45,9 +45,7 @@ internal class AppRuntime(
         kakaoDb = KakaoDB(configManager)
         memberRepo =
             MemberRepository(
-                executeQuery = { sqlQuery, bindArgs, maxRows ->
-                    toLegacyQueryRows(kakaoDb.executeQuery(sqlQuery, bindArgs, maxRows))
-                },
+                executeQueryTyped = kakaoDb::executeQuery,
                 decrypt = KakaoDecrypt.Companion::decrypt,
                 botId = configManager.botId,
                 learnObservedProfileUserMappings = kakaoDb::learnObservedProfileUserMappings,

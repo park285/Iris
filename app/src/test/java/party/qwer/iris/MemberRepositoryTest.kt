@@ -1,8 +1,36 @@
 package party.qwer.iris
 
+import kotlinx.serialization.json.JsonPrimitive
+import party.qwer.iris.model.QueryColumn
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+
+private fun stubResult(
+    columns: List<String>,
+    rows: List<Map<String, String?>>,
+): QueryExecutionResult {
+    val cols = columns.map { QueryColumn(name = it, sqliteType = "TEXT") }
+    val jsonRows = rows.map { row ->
+        columns.map { col ->
+            row[col]?.let { JsonPrimitive(it) }
+        }
+    }
+    return QueryExecutionResult(cols, jsonRows)
+}
+
+private fun emptyResult(): QueryExecutionResult = QueryExecutionResult(emptyList(), emptyList())
+
+private fun legacyQuery(block: (String, Array<String?>?, Int) -> List<Map<String, String?>>):
+    (String, Array<String?>?, Int) -> QueryExecutionResult = { sql, args, maxRows ->
+        val rows = block(sql, args, maxRows)
+        val columns = rows.firstOrNull()?.keys?.toList().orEmpty()
+        if (columns.isEmpty()) {
+            emptyResult()
+        } else {
+            stubResult(columns, rows)
+        }
+    }
 
 class MemberRepositoryTest {
     @Test
@@ -38,7 +66,7 @@ class MemberRepositoryTest {
     fun `parseJsonLongArray parses member id arrays`() {
         val repo =
             MemberRepository(
-                executeQuery = { _, _, _ -> emptyList() },
+                executeQueryTyped = legacyQuery { _, _, _ -> emptyList() },
                 decrypt = { _, _, _ -> "" },
                 botId = 1L,
             )
@@ -52,7 +80,7 @@ class MemberRepositoryTest {
     fun `parsePeriodSeconds converts period strings`() {
         val repo =
             MemberRepository(
-                executeQuery = { _, _, _ -> emptyList() },
+                executeQueryTyped = legacyQuery { _, _, _ -> emptyList() },
                 decrypt = { _, _, _ -> "" },
                 botId = 1L,
             )
@@ -67,7 +95,7 @@ class MemberRepositoryTest {
         val chatId = 100L
         val repo =
             MemberRepository(
-                executeQuery = { sqlQuery, bindArgs, _ ->
+                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
                     when {
                         sqlQuery == "SELECT link_id FROM chat_rooms WHERE id = ?" -> listOf(mapOf("link_id" to "777"))
                         sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
@@ -106,7 +134,7 @@ class MemberRepositoryTest {
     fun `roomStats applies minMessages filter before totals`() {
         val repo =
             MemberRepository(
-                executeQuery = { sqlQuery, _, _ ->
+                executeQueryTyped = legacyQuery { sqlQuery, _, _ ->
                     when {
                         sqlQuery == "SELECT link_id FROM chat_rooms WHERE id = ?" -> listOf(mapOf("link_id" to "777"))
                         sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
@@ -138,7 +166,7 @@ class MemberRepositoryTest {
         var batchNicknameQueryCount = 0
         val repo =
             MemberRepository(
-                executeQuery = { sqlQuery, bindArgs, _ ->
+                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
                     when {
                         sqlQuery == "SELECT link_id FROM chat_rooms WHERE id = ?" -> listOf(mapOf("link_id" to "777"))
                         sqlQuery.contains("FROM chat_logs WHERE chat_id = ? AND created_at >= ?") ->
@@ -174,7 +202,7 @@ class MemberRepositoryTest {
     fun `listMembers includes current member activity metadata without former members`() {
         val repo =
             MemberRepository(
-                executeQuery = { sqlQuery, bindArgs, _ ->
+                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
                     when {
                         sqlQuery == "SELECT link_id FROM chat_rooms WHERE id = ?" -> listOf(mapOf("link_id" to "777"))
                         sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
@@ -225,7 +253,7 @@ class MemberRepositoryTest {
     fun `listMembers scopes activity aggregation to current member ids`() {
         val repo =
             MemberRepository(
-                executeQuery = { sqlQuery, bindArgs, _ ->
+                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
                     when {
                         sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
                             listOf(mapOf("link_id" to "777", "type" to "OM", "members" to "[]", "active_members_count" to "2"))
@@ -271,7 +299,7 @@ class MemberRepositoryTest {
         var activityQueryCount = 0
         val repo =
             MemberRepository(
-                executeQuery = { sqlQuery, bindArgs, _ ->
+                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
                     when {
                         sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
                             listOf(mapOf("link_id" to "777", "type" to "OM", "members" to "[]", "active_members_count" to "2"))
@@ -317,7 +345,7 @@ class MemberRepositoryTest {
     fun `listRooms deduplicates same open link and prefers positive chat id`() {
         val repo =
             MemberRepository(
-                executeQuery = { _, _, _ ->
+                executeQueryTyped = legacyQuery { _, _, _ ->
                     listOf(
                         mapOf(
                             "id" to "-1774565104303",
@@ -358,7 +386,7 @@ class MemberRepositoryTest {
     fun `listRooms includes non open rooms with resolved display names`() {
         val repo =
             MemberRepository(
-                executeQuery = { sqlQuery, bindArgs, _ ->
+                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
                     when {
                         sqlQuery.contains("FROM chat_rooms cr") ->
                             listOf(
@@ -408,7 +436,7 @@ class MemberRepositoryTest {
     fun `listMembers returns non open members from members and chat logs`() {
         val repo =
             MemberRepository(
-                executeQuery = { sqlQuery, bindArgs, _ ->
+                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
                     when {
                         sqlQuery == "SELECT link_id FROM chat_rooms WHERE id = ?" ->
                             listOf(mapOf("link_id" to null))
@@ -451,7 +479,7 @@ class MemberRepositoryTest {
     fun `listMembers falls back to user id string when non open nickname sources are missing`() {
         val repo =
             MemberRepository(
-                executeQuery = { sqlQuery, _, _ ->
+                executeQueryTyped = legacyQuery { sqlQuery, _, _ ->
                     when {
                         sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
                             listOf(
@@ -485,7 +513,7 @@ class MemberRepositoryTest {
     fun `listRooms falls back to member id when direct chat name sources are missing`() {
         val repo =
             MemberRepository(
-                executeQuery = { sqlQuery, _, _ ->
+                executeQueryTyped = legacyQuery { sqlQuery, _, _ ->
                     when {
                         sqlQuery.contains("FROM chat_rooms cr") ->
                             listOf(
@@ -519,7 +547,7 @@ class MemberRepositoryTest {
     fun `listRooms uses observed profile room name for direct chat fallback`() {
         val repo =
             MemberRepository(
-                executeQuery = { sqlQuery, bindArgs, _ ->
+                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
                     when {
                         sqlQuery.contains("FROM chat_rooms cr") ->
                             listOf(
@@ -561,7 +589,7 @@ class MemberRepositoryTest {
     fun `listMembers uses observed profile display name for direct chat participant`() {
         val repo =
             MemberRepository(
-                executeQuery = { sqlQuery, bindArgs, _ ->
+                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
                     when {
                         sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
                             listOf(
@@ -604,7 +632,7 @@ class MemberRepositoryTest {
     fun `listMembers uses learned observed profile display name fallback`() {
         val repo =
             MemberRepository(
-                executeQuery = { sqlQuery, bindArgs, _ ->
+                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
                     when {
                         sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
                             listOf(
@@ -640,7 +668,7 @@ class MemberRepositoryTest {
     fun `resolveDisplayName uses learned observed profile fallback for non open room`() {
         val repo =
             MemberRepository(
-                executeQuery = { sqlQuery, bindArgs, _ ->
+                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
                     when {
                         sqlQuery == "SELECT name, enc FROM db2.friends WHERE id = ? LIMIT 1" -> emptyList()
                         sqlQuery.contains("FROM db3.observed_profile_user_links") &&
@@ -666,7 +694,7 @@ class MemberRepositoryTest {
     fun `listMembers scopes non open activity aggregation to current members and bot`() {
         val repo =
             MemberRepository(
-                executeQuery = { sqlQuery, bindArgs, _ ->
+                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
                     when {
                         sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
                             listOf(
@@ -705,7 +733,7 @@ class MemberRepositoryTest {
         var activityQueryCount = 0
         val repo =
             MemberRepository(
-                executeQuery = { sqlQuery, bindArgs, _ ->
+                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
                     when {
                         sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
                             listOf(
@@ -744,7 +772,7 @@ class MemberRepositoryTest {
         var learnedNames: Map<Long, String>? = null
         val repo =
             MemberRepository(
-                executeQuery = { sqlQuery, _, _ ->
+                executeQueryTyped = legacyQuery { sqlQuery, _, _ ->
                     when {
                         sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
                             listOf(mapOf("link_id" to "777", "type" to "OD", "members" to "[]", "active_members_count" to "1"))
@@ -789,7 +817,7 @@ class MemberRepositoryTest {
         var learnedNames: Map<Long, String>? = null
         val repo =
             MemberRepository(
-                executeQuery = { sqlQuery, _, _ ->
+                executeQueryTyped = legacyQuery { sqlQuery, _, _ ->
                     when {
                         sqlQuery == "SELECT members, blinded_member_ids, link_id FROM chat_rooms WHERE id = ?" ->
                             listOf(
@@ -830,7 +858,7 @@ class MemberRepositoryTest {
     fun `snapshot uses learned observed profile fallback for non open members`() {
         val repo =
             MemberRepository(
-                executeQuery = { sqlQuery, bindArgs, _ ->
+                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
                     when {
                         sqlQuery == "SELECT members, blinded_member_ids, link_id FROM chat_rooms WHERE id = ?" ->
                             listOf(

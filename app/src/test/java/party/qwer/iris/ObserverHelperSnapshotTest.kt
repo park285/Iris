@@ -1,11 +1,39 @@
 package party.qwer.iris
 
+import kotlinx.serialization.json.JsonPrimitive
 import party.qwer.iris.delivery.webhook.RoutingCommand
 import party.qwer.iris.delivery.webhook.RoutingGateway
+import party.qwer.iris.model.QueryColumn
 import party.qwer.iris.delivery.webhook.RoutingResult
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+
+private fun stubResult(
+    columns: List<String>,
+    rows: List<Map<String, String?>>,
+): QueryExecutionResult {
+    val cols = columns.map { QueryColumn(name = it, sqliteType = "TEXT") }
+    val jsonRows = rows.map { row ->
+        columns.map { col ->
+            row[col]?.let { JsonPrimitive(it) }
+        }
+    }
+    return QueryExecutionResult(cols, jsonRows)
+}
+
+private fun emptyResult(): QueryExecutionResult = QueryExecutionResult(emptyList(), emptyList())
+
+private fun legacyQuery(block: (String, Array<String?>?, Int) -> List<Map<String, String?>>):
+    (String, Array<String?>?, Int) -> QueryExecutionResult = { sql, args, maxRows ->
+        val rows = block(sql, args, maxRows)
+        val columns = rows.firstOrNull()?.keys?.toList().orEmpty()
+        if (columns.isEmpty()) {
+            emptyResult()
+        } else {
+            stubResult(columns, rows)
+        }
+    }
 
 class ObserverHelperSnapshotTest {
     private val config =
@@ -202,7 +230,7 @@ private class SnapshotMemberRepositoryFixture(
 
     fun build(): MemberRepository =
         MemberRepository(
-            executeQuery = { sqlQuery, bindArgs, _ ->
+            executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
                 when {
                     sqlQuery.contains("FROM chat_rooms cr") ->
                         snapshotsByChatId.keys.map { chatId ->
@@ -237,16 +265,20 @@ private class SnapshotMemberRepositoryFixture(
                         )
                     }
                     sqlQuery == "SELECT user_id, nickname, link_member_type, profile_image_url, enc FROM db2.open_chat_member WHERE link_id = ?" -> {
-                        val linkId = bindArgs?.firstOrNull()?.toLongOrNull() ?: return@MemberRepository emptyList()
-                        val snapshot = currentSnapshotByLinkId.getValue(linkId)
-                        snapshot.memberIds.map { userId ->
-                            mapOf(
-                                "user_id" to userId.toString(),
-                                "nickname" to snapshot.nicknames[userId],
-                                "link_member_type" to snapshot.roles[userId]?.toString(),
-                                "profile_image_url" to snapshot.profileImages[userId],
-                                "enc" to "0",
-                            )
+                        val linkId = bindArgs?.firstOrNull()?.toLongOrNull()
+                        if (linkId == null) {
+                            emptyList()
+                        } else {
+                            val snapshot = currentSnapshotByLinkId.getValue(linkId)
+                            snapshot.memberIds.map { userId ->
+                                mapOf(
+                                    "user_id" to userId.toString(),
+                                    "nickname" to snapshot.nicknames[userId],
+                                    "link_member_type" to snapshot.roles[userId]?.toString(),
+                                    "profile_image_url" to snapshot.profileImages[userId],
+                                    "enc" to "0",
+                                )
+                            }
                         }
                     }
                     else -> emptyList()

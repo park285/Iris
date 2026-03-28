@@ -6,6 +6,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import party.qwer.iris.delivery.webhook.RoutingCommand
 import party.qwer.iris.delivery.webhook.RoutingGateway
 import party.qwer.iris.delivery.webhook.RoutingResult
+import party.qwer.iris.model.QueryColumn
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -255,7 +256,7 @@ class ObserverHelperLogicTest {
             )
         val memberRepo =
             MemberRepository(
-                executeQuery = { sqlQuery, bindArgs, _ ->
+                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
                     when {
                         sqlQuery.contains("SELECT id, name, enc FROM db2.friends WHERE id IN (?)") &&
                             bindArgs?.toList() == listOf("203887151") ->
@@ -379,6 +380,32 @@ private class FakeRoutingGateway(
     override fun close() {}
 }
 
+private fun stubResult(
+    columns: List<String>,
+    rows: List<Map<String, String?>>,
+): QueryExecutionResult {
+    val cols = columns.map { QueryColumn(name = it, sqliteType = "TEXT") }
+    val jsonRows = rows.map { row ->
+        columns.map { col ->
+            row[col]?.let { kotlinx.serialization.json.JsonPrimitive(it) }
+        }
+    }
+    return QueryExecutionResult(cols, jsonRows)
+}
+
+private fun emptyResult(): QueryExecutionResult = QueryExecutionResult(emptyList(), emptyList())
+
+private fun legacyQuery(block: (String, Array<String?>?, Int) -> List<Map<String, String?>>):
+    (String, Array<String?>?, Int) -> QueryExecutionResult = { sql, args, maxRows ->
+        val rows = block(sql, args, maxRows)
+        val columns = rows.firstOrNull()?.keys?.toList().orEmpty()
+        if (columns.isEmpty()) {
+            emptyResult()
+        } else {
+            stubResult(columns, rows)
+        }
+    }
+
 private fun webhookChatLogEntry(
     id: Long,
     message: String,
@@ -402,7 +429,7 @@ private fun snapshotSequenceMemberRepository(
     val snapshotQueue = ArrayDeque(snapshots)
     var currentSnapshot: RoomSnapshotData? = null
     return MemberRepository(
-        executeQuery = { sqlQuery, _, _ ->
+        executeQueryTyped = legacyQuery { sqlQuery, _, _ ->
             when {
                 sqlQuery.contains("FROM chat_rooms cr") ->
                     roomList.rooms.map { room ->
