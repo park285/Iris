@@ -35,6 +35,8 @@ data class MemberInfo(
     val role: String,
     val roleCode: Int,
     val profileImageUrl: String? = null,
+    val messageCount: Int = 0,
+    val lastActiveAt: Long? = null,
 )
 
 @Serializable

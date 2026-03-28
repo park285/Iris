@@ -1,9 +1,10 @@
 package party.qwer.iris
 
 import org.json.JSONObject
-import party.qwer.iris.bridge.H2cDispatcher
-import party.qwer.iris.bridge.RoutingCommand
-import party.qwer.iris.bridge.RoutingResult
+import party.qwer.iris.delivery.webhook.H2cRoutingGateway
+import party.qwer.iris.delivery.webhook.RoutingCommand
+import party.qwer.iris.delivery.webhook.RoutingGateway
+import party.qwer.iris.delivery.webhook.RoutingResult
 import java.io.Closeable
 
 class ObserverHelper(
@@ -12,14 +13,16 @@ class ObserverHelper(
     private val memberRepo: MemberRepository? = null,
     private val snapshotManager: RoomSnapshotManager? = null,
     private val sseEventBus: SseEventBus? = null,
+    private val checkpointStore: CheckpointStore = FileCheckpointStore(),
+    private val routingGateway: RoutingGateway? = null,
 ) : Closeable {
     @Volatile
     private var lastLogId: Long = 0
 
     @Volatile
-    private var dispatcher: H2cDispatcher? = null
+    private var dispatcher: RoutingGateway? = routingGateway
 
-    private val senderNameCache = lruMap<Long, String>(256)
+    private val senderNameCache = lruMap<SenderNameCacheKey, String>(256)
     private val roomMetadataCache = lruMap<Long, KakaoDB.RoomMetadata>(256)
     private val recentCommandFingerprints = lruMap<CommandFingerprint, Long>(MAX_COMMAND_FINGERPRINTS)
     private val previousSnapshots = mutableMapOf<Long, RoomSnapshotData>()
@@ -33,12 +36,16 @@ class ObserverHelper(
     private var initBridgeBackoffUntil: Long = 0L
 
     init {
-        initBridge()
+        if (dispatcher == null) {
+            initBridge()
+        }
     }
 
     fun checkChange() {
         if (lastLogId == 0L) {
-            lastLogId = db.latestLogId()
+            lastLogId = checkpointStore.load(CHECKPOINT_STREAM_CHAT_LOGS) ?: db.latestLogId().also { seeded ->
+                checkpointStore.save(CHECKPOINT_STREAM_CHAT_LOGS, seeded)
+            }
             IrisLogger.debug("Initial lastLogId: $lastLogId")
             if (snapshotManager != null && memberRepo != null && sseEventBus != null) {
                 runSnapshotDiff()
@@ -130,14 +137,14 @@ class ObserverHelper(
 
     private fun initBridge() {
         try {
-            dispatcher = H2cDispatcher(config)
+            dispatcher = H2cRoutingGateway(config)
             IrisLogger.info("[ObserverHelper] H2C dispatcher initialized")
         } catch (e: Exception) {
             IrisLogger.error("[ObserverHelper] Failed to initialize H2C dispatcher: ${e.message}")
         }
     }
 
-    private fun ensureDispatcher(): H2cDispatcher? {
+    private fun ensureDispatcher(): RoutingGateway? {
         if (dispatcher != null) {
             return dispatcher
         }
@@ -216,9 +223,10 @@ class ObserverHelper(
         origin: String,
         parsedCommand: ParsedCommand,
     ) {
+        val message = parsedCommand.normalizedText
         IrisLogger.debugLazy {
             "[ObserverHelper] _id=${logEntry.id}, origin=$origin, userId=${logEntry.userId}, " +
-                "message='${parsedCommand.normalizedText.take(50)}', kind=${parsedCommand.kind}"
+                "messageLength=${message.length}, messageHash=${message.stableLogHash()}, kind=${parsedCommand.kind}"
         }
     }
 
@@ -266,7 +274,12 @@ class ObserverHelper(
             RoutingCommand(
                 text = parsedCommand.normalizedText,
                 room = logEntry.chatId.toString(),
-                sender = resolveSenderName(logEntry.userId),
+                sender =
+                    resolveSenderName(
+                        chatId = logEntry.chatId,
+                        userId = logEntry.userId,
+                        linkId = roomMetadata.linkId.toLongOrNull(),
+                    ),
                 userId = logEntry.userId.toString(),
                 sourceLogId = logEntry.id,
                 chatLogId = logEntry.chatLogId?.trim()?.takeIf { it.isNotEmpty() },
@@ -313,7 +326,22 @@ class ObserverHelper(
         return synchronized(cache) { cache.getOrPut(key) { resolved } }
     }
 
-    private fun resolveSenderName(userId: Long): String = cachedResolve(senderNameCache, userId, userId.toString()) { db.resolveSenderName(it) }
+    private fun resolveSenderName(
+        chatId: Long,
+        userId: Long,
+        linkId: Long?,
+    ): String =
+        cachedResolve(
+            senderNameCache,
+            SenderNameCacheKey(chatId = chatId, userId = userId),
+            userId.toString(),
+        ) { key ->
+            memberRepo?.resolveDisplayName(
+                userId = key.userId,
+                chatId = key.chatId,
+                linkId = linkId,
+            ) ?: db.resolveSenderName(key.userId)
+        }
 
     private fun resolveRoomMetadata(chatId: Long): KakaoDB.RoomMetadata = cachedResolve(roomMetadataCache, chatId, KakaoDB.RoomMetadata()) { db.resolveRoomMetadata(it) }
 
@@ -347,6 +375,7 @@ class ObserverHelper(
 
     private fun advanceLastLogId(logId: Long): Boolean {
         lastLogId = logId
+        checkpointStore.save(CHECKPOINT_STREAM_CHAT_LOGS, logId)
         return true
     }
 
@@ -354,6 +383,7 @@ class ObserverHelper(
         private const val MAX_COMMAND_FINGERPRINTS = 256
         private const val IMAGE_MESSAGE_TYPE = "2"
         private const val INIT_BRIDGE_BACKOFF_MS = 30_000L
+        private const val CHECKPOINT_STREAM_CHAT_LOGS = "chat_logs"
     }
 
     internal data class CommandFingerprint(
@@ -361,6 +391,11 @@ class ObserverHelper(
         val userId: Long,
         val createdAt: String,
         val message: String,
+    )
+
+    private data class SenderNameCacheKey(
+        val chatId: Long,
+        val userId: Long,
     )
 
     private data class ParsedLogMetadata(
@@ -383,3 +418,5 @@ private fun <K, V> lruMap(maxSize: Int): LinkedHashMap<K, V> =
     object : LinkedHashMap<K, V>(maxSize, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, V>?): Boolean = size > maxSize
     }
+
+internal fun String.stableLogHash(): String = Integer.toHexString(hashCode())

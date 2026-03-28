@@ -23,10 +23,23 @@ class MemberRepository(
     private val executeQuery: (String, Array<String?>?, Int) -> List<Map<String, String?>>,
     private val decrypt: (Int, String, Long) -> String,
     private val botId: Long,
+    private val learnObservedProfileUserMappings: (Long, Map<Long, String>) -> Unit = { _, _ -> },
 ) {
+    private data class ObservedProfileHint(
+        val displayName: String?,
+        val roomName: String?,
+    )
+
+    private data class MemberActivityCacheEntry(
+        val memberIds: Set<Long>,
+        val cachedAtMs: Long,
+        val activityByUser: Map<Long, Map<String, String?>>,
+    )
+
     companion object {
         private const val MAX_ROWS = 2000
         private const val STATS_ROW_LIMIT = 50_000
+        private const val MEMBER_ACTIVITY_CACHE_TTL_MS = 30_000L
         private val json = Json { ignoreUnknownKeys = true }
 
         private val MESSAGE_TYPE_NAMES =
@@ -42,73 +55,175 @@ class MemberRepository(
             )
     }
 
+    private val memberActivityCache = mutableMapOf<Long, MemberActivityCacheEntry>()
+
     fun listRooms(): RoomListResponse {
         val rows =
             executeQuery(
                 """
-                SELECT cr.id, cr.type, cr.active_members_count, cr.link_id,
+                SELECT cr.id, cr.type, cr.active_members_count, cr.link_id, cr.meta, cr.members,
                        ol.name AS link_name, ol.url AS link_url, ol.member_limit, ol.searchable,
                        op.link_member_type AS bot_role
                 FROM chat_rooms cr
                 LEFT JOIN db2.open_link ol ON cr.link_id = ol.id
                 LEFT JOIN db2.open_profile op ON cr.link_id = op.link_id
-                WHERE cr.type LIKE 'O%' AND cr.link_id > 0
+                WHERE (cr.type LIKE 'O%' AND cr.link_id > 0) OR cr.type IN ('MultiChat', 'DirectChat')
                 """.trimIndent(),
                 null,
                 MAX_ROWS,
             )
+        val rooms =
+            rows.map { row ->
+                RoomSummary(
+                    chatId = row["id"]?.toLongOrNull() ?: 0L,
+                    type = row["type"],
+                    linkId = row["link_id"]?.toLongOrNull(),
+                    activeMembersCount = row["active_members_count"]?.toIntOrNull(),
+                    linkName =
+                        row["link_name"]
+                            ?: resolveNonOpenRoomName(
+                                chatId = row["id"]?.toLongOrNull() ?: 0L,
+                                roomType = row["type"],
+                                meta = row["meta"],
+                                members = row["members"],
+                            ),
+                    linkUrl = row["link_url"],
+                    memberLimit = row["member_limit"]?.toIntOrNull(),
+                    searchable = row["searchable"]?.toIntOrNull(),
+                    botRole = row["bot_role"]?.toIntOrNull(),
+                )
+            }
         return RoomListResponse(
             rooms =
-                rows.map { row ->
-                    RoomSummary(
-                        chatId = row["id"]?.toLongOrNull() ?: 0L,
-                        type = row["type"],
-                        linkId = row["link_id"]?.toLongOrNull(),
-                        activeMembersCount = row["active_members_count"]?.toIntOrNull(),
-                        linkName = row["link_name"],
-                        linkUrl = row["link_url"],
-                        memberLimit = row["member_limit"]?.toIntOrNull(),
-                        searchable = row["searchable"]?.toIntOrNull(),
-                        botRole = row["bot_role"]?.toIntOrNull(),
-                    )
-                },
+                rooms
+                    .groupBy { it.linkId ?: it.chatId }
+                    .values
+                    .map { group ->
+                        group.maxWithOrNull(
+                            compareBy<RoomSummary>(
+                                { if (it.chatId > 0) 1 else 0 },
+                                { it.activeMembersCount ?: 0 },
+                                { it.chatId },
+                            ),
+                        ) ?: group.first()
+                    },
         )
     }
 
     fun listMembers(chatId: Long): MemberListResponse {
-        val linkIdRow =
+        val roomRow =
             executeQuery(
-                "SELECT link_id FROM chat_rooms WHERE id = ?",
+                "SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?",
                 arrayOf(chatId.toString()),
                 1,
             ).firstOrNull()
         val linkId =
-            linkIdRow?.get("link_id")?.toLongOrNull()
-                ?: return MemberListResponse(chatId, null, emptyList(), 0)
+            roomRow?.get("link_id")?.toLongOrNull()
+        val roomType = roomRow?.get("type").orEmpty()
+        if (roomRow == null) {
+            return MemberListResponse(chatId, null, emptyList(), 0)
+        }
 
-        val rows =
-            executeQuery(
-                """
-                SELECT user_id, nickname, link_member_type, profile_image_url, enc
-                FROM db2.open_chat_member WHERE link_id = ?
-                """.trimIndent(),
-                arrayOf(linkId.toString()),
-                MAX_ROWS,
-            )
+        if (linkId != null) {
+            val rows =
+                executeQuery(
+                    """
+                    SELECT user_id, nickname, link_member_type, profile_image_url, enc
+                    FROM db2.open_chat_member WHERE link_id = ?
+                    """.trimIndent(),
+                    arrayOf(linkId.toString()),
+                    MAX_ROWS,
+                )
+            val memberIds =
+                rows
+                    .mapNotNull { it["user_id"]?.toLongOrNull() }
+                    .distinct()
+            val activityByUser = loadMemberActivityByUser(chatId, memberIds)
+            val members =
+                rows.map { row ->
+                    val enc = row["enc"]?.toIntOrNull() ?: 0
+                    val rawNick = row["nickname"]
+                    val roleCode = row["link_member_type"]?.toIntOrNull() ?: 2
+                    val userId = row["user_id"]?.toLongOrNull() ?: 0L
+                    val activity = activityByUser[userId]
+                    MemberInfo(
+                        userId = userId,
+                        nickname = if (rawNick != null && enc > 0) decrypt(enc, rawNick, botId) else rawNick,
+                        role = roleCodeToName(roleCode),
+                        roleCode = roleCode,
+                        profileImageUrl = row["profile_image_url"],
+                        messageCount = activity?.get("message_count")?.toIntOrNull() ?: 0,
+                        lastActiveAt = activity?.get("last_active")?.toLongOrNull(),
+                    )
+                }
+            learnObservedProfileMappings(chatId, members)
+            return MemberListResponse(chatId, linkId, members, members.size)
+        }
+
+        val roomMemberIds = parseJsonLongArray(roomRow["members"])
+        val scopedMemberIds =
+            buildSet {
+                addAll(roomMemberIds)
+                if (botId > 0L) {
+                    add(botId)
+                }
+            }.toList()
+        val activityByUser =
+            if (scopedMemberIds.isNotEmpty()) {
+                loadMemberActivityByUser(chatId, scopedMemberIds)
+            } else {
+                executeQuery(
+                    """
+                    SELECT user_id, COUNT(*) as message_count, MAX(created_at) as last_active
+                    FROM chat_logs
+                    WHERE chat_id = ?
+                    GROUP BY user_id
+                    ORDER BY last_active DESC
+                    LIMIT ?
+                    """.trimIndent(),
+                    arrayOf(chatId.toString(), STATS_ROW_LIMIT.toString()),
+                    STATS_ROW_LIMIT,
+                ).associateBy { it["user_id"]?.toLongOrNull() ?: 0L }
+            }
+        val userIds =
+            ((if (scopedMemberIds.isNotEmpty()) scopedMemberIds else activityByUser.keys.toList()) + activityByUser.keys)
+                .sortedByDescending { activityByUser[it]?.get("last_active")?.toLongOrNull() ?: Long.MIN_VALUE }
+                .distinct()
+        val directChatParticipantId =
+            if (roomType == "DirectChat") {
+                userIds.filter { it != botId }.distinct().singleOrNull()
+            } else {
+                null
+            }
+        val observedProfile = resolveObservedProfileByChatId(chatId)
         val members =
-            rows.map { row ->
-                val enc = row["enc"]?.toIntOrNull() ?: 0
-                val rawNick = row["nickname"]
-                val roleCode = row["link_member_type"]?.toIntOrNull() ?: 2
+            userIds.map { userId ->
+                val roleCode = if (userId == botId) 8 else 2
+                val activity = activityByUser[userId]
+                val resolvedNickname = resolveNickname(userId, chatId = chatId)
+                val nickname =
+                    if (
+                        roomType == "DirectChat" &&
+                        userId == directChatParticipantId &&
+                        resolvedNickname == userId.toString()
+                    ) {
+                        observedProfile?.displayName ?: resolvedNickname
+                    } else {
+                        resolvedNickname
+                    }
                 MemberInfo(
-                    userId = row["user_id"]?.toLongOrNull() ?: 0L,
-                    nickname = if (rawNick != null && enc > 0) decrypt(enc, rawNick, botId) else rawNick,
-                    role = roleCodeToName(roleCode),
+                    userId = userId,
+                    nickname = nickname,
+                    role = if (userId == botId) "bot" else roleCodeToName(roleCode),
                     roleCode = roleCode,
-                    profileImageUrl = row["profile_image_url"],
+                    profileImageUrl = null,
+                    messageCount = activity?.get("message_count")?.toIntOrNull() ?: 0,
+                    lastActiveAt = activity?.get("last_active")?.toLongOrNull(),
                 )
             }
-        return MemberListResponse(chatId, linkId, members, members.size)
+        learnObservedProfileMappings(chatId, members)
+        val totalCount = roomRow["active_members_count"]?.toIntOrNull() ?: members.size
+        return MemberListResponse(chatId, null, members, maxOf(totalCount, members.size))
     }
 
     fun roomInfo(chatId: Long): RoomInfoResponse {
@@ -164,6 +279,12 @@ class MemberRepository(
         )
     }
 
+    fun resolveDisplayName(
+        userId: Long,
+        chatId: Long,
+        linkId: Long? = resolveLinkId(chatId),
+    ): String = resolveNickname(userId, linkId = linkId, chatId = chatId) ?: userId.toString()
+
     fun roomStats(
         chatId: Long,
         period: String?,
@@ -187,6 +308,12 @@ class MemberRepository(
             )
 
         val byUser = rows.groupBy { it["user_id"]?.toLongOrNull() ?: 0L }
+        val nicknameByUser =
+            if (linkId != null) {
+                loadOpenNicknamesByUserIds(linkId, byUser.keys.toList())
+            } else {
+                emptyMap()
+            }
         val memberStats =
             byUser
                 .map { (userId, typeRows) ->
@@ -201,7 +328,13 @@ class MemberRepository(
                         val la = row["last_active"]?.toLongOrNull()
                         if (la != null && (lastActive == null || la > lastActive)) lastActive = la
                     }
-                    MemberStats(userId, resolveNickname(userId, linkId), total, lastActive, types)
+                    MemberStats(
+                        userId,
+                        nicknameByUser[userId] ?: resolveNickname(userId, linkId),
+                        total,
+                        lastActive,
+                        types,
+                    )
                 }.sortedByDescending { it.messageCount }
                 .filter { it.messageCount >= minMessages }
 
@@ -265,23 +398,239 @@ class MemberRepository(
         )
     }
 
-    private fun resolveNickname(userId: Long, linkId: Long? = null): String? {
-        val query =
-            if (linkId != null) {
-                "SELECT nickname, enc FROM db2.open_chat_member WHERE user_id = ? AND link_id = ? LIMIT 1"
-            } else {
-                "SELECT nickname, enc FROM db2.open_chat_member WHERE user_id = ? LIMIT 1"
+    private fun resolveNickname(
+        userId: Long,
+        linkId: Long? = null,
+        chatId: Long? = null,
+    ): String? {
+        if (linkId != null) {
+            val row =
+                executeQuery(
+                    "SELECT nickname, enc FROM db2.open_chat_member WHERE user_id = ? AND link_id = ? LIMIT 1",
+                    arrayOf(userId.toString(), linkId.toString()),
+                    1,
+                ).firstOrNull()
+            val enc = row?.get("enc")?.toIntOrNull() ?: 0
+            val rawNick = row?.get("nickname")
+            if (rawNick != null) {
+                return if (enc > 0) decrypt(enc, rawNick, botId) else rawNick
             }
-        val args =
-            if (linkId != null) {
-                arrayOf<String?>(userId.toString(), linkId.toString())
-            } else {
-                arrayOf<String?>(userId.toString())
+        }
+
+        val friendRow =
+            executeQuery(
+                "SELECT name, enc FROM db2.friends WHERE id = ? LIMIT 1",
+                arrayOf(userId.toString()),
+                1,
+            ).firstOrNull()
+        if (friendRow == null) {
+            return resolveObservedDisplayName(userId, chatId) ?: userId.toString()
+        }
+        val enc = friendRow["enc"]?.toIntOrNull() ?: 0
+        val rawName = friendRow["name"] ?: return resolveObservedDisplayName(userId, chatId) ?: userId.toString()
+        return if (enc > 0) decrypt(enc, rawName, botId) else rawName
+    }
+
+    private fun resolveObservedDisplayName(
+        userId: Long,
+        chatId: Long?,
+    ): String? {
+        if (chatId != null) {
+            try {
+                executeQuery(
+                    """
+                    SELECT display_name
+                    FROM db3.observed_profile_user_links
+                    WHERE user_id = ? AND chat_id = ?
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """.trimIndent(),
+                    arrayOf(userId.toString(), chatId.toString()),
+                    1,
+                ).firstOrNull()?.get("display_name")?.takeIf { it.isNotBlank() }?.let { return it }
+            } catch (_: Exception) {
+                // 일부 테스트 또는 런타임 구성에서 db3가 attach되지 않을 수 있음
             }
-        val row = executeQuery(query, args, 1).firstOrNull() ?: return null
-        val enc = row["enc"]?.toIntOrNull() ?: 0
-        val rawNick = row["nickname"] ?: return null
-        return if (enc > 0) decrypt(enc, rawNick, botId) else rawNick
+        }
+        return try {
+            executeQuery(
+                """
+                SELECT display_name
+                FROM db3.observed_profile_user_links
+                WHERE user_id = ?
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """.trimIndent(),
+                arrayOf(userId.toString()),
+                1,
+            ).firstOrNull()?.get("display_name")?.takeIf { it.isNotBlank() }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun loadMemberActivityByUser(
+        chatId: Long,
+        memberIds: List<Long>,
+    ): Map<Long, Map<String, String?>> {
+        val memberIdSet = memberIds.toSet()
+        if (memberIds.isEmpty()) {
+            return emptyMap()
+        }
+        val nowMs = System.currentTimeMillis()
+        val cached =
+            synchronized(memberActivityCache) {
+                memberActivityCache[chatId]?.takeIf {
+                    it.memberIds == memberIdSet &&
+                        nowMs - it.cachedAtMs <= MEMBER_ACTIVITY_CACHE_TTL_MS
+                }
+            }
+        return cached?.activityByUser ?: run {
+            val placeholders = memberIds.joinToString(", ") { "?" }
+            val bindArgs = arrayOf<String?>(chatId.toString(), *memberIds.map(Long::toString).toTypedArray())
+            val activity =
+                executeQuery(
+                    """
+                    SELECT user_id, COUNT(*) as message_count, MAX(created_at) as last_active
+                    FROM chat_logs
+                    WHERE chat_id = ? AND user_id IN ($placeholders)
+                    GROUP BY user_id
+                    ORDER BY last_active DESC
+                    """.trimIndent(),
+                    bindArgs,
+                    memberIds.size,
+                ).associateBy { it["user_id"]?.toLongOrNull() ?: 0L }
+            synchronized(memberActivityCache) {
+                memberActivityCache[chatId] =
+                    MemberActivityCacheEntry(
+                        memberIds = memberIdSet,
+                        cachedAtMs = nowMs,
+                        activityByUser = activity,
+                    )
+            }
+            activity
+        }
+    }
+
+    private fun loadOpenNicknamesByUserIds(
+        linkId: Long,
+        userIds: List<Long>,
+    ): Map<Long, String?> {
+        val sortedUserIds = userIds.sorted()
+        if (sortedUserIds.isEmpty()) {
+            return emptyMap()
+        }
+        val placeholders = sortedUserIds.joinToString(", ") { "?" }
+        val bindArgs = arrayOf<String?>(linkId.toString(), *sortedUserIds.map(Long::toString).toTypedArray())
+        return executeQuery(
+            """
+            SELECT user_id, nickname, enc
+            FROM db2.open_chat_member
+            WHERE link_id = ? AND user_id IN ($placeholders)
+            """.trimIndent(),
+            bindArgs,
+            sortedUserIds.size,
+        ).associate { row ->
+            val userId = row["user_id"]?.toLongOrNull() ?: 0L
+            val enc = row["enc"]?.toIntOrNull() ?: 0
+            val rawNick = row["nickname"]
+            userId to if (rawNick != null && enc > 0) decrypt(enc, rawNick, botId) else rawNick
+        }
+    }
+
+    private fun resolveNonOpenRoomName(
+        chatId: Long,
+        roomType: String?,
+        meta: String?,
+        members: String?,
+    ): String? {
+        val titleFromMeta = parseRoomTitle(meta)
+        if (!titleFromMeta.isNullOrBlank()) {
+            return titleFromMeta
+        }
+
+        val observedRoomName = resolveObservedProfileByChatId(chatId)?.roomName
+        if (!observedRoomName.isNullOrBlank()) {
+            return observedRoomName
+        }
+
+        val memberIds =
+            parseJsonLongArray(members)
+                .filter { it != botId }
+                .toList()
+        if (memberIds.isEmpty()) {
+            return roomType
+        }
+        val names = memberIds.mapNotNull { resolveNickname(it) }.filter { it.isNotBlank() }
+        if (names.isEmpty()) {
+            return roomType
+        }
+        return if (roomType == "DirectChat") names.first() else names.joinToString(", ")
+    }
+
+    private fun learnObservedProfileMappings(
+        chatId: Long,
+        members: List<MemberInfo>,
+    ) {
+        val visibleNames =
+            members
+                .asSequence()
+                .filter { it.userId != botId }
+                .mapNotNull { member ->
+                    val nickname = member.nickname?.trim().orEmpty()
+                    if (nickname.isBlank() || nickname == member.userId.toString()) {
+                        null
+                    } else {
+                        member.userId to nickname
+                    }
+                }.toMap()
+        if (visibleNames.isNotEmpty()) {
+            learnObservedProfileUserMappings(chatId, visibleNames)
+        }
+    }
+
+    private fun resolveObservedProfileByChatId(chatId: Long): ObservedProfileHint? =
+        try {
+            executeQuery(
+                """
+                SELECT display_name, room_name
+                FROM db3.observed_profiles
+                WHERE notification_key LIKE ?
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """.trimIndent(),
+                arrayOf("%|$chatId|%"),
+                1,
+            ).firstOrNull()?.let { row ->
+                ObservedProfileHint(
+                    displayName = row["display_name"]?.takeIf { it.isNotBlank() },
+                    roomName = row["room_name"]?.takeIf { it.isNotBlank() },
+                )
+            }
+        } catch (_: Exception) {
+            null
+        }
+
+    private fun parseRoomTitle(meta: String?): String? {
+        if (meta.isNullOrBlank()) return null
+        return try {
+            val element = json.parseToJsonElement(meta)
+            val candidates =
+                when {
+                    element is kotlinx.serialization.json.JsonArray -> element
+                    element is kotlinx.serialization.json.JsonObject ->
+                        element["noticeActivityContents"]?.jsonArray ?: emptyList()
+                    else -> emptyList()
+                }
+            candidates.firstNotNullOfOrNull { candidate ->
+                val obj = candidate.jsonObject
+                val type = obj["type"]?.jsonPrimitive?.content?.toIntOrNull()
+                val content = obj["content"]?.jsonPrimitive?.content?.trim()
+                content?.takeIf { type == 3 && it.isNotBlank() }
+            }
+        } catch (_: Exception) {
+            null
+        }
     }
 
     fun snapshot(chatId: Long): RoomSnapshotData {
@@ -320,6 +669,15 @@ class MemberRepository(
             row["profile_image_url"]?.let { profileImages[uid] = it }
         }
 
+        if (linkId == null) {
+            memberIds.forEach { userId ->
+                val resolvedNickname = resolveDisplayName(userId = userId, chatId = chatId, linkId = null)
+                if (resolvedNickname.isNotBlank() && resolvedNickname != userId.toString()) {
+                    nicknames[userId] = resolvedNickname
+                }
+            }
+        }
+
         return RoomSnapshotData(
             chatId = chatId,
             linkId = linkId,
@@ -328,7 +686,11 @@ class MemberRepository(
             nicknames = nicknames,
             roles = roles,
             profileImages = profileImages,
-        )
+        ).also { snapshot ->
+            if (snapshot.nicknames.isNotEmpty()) {
+                learnObservedProfileUserMappings(chatId, snapshot.nicknames.filterValues { it.isNotBlank() })
+            }
+        }
     }
 
     fun parseJsonLongArray(raw: String?): Set<Long> {

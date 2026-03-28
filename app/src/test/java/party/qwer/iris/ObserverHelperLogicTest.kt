@@ -3,6 +3,9 @@ package party.qwer.iris
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import party.qwer.iris.delivery.webhook.RoutingCommand
+import party.qwer.iris.delivery.webhook.RoutingGateway
+import party.qwer.iris.delivery.webhook.RoutingResult
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -115,7 +118,16 @@ class ObserverHelperLogicTest {
         val memberRepo = snapshotSequenceMemberRepository(roomList, listOf(initialSnapshot, changedSnapshot))
         val snapshotManager = RoomSnapshotManager()
         val bus = SseEventBus(bufferSize = 10)
-        val helper = ObserverHelper(chatLogRepo, config, memberRepo, snapshotManager, bus)
+        val helper =
+            ObserverHelper(
+                chatLogRepo,
+                config,
+                memberRepo,
+                snapshotManager,
+                bus,
+                checkpointStore = FakeCheckpointStore(),
+                routingGateway = FakeRoutingGateway(),
+            )
 
         helper.checkChange()
         val firstReplay = bus.replayFrom(0)
@@ -132,20 +144,164 @@ class ObserverHelperLogicTest {
 
         helper.close()
     }
+
+    @Test
+    fun `initial check uses persisted checkpoint when available`() {
+        val checkpointStore = FakeCheckpointStore(initial = mapOf("chat_logs" to 5L))
+        val chatLogRepo = FakeChatLogRepository(latestLogId = 100L)
+        val helper =
+            ObserverHelper(
+                db = chatLogRepo,
+                config = config,
+                checkpointStore = checkpointStore,
+                routingGateway = FakeRoutingGateway(),
+            )
+
+        helper.checkChange()
+        helper.checkChange()
+
+        assertEquals(5L, chatLogRepo.lastPolledAfterLogId)
+        helper.close()
+    }
+
+    @Test
+    fun `initial check seeds checkpoint from latest log id when absent`() {
+        val checkpointStore = FakeCheckpointStore()
+        val chatLogRepo = FakeChatLogRepository(latestLogId = 42L)
+        val helper =
+            ObserverHelper(
+                db = chatLogRepo,
+                config = config,
+                checkpointStore = checkpointStore,
+                routingGateway = FakeRoutingGateway(),
+            )
+
+        helper.checkChange()
+
+        assertEquals(42L, checkpointStore.saved["chat_logs"])
+        assertEquals(null, chatLogRepo.lastPolledAfterLogId)
+        helper.close()
+    }
+
+    @Test
+    fun `accepted command advances persisted checkpoint`() {
+        val checkpointStore = FakeCheckpointStore(initial = mapOf("chat_logs" to 10L))
+        val chatLogRepo =
+            FakeChatLogRepository(
+                latestLogId = 10L,
+                polledLogs =
+                    listOf(
+                        webhookChatLogEntry(id = 11L, message = "!ping"),
+                    ),
+            )
+        val helper =
+            ObserverHelper(
+                db = chatLogRepo,
+                config = config,
+                checkpointStore = checkpointStore,
+                routingGateway = FakeRoutingGateway(result = RoutingResult.ACCEPTED),
+            )
+
+        helper.checkChange()
+        helper.checkChange()
+
+        assertEquals(11L, checkpointStore.saved["chat_logs"])
+        helper.close()
+    }
+
+    @Test
+    fun `retry later keeps persisted checkpoint unchanged`() {
+        val checkpointStore = FakeCheckpointStore(initial = mapOf("chat_logs" to 10L))
+        val chatLogRepo =
+            FakeChatLogRepository(
+                latestLogId = 10L,
+                polledLogs =
+                    listOf(
+                        webhookChatLogEntry(id = 11L, message = "!ping"),
+                    ),
+            )
+        val helper =
+            ObserverHelper(
+                db = chatLogRepo,
+                config = config,
+                checkpointStore = checkpointStore,
+                routingGateway = FakeRoutingGateway(result = RoutingResult.RETRY_LATER),
+            )
+
+        helper.checkChange()
+        helper.checkChange()
+
+        assertEquals(10L, checkpointStore.saved["chat_logs"])
+        helper.close()
+    }
+
+    @Test
+    fun `routing uses member repository display name when available`() {
+        val checkpointStore = FakeCheckpointStore(initial = mapOf("chat_logs" to 10L))
+        val chatLogRepo =
+            FakeChatLogRepository(
+                latestLogId = 10L,
+                polledLogs =
+                    listOf(
+                        webhookChatLogEntry(
+                            id = 11L,
+                            chatId = 366795577484293L,
+                            userId = 203887151L,
+                            message = "!ping",
+                        ),
+                    ),
+                roomMetadata = KakaoDB.RoomMetadata(type = "MultiChat", linkId = ""),
+            )
+        val memberRepo =
+            MemberRepository(
+                executeQuery = { sqlQuery, bindArgs, _ ->
+                    when {
+                        sqlQuery == "SELECT name, enc FROM db2.friends WHERE id = ? LIMIT 1" -> emptyList()
+                        sqlQuery.contains("FROM db3.observed_profile_user_links") &&
+                            bindArgs?.toList() == listOf("203887151", "366795577484293") ->
+                            listOf(mapOf("display_name" to "재균"))
+                        else -> emptyList()
+                    }
+                },
+                decrypt = { _, raw, _ -> raw },
+                botId = config.botId,
+            )
+        val routingGateway = FakeRoutingGateway(result = RoutingResult.ACCEPTED)
+        val helper =
+            ObserverHelper(
+                db = chatLogRepo,
+                config = config,
+                memberRepo = memberRepo,
+                checkpointStore = checkpointStore,
+                routingGateway = routingGateway,
+            )
+
+        helper.checkChange()
+        helper.checkChange()
+
+        assertEquals("재균", routingGateway.commands.single().sender)
+        helper.close()
+    }
 }
 
 private class FakeChatLogRepository(
     var latestLogId: Long = 1L,
     var polledLogs: List<KakaoDB.ChatLogEntry> = emptyList(),
+    var roomMetadata: KakaoDB.RoomMetadata = KakaoDB.RoomMetadata(),
 ) : ChatLogRepository {
+    var lastPolledAfterLogId: Long? = null
+
     override fun pollChatLogsAfter(
         afterLogId: Long,
         limit: Int,
-    ): List<KakaoDB.ChatLogEntry> = polledLogs
+    ): List<KakaoDB.ChatLogEntry> {
+        lastPolledAfterLogId = afterLogId
+        return polledLogs
+    }
 
     override fun resolveSenderName(userId: Long): String = userId.toString()
 
-    override fun resolveRoomMetadata(chatId: Long): KakaoDB.RoomMetadata = KakaoDB.RoomMetadata()
+    override fun resolveRoomMetadata(chatId: Long): KakaoDB.RoomMetadata = roomMetadata
 
     override fun latestLogId(): Long = latestLogId
 
@@ -153,8 +309,51 @@ private class FakeChatLogRepository(
         sqlQuery: String,
         bindArgs: Array<String?>?,
         maxRows: Int,
-    ): List<Map<String, String?>> = emptyList()
+    ): QueryExecutionResult = QueryExecutionResult(columns = emptyList(), rows = emptyList())
 }
+
+private class FakeCheckpointStore(
+    initial: Map<String, Long> = emptyMap(),
+) : CheckpointStore {
+    val saved = initial.toMutableMap()
+
+    override fun load(streamName: String): Long? = saved[streamName]
+
+    override fun save(
+        streamName: String,
+        lastLogId: Long,
+    ) {
+        saved[streamName] = lastLogId
+    }
+}
+
+private class FakeRoutingGateway(
+    private val result: RoutingResult = RoutingResult.ACCEPTED,
+) : RoutingGateway {
+    val commands = mutableListOf<RoutingCommand>()
+
+    override fun route(command: RoutingCommand): RoutingResult {
+        commands += command
+        return result
+    }
+
+    override fun close() {}
+}
+
+private fun webhookChatLogEntry(
+    id: Long,
+    message: String,
+    chatId: Long = 100L,
+    userId: Long = 200L,
+): KakaoDB.ChatLogEntry =
+    KakaoDB.ChatLogEntry(
+        id = id,
+        chatId = chatId,
+        userId = userId,
+        message = message,
+        metadata = """{"enc":0,"origin":"CHATLOG"}""",
+        createdAt = "2026-03-27T00:00:00Z",
+    )
 
 private fun snapshotSequenceMemberRepository(
     roomList: party.qwer.iris.model.RoomListResponse,
