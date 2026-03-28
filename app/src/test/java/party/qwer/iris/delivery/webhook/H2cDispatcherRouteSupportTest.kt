@@ -1,11 +1,36 @@
-package party.qwer.iris.bridge
+package party.qwer.iris.delivery.webhook
 
+import party.qwer.iris.CommandParser
+import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 
 class H2cDispatcherRouteSupportTest {
+    private val customRouteConfig =
+        object : party.qwer.iris.ConfigProvider {
+            override val botId = 0L
+            override val botName = ""
+            override val botSocketPort = 0
+            override val botToken = ""
+            override val webhookToken = ""
+            override val dbPollingRate = 0L
+            override val messageSendRate = 0L
+
+            override fun webhookEndpointFor(route: String): String = ""
+
+            override fun commandRoutePrefixes(): Map<String, List<String>> =
+                mapOf(
+                    "custom" to listOf("!ping"),
+                )
+
+            override fun imageMessageTypeRoutes(): Map<String, List<String>> =
+                mapOf(
+                    "images" to listOf("2"),
+                )
+        }
+
     @Test
     fun `routes chatbotgo commands to chatbotgo`() {
         assertEquals("chatbotgo", resolveWebhookRoute("!질문 hello"))
@@ -24,14 +49,19 @@ class H2cDispatcherRouteSupportTest {
     }
 
     @Test
-    fun `keeps other webhook commands on hololive`() {
-        assertEquals("hololive", resolveWebhookRoute("!ping"))
-        assertEquals("hololive", resolveWebhookRoute("/ping"))
+    fun `keeps other webhook commands on default`() {
+        assertEquals(DEFAULT_WEBHOOK_ROUTE, resolveWebhookRoute("!ping"))
+        assertEquals(DEFAULT_WEBHOOK_ROUTE, resolveWebhookRoute("/ping"))
     }
 
     @Test
     fun `returns null for non webhook messages`() {
         assertNull(resolveWebhookRoute("hello"))
+    }
+
+    @Test
+    fun `config driven route prefixes override default matching`() {
+        assertEquals("custom", resolveWebhookRoute(CommandParser.parse("!ping"), customRouteConfig))
     }
 
     @Test
@@ -49,15 +79,20 @@ class H2cDispatcherRouteSupportTest {
     }
 
     @Test
+    fun `config driven image routes can override defaults`() {
+        assertEquals("images", resolveImageRoute("2", customRouteConfig))
+    }
+
+    @Test
     fun `creates isolated dispatcher state per route`() {
         val registry = RouteDispatchRegistry { route -> TestState(route) }
 
-        val hololiveA = registry.get("hololive")
-        val hololiveB = registry.get("hololive")
+        val defaultA = registry.get(DEFAULT_WEBHOOK_ROUTE)
+        val defaultB = registry.get(DEFAULT_WEBHOOK_ROUTE)
         val chatbotgo = registry.get("chatbotgo")
 
-        assertSame(hololiveA, hololiveB)
-        assertEquals("hololive", hololiveA.route)
+        assertSame(defaultA, defaultB)
+        assertEquals(DEFAULT_WEBHOOK_ROUTE, defaultA.route)
         assertEquals("chatbotgo", chatbotgo.route)
     }
 

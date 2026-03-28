@@ -1,4 +1,4 @@
-package party.qwer.iris.bridge
+package party.qwer.iris.delivery.webhook
 
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpHandler
@@ -127,8 +127,8 @@ class H2cDispatcherBestEffortTest {
 
         val messageOrder = CopyOnWriteArrayList<String>()
         val requestLatch = CountDownLatch(4)
-        val firstMessageId = "kakao-log-1-hololive"
-        val secondMessageId = "kakao-log-2-hololive"
+        val firstMessageId = "kakao-log-1-$DEFAULT_WEBHOOK_ROUTE"
+        val secondMessageId = "kakao-log-2-$DEFAULT_WEBHOOK_ROUTE"
         val server =
             HttpServer.create(InetSocketAddress("127.0.0.1", port), 0).apply {
                 createContext(
@@ -171,8 +171,8 @@ class H2cDispatcherBestEffortTest {
 
         val messageOrder = CopyOnWriteArrayList<String>()
         val requestLatch = CountDownLatch(3)
-        val firstMessageId = "kakao-log-1-hololive"
-        val secondMessageId = "kakao-log-2-hololive"
+        val firstMessageId = "kakao-log-1-$DEFAULT_WEBHOOK_ROUTE"
+        val secondMessageId = "kakao-log-2-$DEFAULT_WEBHOOK_ROUTE"
         val server =
             HttpServer.create(InetSocketAddress("127.0.0.1", port), 0).apply {
                 createContext(

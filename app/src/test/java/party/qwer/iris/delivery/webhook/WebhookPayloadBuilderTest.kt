@@ -1,8 +1,9 @@
-package party.qwer.iris.bridge
+package party.qwer.iris.delivery.webhook
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -21,10 +22,10 @@ class WebhookPayloadBuilderTest {
                 userId = "12345",
                 sourceLogId = 100L,
             )
-        val result = buildWebhookPayload(command, "hololive", "msg-001")
+        val result = buildWebhookPayload(command, DEFAULT_WEBHOOK_ROUTE, "msg-001")
         val obj = json.parseToJsonElement(result).jsonObject
 
-        assertEquals("hololive", obj["route"]?.jsonPrimitive?.content)
+        assertEquals(DEFAULT_WEBHOOK_ROUTE, obj["route"]?.jsonPrimitive?.content)
         assertEquals("msg-001", obj["messageId"]?.jsonPrimitive?.content)
         assertEquals("100", obj["sourceLogId"]?.jsonPrimitive?.content)
         assertEquals("!test", obj["text"]?.jsonPrimitive?.content)
@@ -90,7 +91,7 @@ class WebhookPayloadBuilderTest {
                 messageType = "",
                 attachment = "   ",
             )
-        val result = buildWebhookPayload(command, "hololive", "msg-003")
+        val result = buildWebhookPayload(command, DEFAULT_WEBHOOK_ROUTE, "msg-003")
         val obj = json.parseToJsonElement(result).jsonObject
 
         assertFalse(obj.containsKey("chatLogId"))

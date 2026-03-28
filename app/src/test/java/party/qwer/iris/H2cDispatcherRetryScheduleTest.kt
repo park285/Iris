@@ -1,7 +1,7 @@
 package party.qwer.iris
 
-import party.qwer.iris.bridge.DeliveryRetrySchedule
-import party.qwer.iris.bridge.nextDeliveryRetrySchedule
+import party.qwer.iris.delivery.webhook.DeliveryRetrySchedule
+import party.qwer.iris.delivery.webhook.nextDeliveryRetrySchedule
 import kotlin.test.Test
 import kotlin.test.assertEquals
 

@@ -1,4 +1,4 @@
-package party.qwer.iris.bridge
+package party.qwer.iris.delivery.webhook
 
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put

@@ -1,4 +1,4 @@
-package party.qwer.iris.bridge
+package party.qwer.iris.delivery.webhook
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -19,6 +19,20 @@ import okhttp3.Dispatcher
 import party.qwer.iris.CommandParser
 import party.qwer.iris.ConfigProvider
 import party.qwer.iris.IrisLogger
+import party.qwer.iris.delivery.webhook.DeliveryRetrySchedule
+import party.qwer.iris.delivery.webhook.RoutingCommand
+import party.qwer.iris.delivery.webhook.RoutingResult
+import party.qwer.iris.delivery.webhook.WebhookDelivery
+import party.qwer.iris.delivery.webhook.WebhookDeliveryClient
+import party.qwer.iris.delivery.webhook.WebhookHttpClientFactory
+import party.qwer.iris.delivery.webhook.WebhookRequestFactory
+import party.qwer.iris.delivery.webhook.WebhookTransport
+import party.qwer.iris.delivery.webhook.buildWebhookPayload
+import party.qwer.iris.delivery.webhook.nextBackoffDelayMs
+import party.qwer.iris.delivery.webhook.nextDeliveryRetrySchedule
+import party.qwer.iris.delivery.webhook.resolveImageRoute
+import party.qwer.iris.delivery.webhook.resolveWebhookRoute
+import party.qwer.iris.delivery.webhook.resolveWebhookTransport
 import java.io.Closeable
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -104,8 +118,8 @@ class H2cDispatcher internal constructor(
 
         val parsedCommand = CommandParser.parse(command.text)
         val targetRoute =
-            resolveWebhookRoute(parsedCommand)
-                ?: resolveImageRoute(command.messageType)
+            resolveWebhookRoute(parsedCommand, config)
+                ?: resolveImageRoute(command.messageType, config)
                 ?: return RoutingResult.SKIPPED
         val webhookUrl = config.webhookEndpointFor(targetRoute).takeIf { it.isNotBlank() }
         if (webhookUrl.isNullOrBlank()) {
@@ -393,7 +407,5 @@ private data class RouteDispatchState(
     val dispatchChannel: Channel<QueuedDelivery>,
     val workerJob: Job,
 )
-
-internal fun shouldRetryStatus(statusCode: Int): Boolean = statusCode == 408 || statusCode == 429 || statusCode >= 500
 
 private typealias QueuedDelivery = WebhookDelivery

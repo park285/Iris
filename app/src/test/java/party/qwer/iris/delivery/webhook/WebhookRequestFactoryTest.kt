@@ -1,8 +1,9 @@
-package party.qwer.iris.bridge
+package party.qwer.iris.delivery.webhook
 
 import okhttp3.RequestBody
 import okio.Buffer
 import party.qwer.iris.ConfigProvider
+import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -14,8 +15,8 @@ class WebhookRequestFactoryTest {
         val delivery =
             WebhookDelivery(
                 url = "http://127.0.0.1:18080/webhook/iris",
-                messageId = "kakao-log-42-hololive",
-                route = "hololive",
+                messageId = "kakao-log-42-default",
+                route = DEFAULT_WEBHOOK_ROUTE,
                 payloadJson = """{"message":"hello"}""",
             )
 
@@ -36,8 +37,8 @@ class WebhookRequestFactoryTest {
         val delivery =
             WebhookDelivery(
                 url = "http://127.0.0.1:18080/webhook/iris",
-                messageId = "kakao-log-43-hololive",
-                route = "hololive",
+                messageId = "kakao-log-43-default",
+                route = DEFAULT_WEBHOOK_ROUTE,
                 payloadJson = """{"message":"hello"}""",
             )
 

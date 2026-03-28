@@ -1,4 +1,4 @@
-package party.qwer.iris.bridge
+package party.qwer.iris.delivery.webhook
 
 data class RoutingCommand(
     val text: String,

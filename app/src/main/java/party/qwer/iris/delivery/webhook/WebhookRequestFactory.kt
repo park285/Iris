@@ -1,4 +1,4 @@
-package party.qwer.iris.bridge
+package party.qwer.iris.delivery.webhook
 
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request

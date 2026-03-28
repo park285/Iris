@@ -1,4 +1,4 @@
-package party.qwer.iris.bridge
+package party.qwer.iris.delivery.webhook
 
 import kotlin.test.Test
 import kotlin.test.assertSame

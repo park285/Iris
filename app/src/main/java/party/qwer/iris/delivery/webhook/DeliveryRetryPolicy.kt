@@ -1,4 +1,4 @@
-package party.qwer.iris.bridge
+package party.qwer.iris.delivery.webhook
 
 import kotlin.random.Random
 
@@ -17,7 +17,7 @@ internal sealed interface DeliveryRetrySchedule {
 
 internal fun nextDeliveryRetrySchedule(
     attempt: Int,
-    maxDeliveryAttempts: Int = H2cDispatcher.MAX_DELIVERY_ATTEMPTS,
+    maxDeliveryAttempts: Int = 6,
     backoffDelayProvider: (Int) -> Long = ::nextBackoffDelayMs,
 ): DeliveryRetrySchedule =
     if (attempt < maxDeliveryAttempts - 1) {
@@ -43,3 +43,5 @@ internal fun nextBackoffDelayMs(
     val boundedDelay = baseDelay.coerceAtMost(MAX_BACKOFF_DELAY_MS)
     return boundedDelay + jitterProvider()
 }
+
+internal fun shouldRetryStatus(statusCode: Int): Boolean = statusCode == 408 || statusCode == 429 || statusCode >= 500
