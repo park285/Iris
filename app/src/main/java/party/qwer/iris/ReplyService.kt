@@ -39,7 +39,7 @@ internal class ReplyService(
     private val sharedTextReplySender: (Long, CharSequence, Long?, Int?) -> Unit = { room, preparedMessage, threadId, threadScope ->
         dispatchSharedTextReply(startActivityAs, room, preparedMessage, threadId, threadScope)
     },
-    private val mediaScanner: (File) -> Unit = { file -> broadcastMediaScan(android.net.Uri.fromFile(file)) },
+    private val mediaScanner: (File) -> Unit = { file -> broadcastMediaScan(Uri.fromFile(file)) },
     private val imageDecoder: (String) -> ByteArray = ::decodeBase64Image,
     private val imageDir: File = File(IRIS_IMAGE_DIR_PATH),
 ) : MessageSender {
@@ -526,39 +526,4 @@ internal class ReplyService(
     }
 
     internal fun replyStatusOrNull(requestId: String): ReplyStatusSnapshot? = statusStore.get(requestId)
-}
-
-private data class PreparedImages(
-    val room: Long,
-    val imagePaths: ArrayList<String>,
-    val files: ArrayList<File>,
-)
-
-private fun ensureImageDir(imageDir: File) {
-    if (imageDir.exists()) {
-        return
-    }
-    check(imageDir.mkdirs() || imageDir.exists()) {
-        "Failed to create image directory: ${imageDir.absolutePath}"
-    }
-}
-
-private fun cleanupPreparedImages(preparedImages: PreparedImages) {
-    preparedImages.files.forEach { file ->
-        if (file.exists() && !file.delete()) {
-            IrisLogger.error("Failed to delete prepared image file: ${file.absolutePath}")
-        }
-    }
-}
-
-// Android Q 이상에서 ACTION_MEDIA_SCANNER_SCAN_FILE은 deprecated됨.
-// Context 없는 환경이므로 MediaScannerConnection 사용 불가.
-// shell context에서 broadcast 방식을 유지한다.
-@Suppress("DEPRECATION")
-private fun broadcastMediaScan(uri: Uri) {
-    val mediaScanIntent =
-        Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE).apply {
-            data = uri
-        }
-    AndroidHiddenApi.broadcastIntent(mediaScanIntent)
 }
