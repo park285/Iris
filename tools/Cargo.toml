@@ -1,5 +1,5 @@
 [workspace]
-members = ["iris-common", "iris-ctl"]
+members = ["iris-common", "iris-ctl", "iris-daemon"]
 resolver = "3"
 
 [workspace.package]
