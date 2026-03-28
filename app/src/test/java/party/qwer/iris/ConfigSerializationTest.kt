@@ -75,6 +75,42 @@ class ConfigSerializationTest {
     }
 
     @Test
+    fun `seeds routing defaults when routing fields are missing`() {
+        val decoded =
+            decodeConfigValues(
+                json,
+                """
+                {
+                  "botName": "Iris",
+                  "endpoint": "http://example"
+                }
+                """.trimIndent(),
+            )
+
+        assertEquals(DEFAULT_COMMAND_ROUTE_PREFIXES, decoded.values.commandRoutePrefixes)
+        assertEquals(DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES, decoded.values.imageMessageTypeRoutes)
+    }
+
+    @Test
+    fun `seeds routing defaults when routing fields are empty maps`() {
+        val decoded =
+            decodeConfigValues(
+                json,
+                """
+                {
+                  "botName": "Iris",
+                  "endpoint": "http://example",
+                  "commandRoutePrefixes": {},
+                  "imageMessageTypeRoutes": {}
+                }
+                """.trimIndent(),
+            )
+
+        assertEquals(DEFAULT_COMMAND_ROUTE_PREFIXES, decoded.values.commandRoutePrefixes)
+        assertEquals(DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES, decoded.values.imageMessageTypeRoutes)
+    }
+
+    @Test
     fun `returns null when no legacy endpoint exists`() {
         val legacyJson =
             Json.parseToJsonElement(

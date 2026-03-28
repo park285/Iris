@@ -5,44 +5,6 @@ import party.qwer.iris.CommandParser
 import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
 import party.qwer.iris.ParsedCommand
 
-internal const val ROUTE_DEFAULT = DEFAULT_WEBHOOK_ROUTE
-internal const val ROUTE_CHATBOTGO = "chatbotgo"
-internal const val ROUTE_SETTLEMENT = "settlement"
-
-private data class CommandRouteRule(
-    val route: String,
-    val prefixes: Set<String>,
-)
-
-private val commandRouteRules =
-    listOf(
-        CommandRouteRule(
-            route = ROUTE_SETTLEMENT,
-            prefixes =
-                setOf(
-                    "!정산",
-                    "!정산완료",
-                ),
-        ),
-        CommandRouteRule(
-            route = ROUTE_CHATBOTGO,
-            prefixes =
-                setOf(
-                    "!질문",
-                    "!이미지",
-                    "!그림",
-                    "!리셋",
-                    "!관리자",
-                    "!한강",
-                ),
-        ),
-    )
-
-private val defaultImageRouteRules =
-    mapOf(
-        ROUTE_CHATBOTGO to setOf("2"),
-    )
-
 internal fun resolveWebhookRoute(commandText: String): String? = resolveWebhookRoute(CommandParser.parse(commandText))
 
 internal fun resolveWebhookRoute(parsedCommand: ParsedCommand): String? = resolveWebhookRoute(parsedCommand, null)
@@ -56,23 +18,19 @@ internal fun resolveWebhookRoute(
     }
 
     val text = parsedCommand.normalizedText
-    val effectiveRules =
+    val configuredPrefixes =
         config
             ?.commandRoutePrefixes()
-            ?.takeIf { it.isNotEmpty() }
-            ?.map { (route, prefixes) ->
-                CommandRouteRule(
-                    route = route,
-                    prefixes = prefixes.toSet(),
-                )
-            } ?: commandRouteRules
-    return effectiveRules
-        .firstOrNull { rule ->
-            rule.prefixes.any { command -> matchesCommandPrefix(text, command) }
-        }?.route ?: ROUTE_DEFAULT
-}
+            .orEmpty()
+    if (configuredPrefixes.isEmpty()) {
+        return DEFAULT_WEBHOOK_ROUTE
+    }
 
-private const val IMAGE_MESSAGE_TYPE = "2"
+    return configuredPrefixes.entries
+        .firstOrNull { (_, prefixes) ->
+            prefixes.any { command -> matchesCommandPrefix(text, command) }
+        }?.key ?: DEFAULT_WEBHOOK_ROUTE
+}
 
 internal fun resolveImageRoute(messageType: String?): String? = resolveImageRoute(messageType, null)
 
@@ -82,13 +40,14 @@ internal fun resolveImageRoute(
 ): String? {
     val normalizedType = messageType?.trim().orEmpty()
     if (normalizedType.isEmpty()) return null
-    val configured =
+
+    val configuredRoutes =
         config
             ?.imageMessageTypeRoutes()
-            ?.takeIf { it.isNotEmpty() }
-            ?.mapValues { (_, types) -> types.toSet() }
-            ?: defaultImageRouteRules
-    return configured.entries.firstOrNull { (_, types) -> normalizedType in types }?.key
+            .orEmpty()
+    if (configuredRoutes.isEmpty()) return null
+
+    return configuredRoutes.entries.firstOrNull { (_, types) -> normalizedType in types }?.key
 }
 
 private fun matchesCommandPrefix(

@@ -61,4 +61,50 @@ class ConfigManagerPersistenceTest {
         assertEquals("file-secret", manager.signingSecret())
         configDir.deleteRecursively()
     }
+
+    @Test
+    fun `missing config seeds routing defaults and preserves them after reload`() {
+        val configDir = Files.createTempDirectory("iris-config-manager-routing-defaults").toFile()
+        val configPath = configDir.resolve("config.json").absolutePath
+        val manager = ConfigManager(configPath = configPath)
+
+        assertEquals(DEFAULT_COMMAND_ROUTE_PREFIXES, manager.commandRoutePrefixes())
+        assertEquals(DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES, manager.imageMessageTypeRoutes())
+        assertTrue(manager.saveConfigNow())
+
+        val reloaded = ConfigManager(configPath = configPath)
+        assertEquals(DEFAULT_COMMAND_ROUTE_PREFIXES, reloaded.commandRoutePrefixes())
+        assertEquals(DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES, reloaded.imageMessageTypeRoutes())
+        configDir.deleteRecursively()
+    }
+
+    @Test
+    fun `legacy empty routing maps are migrated and persisted on save`() {
+        val configDir = Files.createTempDirectory("iris-config-manager-routing-migration").toFile()
+        val configPath = configDir.resolve("config.json").absolutePath
+        configDir.resolve("config.json").writeText(
+            """
+            {
+              "endpoint": "http://example",
+              "commandRoutePrefixes": {},
+              "imageMessageTypeRoutes": {}
+            }
+            """.trimIndent(),
+        )
+
+        val manager = ConfigManager(configPath = configPath)
+
+        assertEquals(DEFAULT_COMMAND_ROUTE_PREFIXES, manager.commandRoutePrefixes())
+        assertEquals(DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES, manager.imageMessageTypeRoutes())
+        assertTrue(manager.saveConfigNow())
+
+        val configText = configDir.resolve("config.json").readText()
+        assertTrue(configText.contains("!정산"))
+        assertTrue(configText.contains("\"chatbotgo\""))
+
+        val reloaded = ConfigManager(configPath = configPath)
+        assertEquals(DEFAULT_COMMAND_ROUTE_PREFIXES, reloaded.commandRoutePrefixes())
+        assertEquals(DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES, reloaded.imageMessageTypeRoutes())
+        configDir.deleteRecursively()
+    }
 }

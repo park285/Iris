@@ -1,6 +1,8 @@
 package party.qwer.iris.delivery.webhook
 
 import party.qwer.iris.CommandParser
+import party.qwer.iris.DEFAULT_COMMAND_ROUTE_PREFIXES
+import party.qwer.iris.DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES
 import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -8,51 +10,47 @@ import kotlin.test.assertNull
 import kotlin.test.assertSame
 
 class H2cDispatcherRouteSupportTest {
-    private val customRouteConfig =
-        object : party.qwer.iris.ConfigProvider {
-            override val botId = 0L
-            override val botName = ""
-            override val botSocketPort = 0
-            override val botToken = ""
-            override val webhookToken = ""
-            override val dbPollingRate = 0L
-            override val messageSendRate = 0L
-            override val messageSendJitterMax = 0L
+    private val seededRouteConfig =
+        TestConfigProvider(
+            commandRoutes = DEFAULT_COMMAND_ROUTE_PREFIXES,
+            imageRoutes = DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES,
+        )
 
-            override fun webhookEndpointFor(route: String): String = ""
-
-            override fun commandRoutePrefixes(): Map<String, List<String>> =
-                mapOf(
-                    "custom" to listOf("!ping"),
-                )
-
-            override fun imageMessageTypeRoutes(): Map<String, List<String>> =
-                mapOf(
-                    "images" to listOf("2"),
-                )
-        }
+    private val emptyRouteConfig = TestConfigProvider()
 
     @Test
-    fun `routes chatbotgo commands to chatbotgo`() {
-        assertEquals("chatbotgo", resolveWebhookRoute("!질문 hello"))
-        assertEquals("chatbotgo", resolveWebhookRoute("!이미지 이 사진 뭐야"))
-        assertEquals("chatbotgo", resolveWebhookRoute("!그림 귀여운 고양이"))
-        assertEquals("chatbotgo", resolveWebhookRoute("!리셋"))
-        assertEquals("chatbotgo", resolveWebhookRoute("!관리자 상태"))
-        assertEquals("chatbotgo", resolveWebhookRoute("!한강"))
+    fun `seeded config routes configured webhook commands`() {
+        assertEquals("chatbotgo", resolveWebhookRoute(CommandParser.parse("!질문 hello"), seededRouteConfig))
+        assertEquals("settlement", resolveWebhookRoute(CommandParser.parse("!정산"), seededRouteConfig))
     }
 
     @Test
-    fun `routes settlement commands to settlement`() {
-        assertEquals("settlement", resolveWebhookRoute("!정산"))
-        assertEquals("settlement", resolveWebhookRoute("!정산완료"))
-        assertEquals("settlement", resolveWebhookRoute("!정산 완료"))
+    fun `seeded config routes configured image types`() {
+        assertEquals("chatbotgo", resolveImageRoute("2", seededRouteConfig))
     }
 
     @Test
-    fun `keeps other webhook commands on default`() {
-        assertEquals(DEFAULT_WEBHOOK_ROUTE, resolveWebhookRoute("!ping"))
-        assertEquals(DEFAULT_WEBHOOK_ROUTE, resolveWebhookRoute("/ping"))
+    fun `seeded config falls back to default route when webhook command does not match`() {
+        assertEquals(DEFAULT_WEBHOOK_ROUTE, resolveWebhookRoute(CommandParser.parse("!ping"), seededRouteConfig))
+    }
+
+    @Test
+    fun `seeded config returns null when image type does not match`() {
+        assertNull(resolveImageRoute("26", seededRouteConfig))
+    }
+
+    @Test
+    fun `empty config falls back to default webhook route and no image route`() {
+        assertEquals(DEFAULT_WEBHOOK_ROUTE, resolveWebhookRoute(CommandParser.parse("!질문 hello"), emptyRouteConfig))
+        assertEquals(DEFAULT_WEBHOOK_ROUTE, resolveWebhookRoute(CommandParser.parse("!정산"), emptyRouteConfig))
+        assertNull(resolveImageRoute("2", emptyRouteConfig))
+    }
+
+    @Test
+    fun `no config overload falls back to default webhook route and no image route`() {
+        assertEquals(DEFAULT_WEBHOOK_ROUTE, resolveWebhookRoute("!질문 hello"))
+        assertEquals(DEFAULT_WEBHOOK_ROUTE, resolveWebhookRoute("!정산"))
+        assertNull(resolveImageRoute("2"))
     }
 
     @Test
@@ -61,27 +59,9 @@ class H2cDispatcherRouteSupportTest {
     }
 
     @Test
-    fun `config driven route prefixes override default matching`() {
-        assertEquals("custom", resolveWebhookRoute(CommandParser.parse("!ping"), customRouteConfig))
-    }
-
-    @Test
-    fun `routes image messages to chatbotgo`() {
-        assertEquals("chatbotgo", resolveImageRoute("2"))
-        assertEquals("chatbotgo", resolveImageRoute(" 2 "))
-    }
-
-    @Test
-    fun `returns null for non image message types`() {
-        assertNull(resolveImageRoute("1"))
-        assertNull(resolveImageRoute("26"))
+    fun `returns null for blank or missing image message types`() {
         assertNull(resolveImageRoute(null))
         assertNull(resolveImageRoute(""))
-    }
-
-    @Test
-    fun `config driven image routes can override defaults`() {
-        assertEquals("images", resolveImageRoute("2", customRouteConfig))
     }
 
     @Test
@@ -100,4 +80,24 @@ class H2cDispatcherRouteSupportTest {
     private data class TestState(
         val route: String,
     )
+
+    private data class TestConfigProvider(
+        val commandRoutes: Map<String, List<String>> = emptyMap(),
+        val imageRoutes: Map<String, List<String>> = emptyMap(),
+    ) : party.qwer.iris.ConfigProvider {
+        override val botId: Long = 0L
+        override val botName: String = ""
+        override val botSocketPort: Int = 0
+        override val botToken: String = ""
+        override val webhookToken: String = ""
+        override val dbPollingRate: Long = 0L
+        override val messageSendRate: Long = 0L
+        override val messageSendJitterMax: Long = 0L
+
+        override fun webhookEndpointFor(route: String): String = ""
+
+        override fun commandRoutePrefixes(): Map<String, List<String>> = commandRoutes
+
+        override fun imageMessageTypeRoutes(): Map<String, List<String>> = imageRoutes
+    }
 }
