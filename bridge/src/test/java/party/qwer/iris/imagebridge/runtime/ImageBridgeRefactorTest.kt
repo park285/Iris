@@ -1,9 +1,9 @@
 @file:Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
 
-package party.qwer.iris.bridge
+package party.qwer.iris.imagebridge.runtime
 
-import org.json.JSONArray
 import org.json.JSONObject
+import party.qwer.iris.ImageBridgeProtocol
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -31,14 +31,13 @@ class ImageBridgeRequestHandlerTest {
 
         val response =
             handler.handle(
-                JSONObject().apply {
-                    put("action", "send_image")
-                    put("roomId", 123L)
-                    put("imagePaths", JSONArray(listOf(file.absolutePath)))
-                    put("threadId", 55L)
-                    put("threadScope", 3)
-                    put("requestId", "req-1")
-                },
+                sendImageRequest(
+                    roomId = 123L,
+                    imagePaths = listOf(file.absolutePath),
+                    threadId = 55L,
+                    threadScope = 3,
+                    requestId = "req-1",
+                ),
             )
 
         assertEquals(
@@ -51,7 +50,7 @@ class ImageBridgeRequestHandlerTest {
             ),
             captured,
         )
-        assertEquals("sent", response.getString("status"))
+        assertEquals("sent", response.status)
         file.delete()
     }
 
@@ -65,13 +64,14 @@ class ImageBridgeRequestHandlerTest {
 
         val response =
             handler.handle(
-                JSONObject().apply {
-                    put("action", "unknown")
-                },
+                ImageBridgeProtocol.ImageBridgeRequest(
+                    action = "unknown",
+                    protocolVersion = ImageBridgeProtocol.PROTOCOL_VERSION,
+                ),
             )
 
-        assertEquals("failed", response.getString("status"))
-        assertEquals("unknown action: unknown", response.getString("error"))
+        assertEquals("failed", response.status)
+        assertEquals("unknown action: unknown", response.error)
     }
 
     @Test
@@ -88,15 +88,11 @@ class ImageBridgeRequestHandlerTest {
 
         val response =
             handler.handle(
-                JSONObject().apply {
-                    put("action", "send_image")
-                    put("roomId", 1L)
-                    put("imagePaths", JSONArray(listOf(file.absolutePath)))
-                },
+                sendImageRequest(roomId = 1L, imagePaths = listOf(file.absolutePath)),
             )
 
-        assertEquals("failed", response.getString("status"))
-        assertEquals("send failed", response.getString("error"))
+        assertEquals("failed", response.status)
+        assertEquals("send failed", response.error)
         file.delete()
     }
 
@@ -136,17 +132,15 @@ class ImageBridgeRequestHandlerTest {
 
         val response =
             handler.handle(
-                JSONObject().apply {
-                    put("action", party.qwer.iris.ImageBridgeProtocol.ACTION_HEALTH)
-                },
+                healthRequest(),
             )
 
-        assertEquals(party.qwer.iris.ImageBridgeProtocol.STATUS_OK, response.getString("status"))
-        assertFalse(response.getBoolean("specReady"))
-        assertEquals(3, response.getInt("restartCount"))
-        assertEquals("bind failed", response.getString("lastCrashMessage"))
-        assertEquals(1, response.getJSONArray("checks").length())
-        assertEquals(1, response.getJSONObject("discovery").getJSONArray("hooks").length())
+        assertEquals(party.qwer.iris.ImageBridgeProtocol.STATUS_OK, response.status)
+        assertFalse(response.specReady == true)
+        assertEquals(3, response.restartCount)
+        assertEquals("bind failed", response.lastCrashMessage)
+        assertEquals(1, response.checks.size)
+        assertEquals(1, response.discovery?.hooks?.size)
     }
 
     @Test
@@ -175,18 +169,103 @@ class ImageBridgeRequestHandlerTest {
 
         val response =
             handler.handle(
-                JSONObject().apply {
-                    put("action", "send_image")
-                    put("roomId", 1L)
-                    put("imagePaths", JSONArray(listOf(file.absolutePath)))
-                },
+                sendImageRequest(roomId = 1L, imagePaths = listOf(file.absolutePath)),
             )
 
-        assertEquals("failed", response.getString("status"))
-        assertEquals("bridge discovery hook not ready: ChatMediaSender#sendSingle", response.getString("error"))
+        assertEquals("failed", response.status)
+        assertEquals("bridge discovery hook not ready: ChatMediaSender#sendSingle", response.error)
         file.delete()
     }
+
+    @Test
+    fun `send image request fails when discovery installation never ran`() {
+        val file = Files.createTempFile("iris-bridge", ".png").toFile().apply { writeText("x") }
+        val rootDir = file.parentFile ?: error("temp file parent missing")
+        val handler =
+            ImageBridgeRequestHandler(
+                imageSender = { error("should not be called") },
+                healthProvider = {
+                    ImageBridgeHealthSnapshot(
+                        running = true,
+                        specStatus = BridgeSpecStatus(ready = true, checkedAtEpochMs = 1L, checks = emptyList()),
+                        discoverySnapshot = BridgeDiscoverySnapshot(installAttempted = false, hooks = emptyList()),
+                        restartCount = 0,
+                        lastCrashMessage = null,
+                    )
+                },
+                pathValidator = BridgeImagePathValidator(rootDir.absolutePath),
+                logError = { _, _, _ -> },
+            )
+
+        val response =
+            handler.handle(
+                sendImageRequest(roomId = 1L, imagePaths = listOf(file.absolutePath)),
+            )
+
+        assertEquals("failed", response.status)
+        assertEquals("bridge discovery hooks not installed", response.error)
+        file.delete()
+    }
+
+    @Test
+    fun `request fails when protocol version is missing`() {
+        val handler =
+            ImageBridgeRequestHandler(
+                imageSender = { error("should not be called") },
+                healthProvider = { readyHealthSnapshot() },
+                logError = { _, _, _ -> },
+            )
+
+        val response =
+            handler.handle(
+                ImageBridgeProtocol.ImageBridgeRequest(
+                    action = "health",
+                    protocolVersion = null,
+                ),
+            )
+
+        assertEquals("failed", response.status)
+        assertEquals("unsupported protocol version", response.error)
+    }
+
+    @Test
+    fun `request fails when bridge token does not match`() {
+        val handler =
+            ImageBridgeRequestHandler(
+                imageSender = { error("should not be called") },
+                healthProvider = { readyHealthSnapshot() },
+                handshakeValidator = BridgeHandshakeValidator(expectedToken = "bridge-token"),
+                logError = { _, _, _ -> },
+            )
+
+        val response =
+            handler.handle(
+                healthRequest(token = "wrong-token"),
+            )
+
+        assertEquals("failed", response.status)
+        assertEquals("unauthorized bridge token", response.error)
+    }
 }
+
+private fun sendImageRequest(
+    roomId: Long,
+    imagePaths: List<String>,
+    threadId: Long? = null,
+    threadScope: Int? = null,
+    requestId: String? = null,
+    token: String? = null,
+): ImageBridgeProtocol.ImageBridgeRequest =
+    ImageBridgeProtocol.buildSendImageRequest(
+        roomId = roomId,
+        imagePaths = imagePaths,
+        threadId = threadId,
+        threadScope = threadScope,
+        requestId = requestId,
+        token = token,
+    )
+
+private fun healthRequest(token: String? = null): ImageBridgeProtocol.ImageBridgeRequest = ImageBridgeProtocol.buildHealthRequest(token = token)
 
 class KakaoSendInvocationFactoryTest {
     @Test
@@ -378,6 +457,19 @@ class ImageBridgeServerRestartPolicyTest {
         assertEquals(4_000L, ImageBridgeServer.nextBridgeRestartDelayMs(3))
         assertEquals(30_000L, ImageBridgeServer.nextBridgeRestartDelayMs(99))
     }
+
+    @Test
+    fun `client executor uses bounded pool and queue`() {
+        val executor = ImageBridgeServer.newClientExecutorForTest()
+
+        try {
+            assertEquals(2, executor.corePoolSize)
+            assertEquals(8, executor.maximumPoolSize)
+            assertEquals(64, executor.queue.remainingCapacity())
+        } finally {
+            executor.shutdownNow()
+        }
+    }
 }
 
 class BridgeDiscoveryTest {
@@ -466,6 +558,17 @@ class RoomThreadSerialExecutorTest {
             pool.shutdownNow()
         }
     }
+
+    @Test
+    fun `lock count stays bounded across many keys`() {
+        val executor = RoomThreadSerialExecutor(stripeCount = 8)
+
+        repeat(100) { index ->
+            executor.execute(roomId = index.toLong(), threadId = index.toLong()) {}
+        }
+
+        assertEquals(8, executor.lockCountForTest())
+    }
 }
 
 class BridgeSecurityTest {
@@ -482,6 +585,14 @@ class BridgeSecurityTest {
     }
 
     @Test
+    fun `default allowed uids include configured values in addition to defaults`() {
+        val allowed = BridgePeerIdentityValidator.defaultAllowedUids("2000, 3000")
+
+        assertTrue(allowed.contains(2000))
+        assertTrue(allowed.contains(3000))
+    }
+
+    @Test
     fun `path validator rejects files outside allowed root`() {
         val allowedDir = Files.createTempDirectory("iris-allowed").toFile()
         val outsideFile = Files.createTempFile("iris-outside", ".png").toFile().apply { writeText("x") }
@@ -494,6 +605,19 @@ class BridgeSecurityTest {
 
         assertTrue(error.message?.contains("outside allowed root") == true)
         outsideFile.delete()
+        allowedDir.deleteRecursively()
+    }
+
+    @Test
+    fun `path validator accepts files inside allowed root`() {
+        val allowedDir = Files.createTempDirectory("iris-allowed").toFile()
+        val insideFile = Files.createTempFile(allowedDir.toPath(), "iris-inside", ".png").toFile().apply { writeText("x") }
+        val validator = BridgeImagePathValidator(allowedDir.absolutePath)
+
+        val validated = validator.validate(listOf(insideFile.absolutePath))
+
+        assertEquals(listOf(insideFile.canonicalPath), validated)
+        insideFile.delete()
         allowedDir.deleteRecursively()
     }
 }

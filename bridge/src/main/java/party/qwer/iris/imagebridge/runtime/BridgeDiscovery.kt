@@ -1,4 +1,4 @@
-package party.qwer.iris.bridge
+package party.qwer.iris.imagebridge.runtime
 
 import android.util.Log
 import de.robv.android.xposed.XC_MethodHook

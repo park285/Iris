@@ -1,6 +1,6 @@
 @file:Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
 
-package party.qwer.iris.bridge
+package party.qwer.iris.imagebridge.runtime
 
 import android.net.Uri
 import java.io.File

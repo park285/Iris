@@ -1,11 +1,11 @@
-package party.qwer.iris.bridge
+package party.qwer.iris.imagebridge.runtime
 
 import android.util.Log
 import java.lang.reflect.Field
 
 /**
- * Enumerates class names from DEX files in the given classloader
- * and finds classes matching a signature predicate.
+ * 주어진 ClassLoader의 DEX 파일에서 클래스 이름을 열거하고,
+ * 시그니처 조건에 부합하는 클래스를 탐색한다.
  */
 internal class DexClassScanner(
     private val classLoader: ClassLoader,

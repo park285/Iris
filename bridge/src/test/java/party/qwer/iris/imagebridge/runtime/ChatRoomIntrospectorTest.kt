@@ -1,4 +1,4 @@
-package party.qwer.iris.bridge
+package party.qwer.iris.imagebridge.runtime
 
 import kotlin.test.Test
 import kotlin.test.assertEquals

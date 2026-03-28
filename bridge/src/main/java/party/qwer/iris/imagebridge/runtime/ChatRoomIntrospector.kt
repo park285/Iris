@@ -1,4 +1,4 @@
-package party.qwer.iris.bridge
+package party.qwer.iris.imagebridge.runtime
 
 import java.lang.reflect.Modifier
 

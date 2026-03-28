@@ -1,4 +1,4 @@
-package party.qwer.iris.bridge
+package party.qwer.iris.imagebridge.runtime
 
 import android.content.Context
 import android.net.LocalServerSocket
@@ -6,8 +6,10 @@ import android.net.LocalSocket
 import android.util.Log
 import party.qwer.iris.ImageBridgeProtocol
 import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -16,6 +18,11 @@ internal object ImageBridgeServer {
     private const val TAG = "IrisBridge"
     private const val INITIAL_RESTART_DELAY_MS = 1_000L
     private const val MAX_RESTART_DELAY_MS = 30_000L
+    private const val CLIENT_EXECUTOR_CORE_THREADS = 2
+    private const val CLIENT_EXECUTOR_MAX_THREADS = 8
+    private const val CLIENT_EXECUTOR_QUEUE_CAPACITY = 64
+    private const val CLIENT_EXECUTOR_KEEP_ALIVE_MS = 60_000L
+    private const val CLIENT_READ_TIMEOUT_MS = 5_000
 
     private val running = AtomicBoolean(false)
     private val restartCount = AtomicInteger(0)
@@ -61,12 +68,7 @@ internal object ImageBridgeServer {
                 },
                 healthProvider = ::healthSnapshot,
             )
-        clientExecutor =
-            Executors.newCachedThreadPool { runnable ->
-                Thread(runnable, "iris-bridge-client").apply {
-                    isDaemon = true
-                }
-            }
+        clientExecutor = newClientExecutor()
         Thread(
             {
                 runServerLoop()
@@ -148,6 +150,7 @@ internal object ImageBridgeServer {
             return
         }
         try {
+            configureClientReadTimeout(client)
             executor.execute {
                 handleClient(client, handler)
             }
@@ -165,7 +168,7 @@ internal object ImageBridgeServer {
         handler: ImageBridgeRequestHandler,
     ) {
         try {
-            val request = ImageBridgeProtocol.readFrame(client.inputStream)
+            val request = ImageBridgeProtocol.readRequestFrame(client.inputStream)
             val response = handler.handle(request)
             ImageBridgeProtocol.writeFrame(client.outputStream, response)
         } catch (e: Exception) {
@@ -180,8 +183,8 @@ internal object ImageBridgeServer {
 
     private fun writeFrame(
         output: java.io.OutputStream,
-        json: org.json.JSONObject,
-    ) = ImageBridgeProtocol.writeFrame(output, json)
+        response: ImageBridgeProtocol.ImageBridgeResponse,
+    ) = ImageBridgeProtocol.writeFrame(output, response)
 
     private fun failureResponse(error: String) = ImageBridgeRequestHandler.failureResponse(error)
 
@@ -208,5 +211,34 @@ internal object ImageBridgeServer {
     internal fun nextBridgeRestartDelayMs(failureCount: Int): Long {
         val exponent = (failureCount - 1).coerceAtLeast(0).coerceAtMost(5)
         return (INITIAL_RESTART_DELAY_MS shl exponent).coerceAtMost(MAX_RESTART_DELAY_MS)
+    }
+
+    internal fun newClientExecutorForTest(): ThreadPoolExecutor = newClientExecutor()
+
+    private fun newClientExecutor(): ThreadPoolExecutor =
+        ThreadPoolExecutor(
+            CLIENT_EXECUTOR_CORE_THREADS,
+            CLIENT_EXECUTOR_MAX_THREADS,
+            CLIENT_EXECUTOR_KEEP_ALIVE_MS,
+            TimeUnit.MILLISECONDS,
+            LinkedBlockingQueue(CLIENT_EXECUTOR_QUEUE_CAPACITY),
+            { runnable ->
+                Thread(runnable, "iris-bridge-client").apply {
+                    isDaemon = true
+                }
+            },
+            ThreadPoolExecutor.AbortPolicy(),
+        ).apply {
+            allowCoreThreadTimeOut(true)
+        }
+
+    private fun configureClientReadTimeout(client: LocalSocket) {
+        runCatching {
+            client.javaClass
+                .getMethod("setSoTimeout", Int::class.javaPrimitiveType)
+                .invoke(client, CLIENT_READ_TIMEOUT_MS)
+        }.onFailure { error ->
+            Log.w(TAG, "failed to set bridge client read timeout: ${error.message}")
+        }
     }
 }

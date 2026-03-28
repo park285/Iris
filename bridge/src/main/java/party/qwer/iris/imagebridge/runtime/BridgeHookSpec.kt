@@ -1,4 +1,4 @@
-package party.qwer.iris.bridge
+package party.qwer.iris.imagebridge.runtime
 
 import org.json.JSONArray
 import org.json.JSONObject
@@ -137,3 +137,36 @@ internal fun ImageBridgeHealthSnapshot.toJson(): JSONObject =
             },
         )
     }
+
+internal fun ImageBridgeHealthSnapshot.toProtocolResponse(): party.qwer.iris.ImageBridgeProtocol.ImageBridgeResponse =
+    party.qwer.iris.ImageBridgeProtocol.ImageBridgeResponse(
+        status = party.qwer.iris.ImageBridgeProtocol.STATUS_OK,
+        running = running,
+        specReady = specStatus.ready,
+        checkedAtEpochMs = specStatus.checkedAtEpochMs,
+        restartCount = restartCount,
+        lastCrashMessage = lastCrashMessage,
+        checks =
+            specStatus.checks.map { check ->
+                party.qwer.iris.ImageBridgeProtocol.ImageBridgeCheck(
+                    name = check.name,
+                    ok = check.ok,
+                    detail = check.detail,
+                )
+            },
+        discovery =
+            party.qwer.iris.ImageBridgeProtocol.ImageBridgeDiscovery(
+                installAttempted = discoverySnapshot.installAttempted,
+                hooks =
+                    discoverySnapshot.hooks.map { hook ->
+                        party.qwer.iris.ImageBridgeProtocol.ImageBridgeDiscoveryHook(
+                            name = hook.name,
+                            installed = hook.installed,
+                            installError = hook.installError,
+                            invocationCount = hook.invocationCount,
+                            lastSeenEpochMs = hook.lastSeenEpochMs,
+                            lastSummary = hook.lastSummary,
+                        )
+                    },
+            ),
+    )

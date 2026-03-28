@@ -1,7 +1,6 @@
-package party.qwer.iris.bridge
+package party.qwer.iris.imagebridge.runtime
 
 import android.util.Log
-import org.json.JSONObject
 import party.qwer.iris.ImageBridgeProtocol
 
 internal data class ImageSendRequest(
@@ -15,15 +14,17 @@ internal data class ImageSendRequest(
 internal class ImageBridgeRequestHandler(
     private val imageSender: (ImageSendRequest) -> Unit,
     private val healthProvider: () -> ImageBridgeHealthSnapshot,
+    private val handshakeValidator: BridgeHandshakeValidator = BridgeHandshakeValidator(),
     private val serialExecutor: RoomThreadSerialExecutor = RoomThreadSerialExecutor(),
     private val pathValidator: BridgeImagePathValidator = BridgeImagePathValidator(),
     private val logError: (String, String, Throwable) -> Unit = { tag, message, error -> Log.e(tag, message, error) },
 ) {
-    fun handle(request: JSONObject): JSONObject =
+    fun handle(request: ImageBridgeProtocol.ImageBridgeRequest): ImageBridgeProtocol.ImageBridgeResponse =
         try {
-            when (val action = request.optString("action", "")) {
+            handshakeValidator.validate(request)
+            when (val action = request.action) {
                 ImageBridgeProtocol.ACTION_SEND_IMAGE -> handleSendImage(request)
-                ImageBridgeProtocol.ACTION_HEALTH -> healthProvider().toJson()
+                ImageBridgeProtocol.ACTION_HEALTH -> healthProvider().toProtocolResponse()
                 else -> failureResponse("unknown action: $action")
             }
         } catch (e: Exception) {
@@ -31,23 +32,18 @@ internal class ImageBridgeRequestHandler(
             failureResponse(e.message ?: "internal error")
         }
 
-    private fun handleSendImage(request: JSONObject): JSONObject {
+    private fun handleSendImage(request: ImageBridgeProtocol.ImageBridgeRequest): ImageBridgeProtocol.ImageBridgeResponse {
         val health = healthProvider()
         check(health.specStatus.ready) {
             "bridge spec not ready"
         }
         val imageRequest =
             ImageSendRequest(
-                roomId = request.getLong("roomId"),
-                imagePaths =
-                    pathValidator.validate(
-                        request.getJSONArray("imagePaths").let { paths ->
-                            (0 until paths.length()).map(paths::getString)
-                        },
-                    ),
-                threadId = request.optLongOrNull("threadId"),
-                threadScope = request.optIntOrNull("threadScope"),
-                requestId = request.optString("requestId").ifBlank { null },
+                roomId = checkNotNull(request.roomId) { "roomId missing" },
+                imagePaths = pathValidator.validate(request.imagePaths),
+                threadId = request.threadId,
+                threadScope = request.threadScope,
+                requestId = request.requestId,
             )
         health.discoverySnapshot.sendBlockReason(imageRequest.imagePaths.size)?.let { reason ->
             error(reason)
@@ -58,17 +54,13 @@ internal class ImageBridgeRequestHandler(
         return successResponse()
     }
 
-    private fun JSONObject.optLongOrNull(name: String): Long? = if (has(name)) getLong(name) else null
-
-    private fun JSONObject.optIntOrNull(name: String): Int? = if (has(name)) getInt(name) else null
-
     private fun logFailure(
-        request: JSONObject,
+        request: ImageBridgeProtocol.ImageBridgeRequest,
         error: Exception,
     ) {
-        val action = request.optString("action", "<missing>")
-        val roomId = request.opt("roomId")?.toString() ?: "<missing>"
-        val requestId = request.optString("requestId").ifBlank { "<missing>" }
+        val action = request.action.ifBlank { "<missing>" }
+        val roomId = request.roomId?.toString() ?: "<missing>"
+        val requestId = request.requestId ?: "<missing>"
         runCatching {
             logError(TAG, "request handling failed action=$action roomId=$roomId requestId=$requestId", error)
         }
@@ -77,15 +69,8 @@ internal class ImageBridgeRequestHandler(
     companion object {
         private const val TAG = "IrisBridge"
 
-        fun successResponse(): JSONObject =
-            JSONObject().apply {
-                put("status", ImageBridgeProtocol.STATUS_SENT)
-            }
+        fun successResponse(): ImageBridgeProtocol.ImageBridgeResponse = ImageBridgeProtocol.buildSuccessResponse()
 
-        fun failureResponse(error: String): JSONObject =
-            JSONObject().apply {
-                put("status", ImageBridgeProtocol.STATUS_FAILED)
-                put("error", error)
-            }
+        fun failureResponse(error: String): ImageBridgeProtocol.ImageBridgeResponse = ImageBridgeProtocol.buildFailureResponse(error)
     }
 }
