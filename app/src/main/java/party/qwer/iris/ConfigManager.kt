@@ -16,17 +16,15 @@ import java.nio.file.StandardCopyOption
 class ConfigManager(
     private val configPath: String = System.getenv("IRIS_CONFIG_PATH") ?: "/data/local/tmp/config.json",
 ) : ConfigProvider {
-    @Volatile
-    private var snapshotUser: UserConfigState = UserConfigState()
+    private data class ConfigRuntimeState(
+        val snapshotUser: UserConfigState = UserConfigState(),
+        val appliedUser: UserConfigState = UserConfigState(),
+        val discovered: DiscoveredConfigState = DiscoveredConfigState(),
+        val isDirty: Boolean = false,
+    )
 
     @Volatile
-    private var appliedUser: UserConfigState = UserConfigState()
-
-    @Volatile
-    private var discoveredState: DiscoveredConfigState = DiscoveredConfigState()
-
-    @Volatile
-    private var isDirty = false
+    private var state = ConfigRuntimeState()
 
     private val json =
         Json {
@@ -37,6 +35,38 @@ class ConfigManager(
     init {
         loadConfig()
     }
+
+    private inline fun mutateState(
+        transform: (ConfigRuntimeState) -> ConfigRuntimeState,
+    ): ConfigRuntimeState =
+        synchronized(this) {
+            val updated = transform(state)
+            state = updated
+            updated
+        }
+
+    private inline fun updateUserState(
+        applyImmediately: Boolean,
+        transform: (UserConfigState) -> UserConfigState,
+    ): ConfigRuntimeState =
+        mutateState { current ->
+            val updatedSnapshot = transform(current.snapshotUser)
+            val updatedApplied =
+                if (applyImmediately) {
+                    transform(current.appliedUser)
+                } else {
+                    current.appliedUser
+                }
+            if (updatedSnapshot == current.snapshotUser && updatedApplied == current.appliedUser) {
+                current
+            } else {
+                current.copy(
+                    snapshotUser = updatedSnapshot,
+                    appliedUser = updatedApplied,
+                    isDirty = true,
+                )
+            }
+        }
 
     private fun loadConfig() {
         val configFile = File(configPath)
@@ -49,13 +79,19 @@ class ConfigManager(
         try {
             val jsonString = configFile.readText()
             val decodedConfig = decodeConfigValues(json, jsonString)
-            snapshotUser = decodedConfig.values.toUserConfigState()
-            appliedUser = snapshotUser.copy()
-            discoveredState = decodedConfig.values.toDiscoveredConfigState()
+            val userConfigState = decodedConfig.values.toUserConfigState()
+            mutateState {
+                ConfigRuntimeState(
+                    snapshotUser = userConfigState,
+                    appliedUser = userConfigState.copy(),
+                    discovered = it.discovered,
+                    isDirty = decodedConfig.migratedLegacyEndpoint || decodedConfig.migratedRoutingDefaults,
+                )
+            }
             IrisLogger.debug(
                 "Loaded config from $configPath " +
-                    "(webhookTokenConfigured=${snapshotUser.webhookToken.isNotBlank()}, " +
-                    "botTokenConfigured=${snapshotUser.botToken.isNotBlank()})",
+                    "(webhookTokenConfigured=${state.snapshotUser.webhookToken.isNotBlank()}, " +
+                    "botTokenConfigured=${state.snapshotUser.botToken.isNotBlank()})",
             )
             if (decodedConfig.migratedLegacyEndpoint) {
                 IrisLogger.info("Migrated legacy webhook config to route-aware model")
@@ -63,7 +99,6 @@ class ConfigManager(
             if (decodedConfig.migratedRoutingDefaults) {
                 IrisLogger.info("Seeded routing defaults into persisted config")
             }
-            isDirty = decodedConfig.migratedLegacyEndpoint || decodedConfig.migratedRoutingDefaults
         } catch (e: IOException) {
             IrisLogger.error("Error reading config.json from $configPath, using in-memory defaults: ${e.message}")
             backupBrokenConfig(configFile)
@@ -83,11 +118,12 @@ class ConfigManager(
 
         val tempFile = File("${configFile.absolutePath}.tmp")
         try {
-            val jsonString = json.encodeToString(UserConfigValues.serializer(), snapshotUser.toPersistedConfigValues())
+            val currentState = state
+            val jsonString = json.encodeToString(UserConfigValues.serializer(), currentState.snapshotUser.toPersistedConfigValues())
             IrisLogger.debug(
                 "Saving config to $configPath " +
-                    "(webhookTokenConfigured=${snapshotUser.webhookToken.isNotBlank()}, " +
-                    "botTokenConfigured=${snapshotUser.botToken.isNotBlank()})",
+                    "(webhookTokenConfigured=${currentState.snapshotUser.webhookToken.isNotBlank()}, " +
+                    "botTokenConfigured=${currentState.snapshotUser.botToken.isNotBlank()})",
             )
 
             FileOutputStream(tempFile).use { output ->
@@ -95,7 +131,7 @@ class ConfigManager(
                 output.fd.sync()
             }
             moveConfigAtomically(tempFile, configFile)
-            isDirty = false
+            state = state.copy(isDirty = false)
             return true
         } catch (e: IOException) {
             IrisLogger.error("Error writing config to file $configPath: ${e.message}")
@@ -108,69 +144,51 @@ class ConfigManager(
 
     fun saveConfigNow(): Boolean {
         synchronized(this) {
-            if (!isDirty) {
+            if (!state.isDirty) {
                 return true
             }
             return saveConfig()
         }
     }
 
-    private fun markDirty() {
-        isDirty = true
-    }
-
     override var botId: Long
-        get() = discoveredState.botId
+        get() = state.discovered.botId
         set(value) {
-            synchronized(this) {
-                if (discoveredState.botId == value) {
-                    return
+            mutateState { current ->
+                if (current.discovered.botId == value) {
+                    current
+                } else {
+                    current.copy(discovered = current.discovered.copy(botId = value))
                 }
-                discoveredState = discoveredState.copy(botId = value)
-                IrisLogger.debug("Bot Id is updated to: $botId")
             }
+            IrisLogger.debug("Bot Id is updated to: $botId")
         }
 
     override var botName: String
-        get() = appliedUser.botName
+        get() = state.appliedUser.botName
         set(value) {
-            synchronized(this) {
-                if (snapshotUser.botName == value && appliedUser.botName == value) {
-                    return
-                }
-                snapshotUser = snapshotUser.copy(botName = value)
-                appliedUser = appliedUser.copy(botName = value)
-                markDirty()
-                IrisLogger.debug("Bot name updated to: $botName")
-            }
+            updateUserState(applyImmediately = true) { it.copy(botName = value) }
+            IrisLogger.debug("Bot name updated to: $botName")
         }
 
     override var botSocketPort: Int
-        get() = appliedUser.botHttpPort
+        get() = state.appliedUser.botHttpPort
         set(value) {
-            synchronized(this) {
-                if (snapshotUser.botHttpPort == value) {
-                    return
-                }
-                snapshotUser = snapshotUser.copy(botHttpPort = value)
-                markDirty()
-                IrisLogger.debug(
-                    "Bot port snapshot updated to: ${snapshotUser.botHttpPort} " +
-                        "(effective=${appliedUser.botHttpPort})",
-                )
-            }
+            updateUserState(applyImmediately = false) { it.copy(botHttpPort = value) }
+            IrisLogger.debug(
+                "Bot port snapshot updated to: ${state.snapshotUser.botHttpPort} " +
+                    "(effective=${state.appliedUser.botHttpPort})",
+            )
         }
 
     var defaultWebhookEndpoint: String
-        get() = appliedUser.endpoint
+        get() = state.appliedUser.endpoint
         set(value) {
             val normalized = value.trim()
-            synchronized(this) {
-                if (defaultWebhookEndpoint == normalized) {
-                    return
-                }
-                setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, normalized)
+            if (defaultWebhookEndpoint == normalized) {
+                return
             }
+            setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, normalized)
         }
 
     fun setWebhookEndpoint(
@@ -184,15 +202,27 @@ class ConfigManager(
                 return
             }
 
-            val updatedSnapshot = updateWebhookConfig(snapshotUser.toLegacyConfigValues(), normalizedRoute, normalizedEndpoint).toUserConfigState()
-            val updatedEffective = updateWebhookConfig(appliedUser.toLegacyConfigValues(), normalizedRoute, normalizedEndpoint).toUserConfigState()
-            if (snapshotUser == updatedSnapshot && appliedUser == updatedEffective) {
+            val updatedSnapshot =
+                updateWebhookConfig(
+                    state.snapshotUser.toLegacyConfigValues(),
+                    normalizedRoute,
+                    normalizedEndpoint,
+                ).toUserConfigState()
+            val updatedEffective =
+                updateWebhookConfig(
+                    state.appliedUser.toLegacyConfigValues(),
+                    normalizedRoute,
+                    normalizedEndpoint,
+                ).toUserConfigState()
+            if (state.snapshotUser == updatedSnapshot && state.appliedUser == updatedEffective) {
                 return
             }
 
-            snapshotUser = updatedSnapshot
-            appliedUser = updatedEffective
-            markDirty()
+            state = state.copy(
+                snapshotUser = updatedSnapshot,
+                appliedUser = updatedEffective,
+                isDirty = true,
+            )
             if (normalizedRoute == DEFAULT_WEBHOOK_ROUTE) {
                 IrisLogger.debug("Default webhook endpoint updated")
             } else {
@@ -201,61 +231,40 @@ class ConfigManager(
         }
     }
 
-    override fun webhookEndpointFor(route: String): String = configuredWebhookEndpoint(appliedUser.toLegacyConfigValues(), route)
+    override fun webhookEndpointFor(route: String): String = configuredWebhookEndpoint(state.appliedUser.toLegacyConfigValues(), route)
 
     override val webhookToken: String
-        get() = snapshotUser.webhookToken
+        get() = state.snapshotUser.webhookToken
 
     override val botToken: String
-        get() = snapshotUser.botToken
+        get() = state.snapshotUser.botToken
 
-    internal fun signingSecret(): String = snapshotUser.webhookToken
+    internal fun signingSecret(): String = state.snapshotUser.webhookToken
 
     override var dbPollingRate: Long
-        get() = appliedUser.dbPollingRate
+        get() = state.appliedUser.dbPollingRate
         set(value) {
-            synchronized(this) {
-                if (snapshotUser.dbPollingRate == value && appliedUser.dbPollingRate == value) {
-                    return
-                }
-                snapshotUser = snapshotUser.copy(dbPollingRate = value)
-                appliedUser = appliedUser.copy(dbPollingRate = value)
-                markDirty()
-                IrisLogger.debug("DbPollingRate updated to: $dbPollingRate")
-            }
+            updateUserState(applyImmediately = true) { it.copy(dbPollingRate = value) }
+            IrisLogger.debug("DbPollingRate updated to: $dbPollingRate")
         }
 
     override var messageSendRate: Long
-        get() = appliedUser.messageSendRate
+        get() = state.appliedUser.messageSendRate
         set(value) {
-            synchronized(this) {
-                if (snapshotUser.messageSendRate == value && appliedUser.messageSendRate == value) {
-                    return
-                }
-                snapshotUser = snapshotUser.copy(messageSendRate = value)
-                appliedUser = appliedUser.copy(messageSendRate = value)
-                markDirty()
-                IrisLogger.debug("MessageSendRate updated to: $messageSendRate")
-            }
+            updateUserState(applyImmediately = true) { it.copy(messageSendRate = value) }
+            IrisLogger.debug("MessageSendRate updated to: $messageSendRate")
         }
 
     override var messageSendJitterMax: Long
-        get() = appliedUser.messageSendJitterMax
+        get() = state.appliedUser.messageSendJitterMax
         set(value) {
-            synchronized(this) {
-                if (snapshotUser.messageSendJitterMax == value && appliedUser.messageSendJitterMax == value) {
-                    return
-                }
-                snapshotUser = snapshotUser.copy(messageSendJitterMax = value)
-                appliedUser = appliedUser.copy(messageSendJitterMax = value)
-                markDirty()
-                IrisLogger.debug("MessageSendJitterMax updated to: $messageSendJitterMax")
-            }
+            updateUserState(applyImmediately = true) { it.copy(messageSendJitterMax = value) }
+            IrisLogger.debug("MessageSendJitterMax updated to: $messageSendJitterMax")
         }
 
-    override fun commandRoutePrefixes(): Map<String, List<String>> = appliedUser.commandRoutePrefixes
+    override fun commandRoutePrefixes(): Map<String, List<String>> = state.appliedUser.commandRoutePrefixes
 
-    override fun imageMessageTypeRoutes(): Map<String, List<String>> = appliedUser.imageMessageTypeRoutes
+    override fun imageMessageTypeRoutes(): Map<String, List<String>> = state.appliedUser.imageMessageTypeRoutes
 
     fun configResponse(): ConfigResponse =
         synchronized(this) {
@@ -283,16 +292,10 @@ class ConfigManager(
         }
 
     private fun snapshotConfigValues(): ConfigValues =
-        AppliedConfigState(
-            user = snapshotUser,
-            discovered = discoveredState,
-        ).toLegacyConfigValues()
+        AppliedConfigState(user = state.snapshotUser, discovered = state.discovered).toLegacyConfigValues()
 
     private fun effectiveConfigValues(): ConfigValues =
-        AppliedConfigState(
-            user = appliedUser,
-            discovered = discoveredState,
-        ).toLegacyConfigValues()
+        AppliedConfigState(user = state.appliedUser, discovered = state.discovered).toLegacyConfigValues()
 
     private fun backupBrokenConfig(configFile: File) {
         if (!configFile.exists()) {
