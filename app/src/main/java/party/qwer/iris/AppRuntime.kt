@@ -25,6 +25,7 @@ internal class AppRuntime(
     private lateinit var snapshotManager: RoomSnapshotManager
     private lateinit var observerHelper: ObserverHelper
     private lateinit var dbObserver: DBObserver
+    private lateinit var snapshotObserver: SnapshotObserver
     private lateinit var kakaoProfileIndexer: KakaoProfileIndexer
     private lateinit var imageDeleter: ImageDeleter
     private lateinit var bridgeHealthCache: BridgeHealthCache
@@ -70,6 +71,10 @@ internal class AppRuntime(
         dbObserver = DBObserver(observerHelper, configManager)
         dbObserver.startPolling()
         IrisLogger.info("DBObserver started")
+
+        snapshotObserver = SnapshotObserver(observerHelper)
+        snapshotObserver.start()
+        IrisLogger.info("SnapshotObserver started")
 
         kakaoProfileIndexer =
             KakaoProfileIndexer(
@@ -128,6 +133,7 @@ internal class AppRuntime(
             IrisLogger.info("[AppRuntime] Shutdown signal received, cleaning up...")
             irisServer?.stopServer()
             dbObserver.stopPolling()
+            snapshotObserver.stop()
             kakaoProfileIndexer.stop()
             imageDeleter.stopDeletion()
             webhookOutboxDispatcher.close()

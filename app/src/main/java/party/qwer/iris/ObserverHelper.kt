@@ -6,6 +6,8 @@ import party.qwer.iris.delivery.webhook.RoutingCommand
 import party.qwer.iris.delivery.webhook.RoutingGateway
 import party.qwer.iris.delivery.webhook.RoutingResult
 import java.io.Closeable
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 
 class ObserverHelper(
     private val db: ChatLogRepository,
@@ -27,6 +29,8 @@ class ObserverHelper(
     private val roomMetadataCache = lruMap<Long, KakaoDB.RoomMetadata>(256)
     private val recentCommandFingerprints = lruMap<CommandFingerprint, Long>(MAX_COMMAND_FINGERPRINTS)
     private val previousSnapshots = mutableMapOf<Long, RoomSnapshotData>()
+    private val dirtyRoomSet = ConcurrentHashMap.newKeySet<Long>()
+    private val dirtyRoomQueue = ConcurrentLinkedQueue<Long>()
     private val serverJson =
         kotlinx.serialization.json.Json {
             ignoreUnknownKeys = true
@@ -48,83 +52,82 @@ class ObserverHelper(
                 checkpointStore.save(CHECKPOINT_STREAM_CHAT_LOGS, seeded)
             }
             IrisLogger.debug("Initial lastLogId: $lastLogId")
-            if (snapshotManager != null && memberRepo != null && sseEventBus != null) {
-                runSnapshotDiff()
-            }
+            seedSnapshotCache()
             return
         }
 
         val newLogs = db.pollChatLogsAfter(lastLogId)
         if (newLogs.isNotEmpty()) {
             for (logEntry in newLogs) {
+                markRoomDirty(logEntry.chatId)
                 if (!processLogEntry(logEntry)) {
                     break
                 }
             }
         }
+        // snapshot diff는 SnapshotObserver가 별도 주기로 수행
+    }
 
-        if (snapshotManager != null && memberRepo != null && sseEventBus != null) {
-            runSnapshotDiff()
+    internal fun markRoomDirty(chatId: Long) {
+        if (chatId <= 0L) return
+        if (dirtyRoomSet.add(chatId)) {
+            dirtyRoomQueue.offer(chatId)
         }
     }
 
-    private fun runSnapshotDiff() {
+    fun seedSnapshotCache() {
+        val repo = memberRepo ?: return
+        repo.listRooms().rooms
+            .asSequence()
+            .map { it.chatId }
+            .filter { it > 0L }
+            .forEach { chatId ->
+                previousSnapshots[chatId] = repo.snapshot(chatId)
+            }
+    }
+
+    fun runDirtySnapshotDiff(maxRoomsPerTick: Int = 32) {
         val repo = memberRepo ?: return
         val snapMgr = snapshotManager ?: return
         val bus = sseEventBus ?: return
 
-        val roomRows = repo.listRooms().rooms
-        for (room in roomRows) {
-            val chatId = room.chatId
-            if (chatId == 0L) continue
-            val currentSnapshot = repo.snapshot(chatId)
-            val previousSnapshot = previousSnapshots[chatId]
-            previousSnapshots[chatId] = currentSnapshot
+        repeat(maxRoomsPerTick) {
+            val chatId = dirtyRoomQueue.poll() ?: return
+            dirtyRoomSet.remove(chatId)
 
-            if (previousSnapshot == null) continue
+            val currentSnapshot = repo.snapshot(chatId)
+            val previousSnapshot = previousSnapshots.put(chatId, currentSnapshot) ?: return@repeat
 
             val events = snapMgr.diff(previousSnapshot, currentSnapshot)
-            for (event in events) {
-                val (jsonStr, eventChatId) =
-                    when (event) {
-                        is party.qwer.iris.model.MemberEvent ->
-                            serverJson.encodeToString(
-                                party.qwer.iris.model.MemberEvent
-                                    .serializer(),
-                                event,
-                            ) to event.chatId
-                        is party.qwer.iris.model.NicknameChangeEvent ->
-                            serverJson.encodeToString(
-                                party.qwer.iris.model.NicknameChangeEvent
-                                    .serializer(),
-                                event,
-                            ) to event.chatId
-                        is party.qwer.iris.model.RoleChangeEvent ->
-                            serverJson.encodeToString(
-                                party.qwer.iris.model.RoleChangeEvent
-                                    .serializer(),
-                                event,
-                            ) to event.chatId
-                        is party.qwer.iris.model.ProfileChangeEvent ->
-                            serverJson.encodeToString(
-                                party.qwer.iris.model.ProfileChangeEvent
-                                    .serializer(),
-                                event,
-                            ) to event.chatId
-                        else -> continue
-                    }
-                bus.emit(jsonStr)
-                ensureDispatcher()?.route(
-                    RoutingCommand(
-                        text = jsonStr,
-                        room = eventChatId.toString(),
-                        sender = "iris-system",
-                        userId = "0",
-                        sourceLogId = -1,
-                        messageType = "member_event",
-                    ),
-                )
-            }
+            emitSnapshotEvents(events, bus)
+        }
+    }
+
+    private fun emitSnapshotEvents(events: List<Any>, bus: SseEventBus) {
+        for (event in events) {
+            val (jsonStr, eventChatId) =
+                when (event) {
+                    is party.qwer.iris.model.MemberEvent ->
+                        serverJson.encodeToString(party.qwer.iris.model.MemberEvent.serializer(), event) to event.chatId
+                    is party.qwer.iris.model.NicknameChangeEvent ->
+                        serverJson.encodeToString(party.qwer.iris.model.NicknameChangeEvent.serializer(), event) to event.chatId
+                    is party.qwer.iris.model.RoleChangeEvent ->
+                        serverJson.encodeToString(party.qwer.iris.model.RoleChangeEvent.serializer(), event) to event.chatId
+                    is party.qwer.iris.model.ProfileChangeEvent ->
+                        serverJson.encodeToString(party.qwer.iris.model.ProfileChangeEvent.serializer(), event) to event.chatId
+                    else -> continue
+                }
+            bus.emit(jsonStr)
+            ensureDispatcher()?.route(
+                RoutingCommand(
+                    text = jsonStr,
+                    room = eventChatId.toString(),
+                    sender = "iris-system",
+                    userId = "0",
+                    sourceLogId = -1,
+                    messageType = "member_event",
+                ),
+            )
         }
     }
 

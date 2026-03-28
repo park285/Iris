@@ -85,7 +85,7 @@ class ObserverHelperLogicTest {
     }
 
     @Test
-    fun `snapshot diff primes on first run and emits during quiet polling cycle`() {
+    fun `snapshot diff primes on first run and waits for dirty snapshot processing`() {
         val roomList =
             party.qwer.iris.model.RoomListResponse(
                 rooms =
@@ -130,15 +130,16 @@ class ObserverHelperLogicTest {
             )
 
         helper.checkChange()
-        val firstReplay = bus.replayFrom(0)
-
         chatLogRepo.polledLogs = emptyList()
         helper.checkChange()
-        val secondReplay = bus.replayFrom(0)
+        assertTrue(bus.replayFrom(0).isEmpty())
 
-        assertTrue(firstReplay.isEmpty())
-        assertEquals(1, secondReplay.size)
-        val eventJson = json.parseToJsonElement(secondReplay.single().second).jsonObject
+        helper.markRoomDirty(100L)
+        helper.runDirtySnapshotDiff()
+        val replay = bus.replayFrom(0)
+
+        assertEquals(1, replay.size)
+        val eventJson = json.parseToJsonElement(replay.single().second).jsonObject
         assertEquals("join", eventJson.getValue("event").jsonPrimitive.content)
         assertEquals("2", eventJson.getValue("userId").jsonPrimitive.content)
 

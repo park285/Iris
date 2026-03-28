@@ -6,8 +6,8 @@ import party.qwer.iris.model.ProfileChangeEvent
 import party.qwer.iris.model.RoleChangeEvent
 import party.qwer.iris.model.roleCodeToName
 
-class RoomSnapshotManager {
-    fun diff(
+open class RoomSnapshotManager {
+    open fun diff(
         prev: RoomSnapshotData,
         curr: RoomSnapshotData,
     ): List<Any> {

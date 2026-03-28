@@ -1,0 +1,269 @@
+package party.qwer.iris
+
+import party.qwer.iris.delivery.webhook.RoutingCommand
+import party.qwer.iris.delivery.webhook.RoutingGateway
+import party.qwer.iris.delivery.webhook.RoutingResult
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+
+class ObserverHelperSnapshotTest {
+    private val config =
+        object : ConfigProvider {
+            override val botId = 0L
+            override val botName = ""
+            override val botSocketPort = 0
+            override val botToken = ""
+            override val webhookToken = ""
+            override val dbPollingRate = 100L
+            override val messageSendRate = 0L
+            override val messageSendJitterMax = 0L
+
+            override fun webhookEndpointFor(route: String): String = ""
+        }
+
+    @Test
+    fun `checkChange does not run snapshot diff during quiet polling`() {
+        val checkpointStore = SnapshotTestCheckpointStore(initial = mapOf("chat_logs" to 10L))
+        val chatLogRepo = SnapshotTestChatLogRepository(latestLogId = 10L, polledLogs = emptyList())
+        val memberRepoFixture =
+            snapshotMemberRepository(
+                mapOf(
+                    100L to
+                        listOf(
+                            snapshot(chatId = 100L, members = setOf(1L)),
+                            snapshot(chatId = 100L, members = setOf(1L, 2L)),
+                        ),
+                ),
+            )
+        val snapshotManager = CountingSnapshotManager()
+        val helper =
+            ObserverHelper(
+                db = chatLogRepo,
+                config = config,
+                memberRepo = memberRepoFixture.build(),
+                snapshotManager = snapshotManager,
+                sseEventBus = SseEventBus(bufferSize = 10),
+                checkpointStore = checkpointStore,
+                routingGateway = RecordingRoutingGateway(),
+            )
+
+        repeat(3) { helper.checkChange() }
+
+        assertEquals(0, snapshotManager.diffCalls)
+    }
+
+    @Test
+    fun `dirty snapshot diff processes only marked rooms`() {
+        val checkpointStore = SnapshotTestCheckpointStore(initial = mapOf("chat_logs" to 10L))
+        val memberRepoFixture =
+            snapshotMemberRepository(
+                mapOf(
+                    100L to
+                        listOf(
+                            snapshot(chatId = 100L, members = setOf(1L), nicknames = mapOf(1L to "Alice")),
+                            snapshot(chatId = 100L, members = setOf(1L, 3L), nicknames = mapOf(1L to "Alice", 3L to "Cara")),
+                        ),
+                    200L to
+                        listOf(
+                            snapshot(chatId = 200L, members = setOf(2L), nicknames = mapOf(2L to "Bob")),
+                            snapshot(chatId = 200L, members = setOf(2L, 4L), nicknames = mapOf(2L to "Bob", 4L to "Drew")),
+                        ),
+                ),
+            )
+        val snapshotManager = CountingSnapshotManager()
+        val bus = SseEventBus(bufferSize = 10)
+        val routingGateway = RecordingRoutingGateway()
+        val helper =
+            ObserverHelper(
+                db = SnapshotTestChatLogRepository(latestLogId = 10L),
+                config = config,
+                memberRepo = memberRepoFixture.build(),
+                snapshotManager = snapshotManager,
+                sseEventBus = bus,
+                checkpointStore = checkpointStore,
+                routingGateway = routingGateway,
+            )
+
+        helper.seedSnapshotCache()
+        helper.markRoomDirty(100L)
+        helper.markRoomDirty(100L)
+        helper.markRoomDirty(200L)
+        helper.runDirtySnapshotDiff(maxRoomsPerTick = 1)
+
+        assertEquals(listOf(100L), snapshotManager.diffedChatIds)
+        assertEquals(1, bus.replayFrom(0).size)
+        assertEquals(listOf("100"), routingGateway.commands.map { it.room })
+
+        helper.runDirtySnapshotDiff(maxRoomsPerTick = 10)
+
+        assertEquals(listOf(100L, 200L), snapshotManager.diffedChatIds)
+        assertEquals(2, bus.replayFrom(0).size)
+        assertEquals(listOf("100", "200"), routingGateway.commands.map { it.room })
+        assertEquals(listOf(100L, 200L, 100L, 200L), memberRepoFixture.snapshotCalls)
+        assertTrue(bus.replayFrom(0).all { (_, payload) -> payload.contains("\"event\":\"join\"") })
+    }
+
+    private fun snapshot(
+        chatId: Long,
+        members: Set<Long>,
+        nicknames: Map<Long, String> = emptyMap(),
+    ): RoomSnapshotData =
+        RoomSnapshotData(
+            chatId = chatId,
+            linkId = chatId + 1000L,
+            memberIds = members,
+            blindedIds = emptySet(),
+            nicknames = nicknames,
+            roles = members.associateWith { 2 },
+            profileImages = emptyMap(),
+        )
+}
+
+private class CountingSnapshotManager : RoomSnapshotManager() {
+    var diffCalls = 0
+    val diffedChatIds = mutableListOf<Long>()
+
+    override fun diff(
+        prev: RoomSnapshotData,
+        curr: RoomSnapshotData,
+    ): List<Any> {
+        diffCalls++
+        diffedChatIds += curr.chatId
+        val joined = (curr.memberIds - prev.memberIds).firstOrNull() ?: return emptyList()
+        return listOf(
+            party.qwer.iris.model.MemberEvent(
+                event = "join",
+                chatId = curr.chatId,
+                linkId = curr.linkId,
+                userId = joined,
+                nickname = curr.nicknames[joined],
+                estimated = false,
+                timestamp = 1L,
+            ),
+        )
+    }
+}
+
+private class RecordingRoutingGateway : RoutingGateway {
+    val commands = mutableListOf<RoutingCommand>()
+
+    override fun route(command: RoutingCommand): RoutingResult {
+        commands += command
+        return RoutingResult.ACCEPTED
+    }
+
+    override fun close() {}
+}
+
+private class SnapshotTestCheckpointStore(
+    initial: Map<String, Long> = emptyMap(),
+) : CheckpointStore {
+    private val saved = initial.toMutableMap()
+
+    override fun load(streamName: String): Long? = saved[streamName]
+
+    override fun save(
+        streamName: String,
+        lastLogId: Long,
+    ) {
+        saved[streamName] = lastLogId
+    }
+}
+
+private class SnapshotTestChatLogRepository(
+    var latestLogId: Long = 1L,
+    var polledLogs: List<KakaoDB.ChatLogEntry> = emptyList(),
+) : ChatLogRepository {
+    override fun pollChatLogsAfter(
+        afterLogId: Long,
+        limit: Int,
+    ): List<KakaoDB.ChatLogEntry> = polledLogs
+
+    override fun resolveSenderName(userId: Long): String = userId.toString()
+
+    override fun resolveRoomMetadata(chatId: Long): KakaoDB.RoomMetadata = KakaoDB.RoomMetadata()
+
+    override fun latestLogId(): Long = latestLogId
+
+    override fun executeQuery(
+        sqlQuery: String,
+        bindArgs: Array<String?>?,
+        maxRows: Int,
+    ): QueryExecutionResult = QueryExecutionResult(columns = emptyList(), rows = emptyList())
+}
+
+private class SnapshotMemberRepositoryFixture(
+    private val snapshotsByChatId: Map<Long, List<RoomSnapshotData>>,
+) {
+    val snapshotCalls = mutableListOf<Long>()
+    private val snapshotIndexes = mutableMapOf<Long, Int>()
+    private var currentSnapshotByLinkId = mutableMapOf<Long, RoomSnapshotData>()
+
+    fun build(): MemberRepository =
+        MemberRepository(
+            executeQuery = { sqlQuery, bindArgs, _ ->
+                when {
+                    sqlQuery.contains("FROM chat_rooms cr") ->
+                        snapshotsByChatId.keys.map { chatId ->
+                            val snapshot = snapshotsByChatId.getValue(chatId).first()
+                            mapOf(
+                                "id" to chatId.toString(),
+                                "type" to "OM",
+                                "active_members_count" to snapshot.memberIds.size.toString(),
+                                "link_id" to snapshot.linkId?.toString(),
+                                "meta" to null,
+                                "members" to null,
+                                "link_name" to null,
+                                "link_url" to null,
+                                "member_limit" to null,
+                                "searchable" to null,
+                                "bot_role" to null,
+                            )
+                        }
+                    sqlQuery == "SELECT members, blinded_member_ids, link_id FROM chat_rooms WHERE id = ?" -> {
+                        val chatId = bindArgs?.firstOrNull()?.toLongOrNull() ?: 0L
+                        snapshotCalls += chatId
+                        val snapshot = nextSnapshot(chatId)
+                        snapshot.linkId?.let { linkId ->
+                            currentSnapshotByLinkId[linkId] = snapshot
+                        }
+                        listOf(
+                            mapOf(
+                                "members" to snapshot.memberIds.joinToString(prefix = "[", postfix = "]"),
+                                "blinded_member_ids" to snapshot.blindedIds.joinToString(prefix = "[", postfix = "]"),
+                                "link_id" to snapshot.linkId?.toString(),
+                            ),
+                        )
+                    }
+                    sqlQuery == "SELECT user_id, nickname, link_member_type, profile_image_url, enc FROM db2.open_chat_member WHERE link_id = ?" -> {
+                        val linkId = bindArgs?.firstOrNull()?.toLongOrNull() ?: return@MemberRepository emptyList()
+                        val snapshot = currentSnapshotByLinkId.getValue(linkId)
+                        snapshot.memberIds.map { userId ->
+                            mapOf(
+                                "user_id" to userId.toString(),
+                                "nickname" to snapshot.nicknames[userId],
+                                "link_member_type" to snapshot.roles[userId]?.toString(),
+                                "profile_image_url" to snapshot.profileImages[userId],
+                                "enc" to "0",
+                            )
+                        }
+                    }
+                    else -> emptyList()
+                }
+            },
+            decrypt = { _, raw, _ -> raw },
+            botId = 0L,
+        )
+
+    private fun nextSnapshot(chatId: Long): RoomSnapshotData {
+        val snapshots = snapshotsByChatId.getValue(chatId)
+        val currentIndex = snapshotIndexes[chatId] ?: 0
+        val safeIndex = minOf(currentIndex, snapshots.lastIndex)
+        snapshotIndexes[chatId] = safeIndex + 1
+        return snapshots[safeIndex]
+    }
+}
+
+private fun snapshotMemberRepository(snapshots: Map<Long, List<RoomSnapshotData>>): SnapshotMemberRepositoryFixture =
+    SnapshotMemberRepositoryFixture(snapshots)
