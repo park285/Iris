@@ -4,6 +4,9 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import party.qwer.iris.model.CommonErrorResponse
+import party.qwer.iris.model.ImageBridgeDiscoveryHook
+import party.qwer.iris.model.ImageBridgeHealthCheck
+import party.qwer.iris.model.ImageBridgeHealthResult
 import party.qwer.iris.model.ReplyAcceptedResponse
 import party.qwer.iris.model.ReplyRequest
 import party.qwer.iris.model.ReplyType
@@ -11,7 +14,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * kotlinx.serialization DTO round-trip smoke test.
+ * kotlinx.serialization DTO 왕복 직렬화 스모크 테스트.
  *
  * R8 난독화 후 serializer keep 규칙 누락을 감지합니다.
  * proguard-rules.pro의 model.** keep 범위와 쌍을 이루는 검증입니다.
@@ -74,5 +77,34 @@ class SerializationSmokeTest {
 
         val decoded = json.decodeFromString<ReplyType>("\"image_multiple\"")
         assertEquals(ReplyType.IMAGE_MULTIPLE, decoded)
+    }
+
+    @Test
+    fun `ImageBridgeHealthResult round-trip`() {
+        val original =
+            ImageBridgeHealthResult(
+                reachable = true,
+                running = true,
+                specReady = false,
+                checkedAtEpochMs = 1234L,
+                restartCount = 2,
+                lastCrashMessage = "bind failed",
+                checks = listOf(ImageBridgeHealthCheck(name = "spec", ok = true)),
+                discoveryInstallAttempted = true,
+                discoveryHooks =
+                    listOf(
+                        ImageBridgeDiscoveryHook(
+                            name = "hook",
+                            installed = true,
+                            invocationCount = 1,
+                        ),
+                    ),
+            )
+        val encoded = json.encodeToString(original)
+        val decoded = json.decodeFromString<ImageBridgeHealthResult>(encoded)
+
+        assertEquals(original.checkedAtEpochMs, decoded.checkedAtEpochMs)
+        assertEquals(original.restartCount, decoded.restartCount)
+        assertEquals(original.discoveryHooks.single().name, decoded.discoveryHooks.single().name)
     }
 }

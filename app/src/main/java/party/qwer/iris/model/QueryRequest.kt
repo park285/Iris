@@ -7,4 +7,5 @@ import kotlinx.serialization.json.JsonPrimitive
 data class QueryRequest(
     val query: String,
     val bind: List<JsonPrimitive>? = null,
+    val decrypt: Boolean = false,
 )

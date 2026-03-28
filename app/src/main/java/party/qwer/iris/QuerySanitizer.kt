@@ -1,20 +1,10 @@
 package party.qwer.iris
 
-internal val SAFE_PRAGMAS =
-    setOf(
-        "table_info",
-        "table_xinfo",
-        "index_list",
-        "index_info",
-        "foreign_key_list",
-        "compile_options",
-        "database_list",
-        "collation_list",
-        "encoding",
-        "page_size",
-        "page_count",
-        "max_page_count",
-        "freelist_count",
+private val SAFE_PRAGMA_PATTERNS =
+    listOf(
+        Regex("""(?is)^PRAGMA\s+table_info\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\s*\)\s*$"""),
+        Regex("""(?is)^PRAGMA\s+index_list\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\s*\)\s*$"""),
+        Regex("""(?is)^PRAGMA\s+compile_options\s*$"""),
     )
 
 private val WRITE_KEYWORD_PATTERN =
@@ -24,21 +14,17 @@ private val WRITE_KEYWORD_PATTERN =
     )
 
 internal fun isReadOnlyQuery(query: String): Boolean {
-    val normalized = query.trimStart()
+    val normalized = query.trim()
     if (normalized.isBlank()) return false
-    val upper = normalized.uppercase()
+    if (';' in normalized) return false
 
-    if (upper.startsWith("PRAGMA")) {
-        val pragmaBody = normalized.substringAfter("PRAGMA", "").trimStart()
-        val pragmaName =
-            pragmaBody
-                .split('(', '=', ' ', ';')
-                .first()
-                .trim()
-                .lowercase()
-        return pragmaName in SAFE_PRAGMAS
+    if (normalized.startsWith("PRAGMA", ignoreCase = true)) {
+        return SAFE_PRAGMA_PATTERNS.any { pattern ->
+            pattern.matches(normalized)
+        }
     }
 
+    val upper = normalized.uppercase()
     if (!upper.startsWith("SELECT") && !upper.startsWith("WITH")) return false
     return !WRITE_KEYWORD_PATTERN.containsMatchIn(normalized)
 }

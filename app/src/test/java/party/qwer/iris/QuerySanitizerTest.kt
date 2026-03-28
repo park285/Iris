@@ -36,8 +36,18 @@ class QuerySanitizerTest {
     }
 
     @Test
-    fun `PRAGMA database_list is allowed`() {
-        assertTrue(isReadOnlyQuery("PRAGMA database_list"))
+    fun `PRAGMA database_list is rejected`() {
+        assertFalse(isReadOnlyQuery("PRAGMA database_list"))
+    }
+
+    @Test
+    fun `PRAGMA encoding assignment is rejected`() {
+        assertFalse(isReadOnlyQuery("PRAGMA encoding = 'UTF-16'"))
+    }
+
+    @Test
+    fun `PRAGMA max_page_count assignment is rejected`() {
+        assertFalse(isReadOnlyQuery("PRAGMA max_page_count = 1"))
     }
 
     @Test
@@ -94,6 +104,16 @@ class QuerySanitizerTest {
     @Test
     fun `case insensitive rejection of write keywords in WITH`() {
         assertFalse(isReadOnlyQuery("with x as (delete from t returning *) select * from x"))
+    }
+
+    @Test
+    fun `multiple SELECT statements are rejected`() {
+        assertFalse(isReadOnlyQuery("SELECT 1; SELECT 2"))
+    }
+
+    @Test
+    fun `PRAGMA followed by second statement is rejected`() {
+        assertFalse(isReadOnlyQuery("PRAGMA table_info(chat_logs); DROP TABLE chat_logs"))
     }
 
     @Test

@@ -1,5 +1,8 @@
 package party.qwer.iris
 
+import kotlinx.serialization.json.JsonElement
+import party.qwer.iris.model.QueryColumn
+
 interface ChatLogRepository {
     fun pollChatLogsAfter(
         afterLogId: Long,
@@ -16,5 +19,10 @@ interface ChatLogRepository {
         sqlQuery: String,
         bindArgs: Array<String?>?,
         maxRows: Int = KakaoDB.DEFAULT_QUERY_RESULT_LIMIT,
-    ): List<Map<String, String?>>
+    ): QueryExecutionResult
 }
+
+data class QueryExecutionResult(
+    val columns: List<QueryColumn>,
+    val rows: List<List<JsonElement?>>,
+)
