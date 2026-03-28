@@ -7,6 +7,7 @@ import java.time.Duration
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -70,6 +71,14 @@ class ReplyStatusStoreTest {
         val result = store.get("req-1")!!
         assertEquals(ReplyLifecycleState.SENDING, result.state)
         assertEquals("worker-0", result.detail)
+    }
+
+    @Test
+    fun `unknown state string fails deserialization`() {
+        val raw = """{"requestId":"req-1","state":"unknown","updatedAtEpochMs":1000}"""
+        assertFailsWith<kotlinx.serialization.SerializationException> {
+            json.decodeFromString(ReplyStatusSnapshot.serializer(), raw)
+        }
     }
 
     @Test
