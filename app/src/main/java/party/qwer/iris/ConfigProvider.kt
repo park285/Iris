@@ -8,6 +8,7 @@ interface ConfigProvider {
     val webhookToken: String
     val dbPollingRate: Long
     val messageSendRate: Long
+    val messageSendJitterMax: Long
 
     fun webhookEndpointFor(route: String): String
 

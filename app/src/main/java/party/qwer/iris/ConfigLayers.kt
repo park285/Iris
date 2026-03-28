@@ -12,8 +12,9 @@ internal data class UserConfigState(
     val botToken: String = "",
     val dbPollingRate: Long = 100,
     val messageSendRate: Long = 50,
-    val commandRoutePrefixes: Map<String, List<String>> = emptyMap(),
-    val imageMessageTypeRoutes: Map<String, List<String>> = emptyMap(),
+    val messageSendJitterMax: Long = 0,
+    val commandRoutePrefixes: Map<String, List<String>> = DEFAULT_COMMAND_ROUTE_PREFIXES,
+    val imageMessageTypeRoutes: Map<String, List<String>> = DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES,
 )
 
 internal data class DiscoveredConfigState(
@@ -34,6 +35,7 @@ internal data class AppliedConfigState(
             botToken = user.botToken,
             dbPollingRate = user.dbPollingRate,
             messageSendRate = user.messageSendRate,
+            messageSendJitterMax = user.messageSendJitterMax,
             commandRoutePrefixes = user.commandRoutePrefixes,
             imageMessageTypeRoutes = user.imageMessageTypeRoutes,
             botId = discovered.botId,
@@ -50,6 +52,7 @@ internal fun ConfigValues.toUserConfigState(): UserConfigState =
         botToken = botToken,
         dbPollingRate = dbPollingRate,
         messageSendRate = messageSendRate,
+        messageSendJitterMax = messageSendJitterMax,
         commandRoutePrefixes = commandRoutePrefixes,
         imageMessageTypeRoutes = imageMessageTypeRoutes,
     )
@@ -69,6 +72,7 @@ internal fun UserConfigState.toPersistedConfigValues(): UserConfigValues =
         botToken = botToken,
         dbPollingRate = dbPollingRate,
         messageSendRate = messageSendRate,
+        messageSendJitterMax = messageSendJitterMax,
         commandRoutePrefixes = commandRoutePrefixes,
         imageMessageTypeRoutes = imageMessageTypeRoutes,
     )
@@ -85,6 +89,7 @@ internal fun UserConfigState.toLegacyConfigValues(
         botToken = botToken,
         dbPollingRate = dbPollingRate,
         messageSendRate = messageSendRate,
+        messageSendJitterMax = messageSendJitterMax,
         commandRoutePrefixes = commandRoutePrefixes,
         imageMessageTypeRoutes = imageMessageTypeRoutes,
         botId = botId,

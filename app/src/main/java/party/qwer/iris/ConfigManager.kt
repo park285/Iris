@@ -60,7 +60,10 @@ class ConfigManager(
             if (decodedConfig.migratedLegacyEndpoint) {
                 IrisLogger.info("Migrated legacy webhook config to route-aware model")
             }
-            isDirty = decodedConfig.migratedLegacyEndpoint
+            if (decodedConfig.migratedRoutingDefaults) {
+                IrisLogger.info("Seeded routing defaults into persisted config")
+            }
+            isDirty = decodedConfig.migratedLegacyEndpoint || decodedConfig.migratedRoutingDefaults
         } catch (e: IOException) {
             IrisLogger.error("Error reading config.json from $configPath, using in-memory defaults: ${e.message}")
             backupBrokenConfig(configFile)
@@ -233,6 +236,20 @@ class ConfigManager(
                 appliedUser = appliedUser.copy(messageSendRate = value)
                 markDirty()
                 IrisLogger.debug("MessageSendRate updated to: $messageSendRate")
+            }
+        }
+
+    override var messageSendJitterMax: Long
+        get() = appliedUser.messageSendJitterMax
+        set(value) {
+            synchronized(this) {
+                if (snapshotUser.messageSendJitterMax == value && appliedUser.messageSendJitterMax == value) {
+                    return
+                }
+                snapshotUser = snapshotUser.copy(messageSendJitterMax = value)
+                appliedUser = appliedUser.copy(messageSendJitterMax = value)
+                markDirty()
+                IrisLogger.debug("MessageSendJitterMax updated to: $messageSendJitterMax")
             }
         }
 
