@@ -690,4 +690,3 @@ internal fun validateReplyImageThreadScope(
     // thread-only 기본 동작이 필요하면 caller가 2를 명시해야 한다.
     return replyImageScope
 }
-
