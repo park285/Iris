@@ -376,10 +376,9 @@ internal class ReplyService(
                             request.requestId?.let { statusStore.update(it, ReplyLifecycleState.PREPARING) }
                             request.prepare()
                             request.requestId?.let { statusStore.update(it, ReplyLifecycleState.PREPARED) }
-                            dispatchGate.dispatch {
-                                request.requestId?.let { statusStore.update(it, ReplyLifecycleState.SENDING) }
-                                request.send()
-                            }
+                            dispatchGate.awaitPermit()
+                            request.requestId?.let { statusStore.update(it, ReplyLifecycleState.SENDING) }
+                            request.send()
                             request.requestId?.let { statusStore.update(it, ReplyLifecycleState.HANDOFF_COMPLETED) }
                         } catch (e: Exception) {
                             request.requestId?.let { statusStore.update(it, ReplyLifecycleState.FAILED, e.message) }

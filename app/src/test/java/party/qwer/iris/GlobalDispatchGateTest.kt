@@ -7,13 +7,11 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class GlobalDispatchGateTest {
     @Test
-    fun `dispatch serializes concurrent calls`() {
+    fun `awaitPermit only paces start time and does not serialize execution`() {
         val gate = GlobalDispatchGate(baseIntervalMs = { 0L }, jitterMaxMs = { 0L })
         val concurrent = AtomicInteger(0)
         val maxConcurrent = AtomicInteger(0)
@@ -22,51 +20,48 @@ class GlobalDispatchGateTest {
         repeat(4) {
             Thread {
                 runBlocking {
-                    gate.dispatch {
-                        val cur = concurrent.incrementAndGet()
-                        maxConcurrent.updateAndGet { prev -> maxOf(prev, cur) }
-                        delay(20)
-                        concurrent.decrementAndGet()
-                    }
+                    gate.awaitPermit()
+                    val cur = concurrent.incrementAndGet()
+                    maxConcurrent.updateAndGet { prev -> maxOf(prev, cur) }
+                    delay(20)
+                    concurrent.decrementAndGet()
                 }
                 latch.countDown()
             }.start()
         }
 
-        assertTrue(latch.await(5, TimeUnit.SECONDS), "all dispatches should complete")
-        assertEquals(1, maxConcurrent.get(), "dispatch calls must not overlap")
+        assertTrue(latch.await(5, TimeUnit.SECONDS), "all permit waits should complete")
+        assertTrue(maxConcurrent.get() > 1, "send execution should be allowed to overlap after permit")
     }
 
     @Test
-    fun `dispatch enforces minimum interval between sends`() {
+    fun `awaitPermit enforces minimum interval between send starts`() {
         val gate = GlobalDispatchGate(baseIntervalMs = { 100L }, jitterMaxMs = { 0L })
         val timestamps = CopyOnWriteArrayList<Long>()
 
         runBlocking {
             repeat(3) {
-                gate.dispatch {
-                    timestamps.add(System.currentTimeMillis())
-                }
+                gate.awaitPermit()
+                timestamps.add(System.currentTimeMillis())
             }
         }
 
-        assertEquals(3, timestamps.size)
+        assertTrue(timestamps.size == 3)
         for (i in 1 until timestamps.size) {
             val gap = timestamps[i] - timestamps[i - 1]
-            assertTrue(gap >= 90, "gap between sends should be >= 100ms (was ${gap}ms)")
+            assertTrue(gap >= 90, "gap between send starts should be >= 100ms (was ${gap}ms)")
         }
     }
 
     @Test
-    fun `dispatch adds bounded positive jitter to interval`() {
+    fun `awaitPermit adds bounded positive jitter to interval`() {
         val gate = GlobalDispatchGate(baseIntervalMs = { 100L }, jitterMaxMs = { 50L })
         val timestamps = CopyOnWriteArrayList<Long>()
 
         runBlocking {
             repeat(6) {
-                gate.dispatch {
-                    timestamps.add(System.currentTimeMillis())
-                }
+                gate.awaitPermit()
+                timestamps.add(System.currentTimeMillis())
             }
         }
 
@@ -84,9 +79,8 @@ class GlobalDispatchGateTest {
 
         runBlocking {
             repeat(4) {
-                gate.dispatch {
-                    timestamps.add(System.currentTimeMillis())
-                }
+                gate.awaitPermit()
+                timestamps.add(System.currentTimeMillis())
             }
         }
 
@@ -97,38 +91,19 @@ class GlobalDispatchGateTest {
     }
 
     @Test
-    fun `dispatch recovers from block exception`() {
-        val gate = GlobalDispatchGate(baseIntervalMs = { 0L }, jitterMaxMs = { 0L })
-
-        runBlocking {
-            assertFailsWith<RuntimeException> {
-                gate.dispatch { throw RuntimeException("boom") }
-            }
-
-            val result = gate.dispatch { "recovered" }
-            assertEquals("recovered", result)
-        }
-    }
-
-    @Test
-    fun `dispatch returns block result`() {
-        val gate = GlobalDispatchGate(baseIntervalMs = { 0L }, jitterMaxMs = { 0L })
-
-        val result = runBlocking { gate.dispatch { 42 } }
-        assertEquals(42, result)
-    }
-
-    @Test
-    fun `failed dispatch does not consume pacing slot`() {
+    fun `failed send still consumes pacing slot after awaitPermit`() {
         val gate = GlobalDispatchGate(baseIntervalMs = { 200L }, jitterMaxMs = { 0L })
-
         val start = System.currentTimeMillis()
+
         runBlocking {
-            runCatching { gate.dispatch { error("fail") } }
-            gate.dispatch { }
+            runCatching {
+                gate.awaitPermit()
+                error("fail")
+            }
+            gate.awaitPermit()
         }
         val elapsed = System.currentTimeMillis() - start
 
-        assertTrue(elapsed < 150, "second dispatch should not wait for pacing after failure (took ${elapsed}ms)")
+        assertTrue(elapsed >= 150, "second permit should still observe pacing after caller failure (took ${elapsed}ms)")
     }
 }

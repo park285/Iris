@@ -180,55 +180,81 @@ class ReplyServiceTest {
     }
 
     @Test
-    fun `global gate prevents concurrent send calls`() {
-        val service = ReplyService(testConfig)
+    fun `global gate paces send start times across workers`() {
+        val pacingConfig =
+            object : ConfigProvider {
+                override val botId = 0L
+                override val botName = ""
+                override val botSocketPort = 0
+                override val botToken = ""
+                override val webhookToken = ""
+                override val dbPollingRate = 1000L
+                override val messageSendRate = 100L
+                override val messageSendJitterMax = 0L
+
+                override fun webhookEndpointFor(route: String) = ""
+            }
+        val service = ReplyService(pacingConfig)
         service.start()
-        val concurrent = AtomicInteger(0)
-        val maxConcurrent = AtomicInteger(0)
+        val timestamps = CopyOnWriteArrayList<Long>()
         val latch = CountDownLatch(4)
 
         for (i in 0L until 2L) {
             repeat(2) {
                 service.enqueueAction(chatId = i, threadId = null, lane = ReplySendLane.TEXT) {
-                    val cur = concurrent.incrementAndGet()
-                    maxConcurrent.updateAndGet { prev -> maxOf(prev, cur) }
+                    timestamps.add(System.currentTimeMillis())
                     delay(50)
-                    concurrent.decrementAndGet()
                     latch.countDown()
                 }
             }
         }
 
         assertTrue(latch.await(5, TimeUnit.SECONDS), "all sends should complete")
-        assertEquals(1, maxConcurrent.get(), "send calls must not overlap (global gate)")
+        assertEquals(4, timestamps.size)
+        val sorted = timestamps.sorted()
+        for (i in 1 until sorted.size) {
+            val gap = sorted[i] - sorted[i - 1]
+            assertTrue(gap >= 80, "send starts should be paced by at least ~100ms (gap was ${gap}ms)")
+        }
         service.shutdown()
     }
 
     @Test
-    fun `global gate serializes sends across all lanes`() {
-        val service = ReplyService(testConfig)
+    fun `global gate paces send start times across all lanes`() {
+        val pacingConfig =
+            object : ConfigProvider {
+                override val botId = 0L
+                override val botName = ""
+                override val botSocketPort = 0
+                override val botToken = ""
+                override val webhookToken = ""
+                override val dbPollingRate = 1000L
+                override val messageSendRate = 100L
+                override val messageSendJitterMax = 0L
+
+                override fun webhookEndpointFor(route: String) = ""
+            }
+        val service = ReplyService(pacingConfig)
         service.start()
-        val concurrent = AtomicInteger(0)
-        val maxConcurrent = AtomicInteger(0)
+        val timestamps = CopyOnWriteArrayList<Long>()
         val latch = CountDownLatch(2)
 
         service.enqueueAction(chatId = 1L, threadId = null, lane = ReplySendLane.TEXT) {
-            val cur = concurrent.incrementAndGet()
-            maxConcurrent.updateAndGet { prev -> maxOf(prev, cur) }
+            timestamps.add(System.currentTimeMillis())
             delay(50)
-            concurrent.decrementAndGet()
             latch.countDown()
         }
         service.enqueueAction(chatId = 2L, threadId = null, lane = ReplySendLane.NATIVE_IMAGE) {
-            val cur = concurrent.incrementAndGet()
-            maxConcurrent.updateAndGet { prev -> maxOf(prev, cur) }
+            timestamps.add(System.currentTimeMillis())
             delay(50)
-            concurrent.decrementAndGet()
             latch.countDown()
         }
 
         assertTrue(latch.await(5, TimeUnit.SECONDS), "different lanes should complete")
-        assertEquals(1, maxConcurrent.get(), "all lanes must be serialized through global gate")
+        assertEquals(2, timestamps.size)
+        val sorted = timestamps.sorted()
+        val gap = sorted[1] - sorted[0]
+        assertTrue(gap >= 80, "all lanes should respect shared pacing (gap was ${gap}ms)")
         service.shutdown()
     }
 

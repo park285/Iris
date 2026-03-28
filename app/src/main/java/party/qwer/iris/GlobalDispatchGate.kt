@@ -15,30 +15,30 @@ internal class GlobalDispatchGate(
     @Volatile
     private var nextAllowedAtMs: Long = 0L
 
-    suspend fun <T> dispatch(block: suspend () -> T): T =
-        mutex.withLock {
-            val now = clock()
-            val waitMs = (nextAllowedAtMs - now).coerceAtLeast(0)
-            if (waitMs > 0) {
-                IrisLogger.debugLazy { "[DispatchGate] pacing wait ${waitMs}ms" }
-                delay(waitMs)
-            }
+    suspend fun awaitPermit() {
+        val waitMs =
+            mutex.withLock {
+                val now = clock()
+                val scheduledAt = maxOf(now, nextAllowedAtMs)
 
-            val result = block()
-
-            val jitterMax = jitterMaxMs()
-            val jitterMs =
-                if (jitterMax > 0) {
-                    ThreadLocalRandom.current().nextLong(jitterMax + 1)
-                } else {
-                    0L
+                val jitterMax = jitterMaxMs()
+                val jitterMs =
+                    if (jitterMax > 0) {
+                        ThreadLocalRandom.current().nextLong(jitterMax + 1)
+                    } else {
+                        0L
+                    }
+                val baseMs = baseIntervalMs()
+                nextAllowedAtMs = scheduledAt + baseMs + jitterMs
+                IrisLogger.debugLazy {
+                    "[DispatchGate] next slot in ${baseMs + jitterMs}ms (base=$baseMs jitter=$jitterMs)"
                 }
-            val baseMs = baseIntervalMs()
-            nextAllowedAtMs = clock() + baseMs + jitterMs
-            IrisLogger.debugLazy {
-                "[DispatchGate] next slot in ${baseMs + jitterMs}ms (base=$baseMs jitter=$jitterMs)"
+                (scheduledAt - now).coerceAtLeast(0L)
             }
 
-            result
+        if (waitMs > 0) {
+            IrisLogger.debugLazy { "[DispatchGate] pacing wait ${waitMs}ms" }
+            delay(waitMs)
         }
+    }
 }
