@@ -1,8 +1,8 @@
 package party.qwer.iris
 
 import kotlinx.coroutines.delay
-import java.io.File
 import party.qwer.iris.model.ReplyLifecycleState
+import java.io.File
 import java.nio.file.Files
 import java.util.Base64
 import java.util.concurrent.CopyOnWriteArrayList

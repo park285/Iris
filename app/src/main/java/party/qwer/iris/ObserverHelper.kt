@@ -77,7 +77,9 @@ class ObserverHelper(
 
     fun seedSnapshotCache() {
         val repo = memberRepo ?: return
-        repo.listRooms().rooms
+        repo
+            .listRooms()
+            .rooms
             .asSequence()
             .map { it.chatId }
             .filter { it > 0L }
@@ -103,18 +105,37 @@ class ObserverHelper(
         }
     }
 
-    private fun emitSnapshotEvents(events: List<Any>, bus: SseEventBus) {
+    private fun emitSnapshotEvents(
+        events: List<Any>,
+        bus: SseEventBus,
+    ) {
         for (event in events) {
             val (jsonStr, eventChatId) =
                 when (event) {
                     is party.qwer.iris.model.MemberEvent ->
-                        serverJson.encodeToString(party.qwer.iris.model.MemberEvent.serializer(), event) to event.chatId
+                        serverJson.encodeToString(
+                            party.qwer.iris.model.MemberEvent
+                                .serializer(),
+                            event,
+                        ) to event.chatId
                     is party.qwer.iris.model.NicknameChangeEvent ->
-                        serverJson.encodeToString(party.qwer.iris.model.NicknameChangeEvent.serializer(), event) to event.chatId
+                        serverJson.encodeToString(
+                            party.qwer.iris.model.NicknameChangeEvent
+                                .serializer(),
+                            event,
+                        ) to event.chatId
                     is party.qwer.iris.model.RoleChangeEvent ->
-                        serverJson.encodeToString(party.qwer.iris.model.RoleChangeEvent.serializer(), event) to event.chatId
+                        serverJson.encodeToString(
+                            party.qwer.iris.model.RoleChangeEvent
+                                .serializer(),
+                            event,
+                        ) to event.chatId
                     is party.qwer.iris.model.ProfileChangeEvent ->
-                        serverJson.encodeToString(party.qwer.iris.model.ProfileChangeEvent.serializer(), event) to event.chatId
+                        serverJson.encodeToString(
+                            party.qwer.iris.model.ProfileChangeEvent
+                                .serializer(),
+                            event,
+                        ) to event.chatId
                     else -> continue
                 }
             bus.emit(jsonStr)

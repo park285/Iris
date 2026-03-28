@@ -11,7 +11,11 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ReplyStatusStoreTest {
-    private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
+    private val json =
+        Json {
+            ignoreUnknownKeys = true
+            explicitNulls = false
+        }
 
     @Test
     fun `expires stale snapshots`() {

@@ -53,8 +53,7 @@ class MemberRepository(
 
         fun int(name: String): Int? = string(name)?.toIntOrNull()
 
-        fun toMap(columns: List<String>): Map<String, String?> =
-            columns.associateWith { col -> string(col) }
+        fun toMap(columns: List<String>): Map<String, String?> = columns.associateWith { col -> string(col) }
     }
 
     companion object {
@@ -78,7 +77,11 @@ class MemberRepository(
 
     private val memberActivityCache = mutableMapOf<Long, MemberActivityCacheEntry>()
 
-    private fun executeQuery(sql: String, args: Array<String?>?, maxRows: Int): List<Map<String, String?>> {
+    private fun executeQuery(
+        sql: String,
+        args: Array<String?>?,
+        maxRows: Int,
+    ): List<Map<String, String?>> {
         val result = executeQueryTyped(sql, args, maxRows)
         val columns = result.columns.map { it.name }
         val index = result.columns.mapIndexed { i, col -> col.name to i }.toMap()

@@ -218,11 +218,12 @@ class ConfigManager(
                 return
             }
 
-            state = state.copy(
-                snapshotUser = updatedSnapshot,
-                appliedUser = updatedEffective,
-                isDirty = true,
-            )
+            state =
+                state.copy(
+                    snapshotUser = updatedSnapshot,
+                    appliedUser = updatedEffective,
+                    isDirty = true,
+                )
             if (normalizedRoute == DEFAULT_WEBHOOK_ROUTE) {
                 IrisLogger.debug("Default webhook endpoint updated")
             } else {
@@ -291,11 +292,9 @@ class ConfigManager(
             )
         }
 
-    private fun snapshotConfigValues(): ConfigValues =
-        AppliedConfigState(user = state.snapshotUser, discovered = state.discovered).toLegacyConfigValues()
+    private fun snapshotConfigValues(): ConfigValues = AppliedConfigState(user = state.snapshotUser, discovered = state.discovered).toLegacyConfigValues()
 
-    private fun effectiveConfigValues(): ConfigValues =
-        AppliedConfigState(user = state.appliedUser, discovered = state.discovered).toLegacyConfigValues()
+    private fun effectiveConfigValues(): ConfigValues = AppliedConfigState(user = state.appliedUser, discovered = state.discovered).toLegacyConfigValues()
 
     private fun backupBrokenConfig(configFile: File) {
         if (!configFile.exists()) {

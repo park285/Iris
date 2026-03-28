@@ -3,8 +3,8 @@ package party.qwer.iris
 import kotlinx.serialization.json.JsonPrimitive
 import party.qwer.iris.delivery.webhook.RoutingCommand
 import party.qwer.iris.delivery.webhook.RoutingGateway
-import party.qwer.iris.model.QueryColumn
 import party.qwer.iris.delivery.webhook.RoutingResult
+import party.qwer.iris.model.QueryColumn
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -14,20 +14,26 @@ private fun stubResult(
     rows: List<Map<String, String?>>,
 ): QueryExecutionResult {
     val cols = columns.map { QueryColumn(name = it, sqliteType = "TEXT") }
-    val jsonRows = rows.map { row ->
-        columns.map { col ->
-            row[col]?.let { JsonPrimitive(it) }
+    val jsonRows =
+        rows.map { row ->
+            columns.map { col ->
+                row[col]?.let { JsonPrimitive(it) }
+            }
         }
-    }
     return QueryExecutionResult(cols, jsonRows)
 }
 
 private fun emptyResult(): QueryExecutionResult = QueryExecutionResult(emptyList(), emptyList())
 
-private fun legacyQuery(block: (String, Array<String?>?, Int) -> List<Map<String, String?>>):
-    (String, Array<String?>?, Int) -> QueryExecutionResult = { sql, args, maxRows ->
+private fun legacyQuery(block: (String, Array<String?>?, Int) -> List<Map<String, String?>>): (String, Array<String?>?, Int) -> QueryExecutionResult =
+    { sql, args, maxRows ->
         val rows = block(sql, args, maxRows)
-        val columns = rows.firstOrNull()?.keys?.toList().orEmpty()
+        val columns =
+            rows
+                .firstOrNull()
+                ?.keys
+                ?.toList()
+                .orEmpty()
         if (columns.isEmpty()) {
             emptyResult()
         } else {
@@ -230,60 +236,61 @@ private class SnapshotMemberRepositoryFixture(
 
     fun build(): MemberRepository =
         MemberRepository(
-            executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
-                when {
-                    sqlQuery.contains("FROM chat_rooms cr") ->
-                        snapshotsByChatId.keys.map { chatId ->
-                            val snapshot = snapshotsByChatId.getValue(chatId).first()
-                            mapOf(
-                                "id" to chatId.toString(),
-                                "type" to "OM",
-                                "active_members_count" to snapshot.memberIds.size.toString(),
-                                "link_id" to snapshot.linkId?.toString(),
-                                "meta" to null,
-                                "members" to null,
-                                "link_name" to null,
-                                "link_url" to null,
-                                "member_limit" to null,
-                                "searchable" to null,
-                                "bot_role" to null,
-                            )
-                        }
-                    sqlQuery == "SELECT members, blinded_member_ids, link_id FROM chat_rooms WHERE id = ?" -> {
-                        val chatId = bindArgs?.firstOrNull()?.toLongOrNull() ?: 0L
-                        snapshotCalls += chatId
-                        val snapshot = nextSnapshot(chatId)
-                        snapshot.linkId?.let { linkId ->
-                            currentSnapshotByLinkId[linkId] = snapshot
-                        }
-                        listOf(
-                            mapOf(
-                                "members" to snapshot.memberIds.joinToString(prefix = "[", postfix = "]"),
-                                "blinded_member_ids" to snapshot.blindedIds.joinToString(prefix = "[", postfix = "]"),
-                                "link_id" to snapshot.linkId?.toString(),
-                            ),
-                        )
-                    }
-                    sqlQuery == "SELECT user_id, nickname, link_member_type, profile_image_url, enc FROM db2.open_chat_member WHERE link_id = ?" -> {
-                        val linkId = bindArgs?.firstOrNull()?.toLongOrNull()
-                        if (linkId == null) {
-                            emptyList()
-                        } else {
-                            val snapshot = currentSnapshotByLinkId.getValue(linkId)
-                            snapshot.memberIds.map { userId ->
+            executeQueryTyped =
+                legacyQuery { sqlQuery, bindArgs, _ ->
+                    when {
+                        sqlQuery.contains("FROM chat_rooms cr") ->
+                            snapshotsByChatId.keys.map { chatId ->
+                                val snapshot = snapshotsByChatId.getValue(chatId).first()
                                 mapOf(
-                                    "user_id" to userId.toString(),
-                                    "nickname" to snapshot.nicknames[userId],
-                                    "link_member_type" to snapshot.roles[userId]?.toString(),
-                                    "profile_image_url" to snapshot.profileImages[userId],
-                                    "enc" to "0",
+                                    "id" to chatId.toString(),
+                                    "type" to "OM",
+                                    "active_members_count" to snapshot.memberIds.size.toString(),
+                                    "link_id" to snapshot.linkId?.toString(),
+                                    "meta" to null,
+                                    "members" to null,
+                                    "link_name" to null,
+                                    "link_url" to null,
+                                    "member_limit" to null,
+                                    "searchable" to null,
+                                    "bot_role" to null,
                                 )
                             }
+                        sqlQuery == "SELECT members, blinded_member_ids, link_id FROM chat_rooms WHERE id = ?" -> {
+                            val chatId = bindArgs?.firstOrNull()?.toLongOrNull() ?: 0L
+                            snapshotCalls += chatId
+                            val snapshot = nextSnapshot(chatId)
+                            snapshot.linkId?.let { linkId ->
+                                currentSnapshotByLinkId[linkId] = snapshot
+                            }
+                            listOf(
+                                mapOf(
+                                    "members" to snapshot.memberIds.joinToString(prefix = "[", postfix = "]"),
+                                    "blinded_member_ids" to snapshot.blindedIds.joinToString(prefix = "[", postfix = "]"),
+                                    "link_id" to snapshot.linkId?.toString(),
+                                ),
+                            )
                         }
+                        sqlQuery == "SELECT user_id, nickname, link_member_type, profile_image_url, enc FROM db2.open_chat_member WHERE link_id = ?" -> {
+                            val linkId = bindArgs?.firstOrNull()?.toLongOrNull()
+                            if (linkId == null) {
+                                emptyList()
+                            } else {
+                                val snapshot = currentSnapshotByLinkId.getValue(linkId)
+                                snapshot.memberIds.map { userId ->
+                                    mapOf(
+                                        "user_id" to userId.toString(),
+                                        "nickname" to snapshot.nicknames[userId],
+                                        "link_member_type" to snapshot.roles[userId]?.toString(),
+                                        "profile_image_url" to snapshot.profileImages[userId],
+                                        "enc" to "0",
+                                    )
+                                }
+                            }
+                        }
+                        else -> emptyList()
                     }
-                    else -> emptyList()
-                }
-            },
+                },
             decrypt = { _, raw, _ -> raw },
             botId = 0L,
         )
@@ -297,5 +304,4 @@ private class SnapshotMemberRepositoryFixture(
     }
 }
 
-private fun snapshotMemberRepository(snapshots: Map<Long, List<RoomSnapshotData>>): SnapshotMemberRepositoryFixture =
-    SnapshotMemberRepositoryFixture(snapshots)
+private fun snapshotMemberRepository(snapshots: Map<Long, List<RoomSnapshotData>>): SnapshotMemberRepositoryFixture = SnapshotMemberRepositoryFixture(snapshots)

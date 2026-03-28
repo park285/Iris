@@ -23,16 +23,17 @@ internal class SnapshotObserver(
     @Synchronized
     fun start() {
         if (job?.isActive == true) return
-        job = coroutineScope.launch {
-            while (isActive) {
-                try {
-                    observerHelper.runDirtySnapshotDiff(maxRoomsPerTick)
-                } catch (e: Exception) {
-                    IrisLogger.error("[SnapshotObserver] error: ${e.message}", e)
+        job =
+            coroutineScope.launch {
+                while (isActive) {
+                    try {
+                        observerHelper.runDirtySnapshotDiff(maxRoomsPerTick)
+                    } catch (e: Exception) {
+                        IrisLogger.error("[SnapshotObserver] error: ${e.message}", e)
+                    }
+                    delay(intervalMs)
                 }
-                delay(intervalMs)
             }
-        }
         IrisLogger.info("[SnapshotObserver] started (intervalMs=$intervalMs, maxRoomsPerTick=$maxRoomsPerTick)")
     }
 

@@ -256,17 +256,18 @@ class ObserverHelperLogicTest {
             )
         val memberRepo =
             MemberRepository(
-                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
-                    when {
-                        sqlQuery.contains("SELECT id, name, enc FROM db2.friends WHERE id IN (?)") &&
-                            bindArgs?.toList() == listOf("203887151") ->
-                            emptyList()
-                        sqlQuery.contains("FROM db3.observed_profile_user_links") &&
-                            bindArgs?.toList() == listOf("366795577484293", "203887151") ->
-                            listOf(mapOf("user_id" to "203887151", "display_name" to "재균"))
-                        else -> emptyList()
-                    }
-                },
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, bindArgs, _ ->
+                        when {
+                            sqlQuery.contains("SELECT id, name, enc FROM db2.friends WHERE id IN (?)") &&
+                                bindArgs?.toList() == listOf("203887151") ->
+                                emptyList()
+                            sqlQuery.contains("FROM db3.observed_profile_user_links") &&
+                                bindArgs?.toList() == listOf("366795577484293", "203887151") ->
+                                listOf(mapOf("user_id" to "203887151", "display_name" to "재균"))
+                            else -> emptyList()
+                        }
+                    },
                 decrypt = { _, raw, _ -> raw },
                 botId = config.botId,
             )
@@ -385,20 +386,26 @@ private fun stubResult(
     rows: List<Map<String, String?>>,
 ): QueryExecutionResult {
     val cols = columns.map { QueryColumn(name = it, sqliteType = "TEXT") }
-    val jsonRows = rows.map { row ->
-        columns.map { col ->
-            row[col]?.let { kotlinx.serialization.json.JsonPrimitive(it) }
+    val jsonRows =
+        rows.map { row ->
+            columns.map { col ->
+                row[col]?.let { kotlinx.serialization.json.JsonPrimitive(it) }
+            }
         }
-    }
     return QueryExecutionResult(cols, jsonRows)
 }
 
 private fun emptyResult(): QueryExecutionResult = QueryExecutionResult(emptyList(), emptyList())
 
-private fun legacyQuery(block: (String, Array<String?>?, Int) -> List<Map<String, String?>>):
-    (String, Array<String?>?, Int) -> QueryExecutionResult = { sql, args, maxRows ->
+private fun legacyQuery(block: (String, Array<String?>?, Int) -> List<Map<String, String?>>): (String, Array<String?>?, Int) -> QueryExecutionResult =
+    { sql, args, maxRows ->
         val rows = block(sql, args, maxRows)
-        val columns = rows.firstOrNull()?.keys?.toList().orEmpty()
+        val columns =
+            rows
+                .firstOrNull()
+                ?.keys
+                ?.toList()
+                .orEmpty()
         if (columns.isEmpty()) {
             emptyResult()
         } else {
@@ -429,52 +436,53 @@ private fun snapshotSequenceMemberRepository(
     val snapshotQueue = ArrayDeque(snapshots)
     var currentSnapshot: RoomSnapshotData? = null
     return MemberRepository(
-        executeQueryTyped = legacyQuery { sqlQuery, _, _ ->
-            when {
-                sqlQuery.contains("FROM chat_rooms cr") ->
-                    roomList.rooms.map { room ->
-                        mapOf(
-                            "id" to room.chatId.toString(),
-                            "type" to room.type,
-                            "active_members_count" to room.activeMembersCount?.toString(),
-                            "link_id" to room.linkId?.toString(),
-                            "link_name" to room.linkName,
-                            "link_url" to room.linkUrl,
-                            "member_limit" to room.memberLimit?.toString(),
-                            "searchable" to room.searchable?.toString(),
-                            "bot_role" to room.botRole?.toString(),
-                        )
-                    }
-                sqlQuery == "SELECT members, blinded_member_ids, link_id FROM chat_rooms WHERE id = ?" -> {
-                    val snapshot = snapshotQueue.removeFirst()
-                    currentSnapshot = snapshot
-                    listOf(
-                        mapOf(
-                            "members" to snapshot.memberIds.joinToString(prefix = "[", postfix = "]"),
-                            "blinded_member_ids" to snapshot.blindedIds.joinToString(prefix = "[", postfix = "]"),
-                            "link_id" to snapshot.linkId?.toString(),
-                        ),
-                    )
-                }
-                sqlQuery == "SELECT user_id, nickname, link_member_type, profile_image_url, enc FROM db2.open_chat_member WHERE link_id = ?" -> {
-                    val snapshot = currentSnapshot
-                    if (snapshot == null) {
-                        emptyList()
-                    } else {
-                        snapshot.memberIds.map { userId ->
+        executeQueryTyped =
+            legacyQuery { sqlQuery, _, _ ->
+                when {
+                    sqlQuery.contains("FROM chat_rooms cr") ->
+                        roomList.rooms.map { room ->
                             mapOf(
-                                "user_id" to userId.toString(),
-                                "nickname" to snapshot.nicknames[userId],
-                                "link_member_type" to snapshot.roles[userId]?.toString(),
-                                "profile_image_url" to snapshot.profileImages[userId],
-                                "enc" to "0",
+                                "id" to room.chatId.toString(),
+                                "type" to room.type,
+                                "active_members_count" to room.activeMembersCount?.toString(),
+                                "link_id" to room.linkId?.toString(),
+                                "link_name" to room.linkName,
+                                "link_url" to room.linkUrl,
+                                "member_limit" to room.memberLimit?.toString(),
+                                "searchable" to room.searchable?.toString(),
+                                "bot_role" to room.botRole?.toString(),
                             )
                         }
+                    sqlQuery == "SELECT members, blinded_member_ids, link_id FROM chat_rooms WHERE id = ?" -> {
+                        val snapshot = snapshotQueue.removeFirst()
+                        currentSnapshot = snapshot
+                        listOf(
+                            mapOf(
+                                "members" to snapshot.memberIds.joinToString(prefix = "[", postfix = "]"),
+                                "blinded_member_ids" to snapshot.blindedIds.joinToString(prefix = "[", postfix = "]"),
+                                "link_id" to snapshot.linkId?.toString(),
+                            ),
+                        )
                     }
+                    sqlQuery == "SELECT user_id, nickname, link_member_type, profile_image_url, enc FROM db2.open_chat_member WHERE link_id = ?" -> {
+                        val snapshot = currentSnapshot
+                        if (snapshot == null) {
+                            emptyList()
+                        } else {
+                            snapshot.memberIds.map { userId ->
+                                mapOf(
+                                    "user_id" to userId.toString(),
+                                    "nickname" to snapshot.nicknames[userId],
+                                    "link_member_type" to snapshot.roles[userId]?.toString(),
+                                    "profile_image_url" to snapshot.profileImages[userId],
+                                    "enc" to "0",
+                                )
+                            }
+                        }
+                    }
+                    else -> emptyList()
                 }
-                else -> emptyList()
-            }
-        },
+            },
         decrypt = { _, raw, _ -> raw },
         botId = 0L,
     )

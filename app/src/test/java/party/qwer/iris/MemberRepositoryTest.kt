@@ -11,20 +11,26 @@ private fun stubResult(
     rows: List<Map<String, String?>>,
 ): QueryExecutionResult {
     val cols = columns.map { QueryColumn(name = it, sqliteType = "TEXT") }
-    val jsonRows = rows.map { row ->
-        columns.map { col ->
-            row[col]?.let { JsonPrimitive(it) }
+    val jsonRows =
+        rows.map { row ->
+            columns.map { col ->
+                row[col]?.let { JsonPrimitive(it) }
+            }
         }
-    }
     return QueryExecutionResult(cols, jsonRows)
 }
 
 private fun emptyResult(): QueryExecutionResult = QueryExecutionResult(emptyList(), emptyList())
 
-private fun legacyQuery(block: (String, Array<String?>?, Int) -> List<Map<String, String?>>):
-    (String, Array<String?>?, Int) -> QueryExecutionResult = { sql, args, maxRows ->
+private fun legacyQuery(block: (String, Array<String?>?, Int) -> List<Map<String, String?>>): (String, Array<String?>?, Int) -> QueryExecutionResult =
+    { sql, args, maxRows ->
         val rows = block(sql, args, maxRows)
-        val columns = rows.firstOrNull()?.keys?.toList().orEmpty()
+        val columns =
+            rows
+                .firstOrNull()
+                ?.keys
+                ?.toList()
+                .orEmpty()
         if (columns.isEmpty()) {
             emptyResult()
         } else {
@@ -95,27 +101,28 @@ class MemberRepositoryTest {
         val chatId = 100L
         val repo =
             MemberRepository(
-                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
-                    when {
-                        sqlQuery == "SELECT link_id FROM chat_rooms WHERE id = ?" -> listOf(mapOf("link_id" to "777"))
-                        sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
-                            listOf(mapOf("link_id" to "777", "type" to "OM", "members" to "[]", "active_members_count" to "3"))
-                        sqlQuery.contains("FROM chat_logs WHERE chat_id = ? AND created_at >= ?") ->
-                            listOf(
-                                mapOf("user_id" to "1", "type" to "0", "cnt" to "10", "last_active" to "1000"),
-                                mapOf("user_id" to "2", "type" to "0", "cnt" to "7", "last_active" to "900"),
-                                mapOf("user_id" to "3", "type" to "0", "cnt" to "3", "last_active" to "800"),
-                            )
-                        sqlQuery == "SELECT nickname, enc FROM db2.open_chat_member WHERE user_id = ? AND link_id = ? LIMIT 1" ->
-                            listOf(
-                                mapOf(
-                                    "nickname" to "user-${bindArgs?.get(0)}-link-${bindArgs?.get(1)}",
-                                    "enc" to "0",
-                                ),
-                            )
-                        else -> emptyList()
-                    }
-                },
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, bindArgs, _ ->
+                        when {
+                            sqlQuery == "SELECT link_id FROM chat_rooms WHERE id = ?" -> listOf(mapOf("link_id" to "777"))
+                            sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
+                                listOf(mapOf("link_id" to "777", "type" to "OM", "members" to "[]", "active_members_count" to "3"))
+                            sqlQuery.contains("FROM chat_logs WHERE chat_id = ? AND created_at >= ?") ->
+                                listOf(
+                                    mapOf("user_id" to "1", "type" to "0", "cnt" to "10", "last_active" to "1000"),
+                                    mapOf("user_id" to "2", "type" to "0", "cnt" to "7", "last_active" to "900"),
+                                    mapOf("user_id" to "3", "type" to "0", "cnt" to "3", "last_active" to "800"),
+                                )
+                            sqlQuery == "SELECT nickname, enc FROM db2.open_chat_member WHERE user_id = ? AND link_id = ? LIMIT 1" ->
+                                listOf(
+                                    mapOf(
+                                        "nickname" to "user-${bindArgs?.get(0)}-link-${bindArgs?.get(1)}",
+                                        "enc" to "0",
+                                    ),
+                                )
+                            else -> emptyList()
+                        }
+                    },
                 decrypt = { _, raw, _ -> raw },
                 botId = 1L,
             )
@@ -134,22 +141,23 @@ class MemberRepositoryTest {
     fun `roomStats applies minMessages filter before totals`() {
         val repo =
             MemberRepository(
-                executeQueryTyped = legacyQuery { sqlQuery, _, _ ->
-                    when {
-                        sqlQuery == "SELECT link_id FROM chat_rooms WHERE id = ?" -> listOf(mapOf("link_id" to "777"))
-                        sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
-                            listOf(mapOf("link_id" to "777", "type" to "OM", "members" to "[]", "active_members_count" to "2"))
-                        sqlQuery.contains("FROM chat_logs WHERE chat_id = ? AND created_at >= ?") ->
-                            listOf(
-                                mapOf("user_id" to "1", "type" to "0", "cnt" to "10", "last_active" to "1000"),
-                                mapOf("user_id" to "2", "type" to "0", "cnt" to "7", "last_active" to "900"),
-                                mapOf("user_id" to "3", "type" to "0", "cnt" to "3", "last_active" to "800"),
-                            )
-                        sqlQuery == "SELECT nickname, enc FROM db2.open_chat_member WHERE user_id = ? AND link_id = ? LIMIT 1" ->
-                            listOf(mapOf("nickname" to "user", "enc" to "0"))
-                        else -> emptyList()
-                    }
-                },
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, _, _ ->
+                        when {
+                            sqlQuery == "SELECT link_id FROM chat_rooms WHERE id = ?" -> listOf(mapOf("link_id" to "777"))
+                            sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
+                                listOf(mapOf("link_id" to "777", "type" to "OM", "members" to "[]", "active_members_count" to "2"))
+                            sqlQuery.contains("FROM chat_logs WHERE chat_id = ? AND created_at >= ?") ->
+                                listOf(
+                                    mapOf("user_id" to "1", "type" to "0", "cnt" to "10", "last_active" to "1000"),
+                                    mapOf("user_id" to "2", "type" to "0", "cnt" to "7", "last_active" to "900"),
+                                    mapOf("user_id" to "3", "type" to "0", "cnt" to "3", "last_active" to "800"),
+                                )
+                            sqlQuery == "SELECT nickname, enc FROM db2.open_chat_member WHERE user_id = ? AND link_id = ? LIMIT 1" ->
+                                listOf(mapOf("nickname" to "user", "enc" to "0"))
+                            else -> emptyList()
+                        }
+                    },
                 decrypt = { _, raw, _ -> raw },
                 botId = 1L,
             )
@@ -166,28 +174,29 @@ class MemberRepositoryTest {
         var batchNicknameQueryCount = 0
         val repo =
             MemberRepository(
-                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
-                    when {
-                        sqlQuery == "SELECT link_id FROM chat_rooms WHERE id = ?" -> listOf(mapOf("link_id" to "777"))
-                        sqlQuery.contains("FROM chat_logs WHERE chat_id = ? AND created_at >= ?") ->
-                            listOf(
-                                mapOf("user_id" to "1", "type" to "0", "cnt" to "10", "last_active" to "1000"),
-                                mapOf("user_id" to "2", "type" to "0", "cnt" to "7", "last_active" to "900"),
-                            )
-                        sqlQuery.contains("FROM db2.open_chat_member") &&
-                            sqlQuery.contains("WHERE link_id = ? AND user_id IN (?, ?)") &&
-                            bindArgs?.toList() == listOf("777", "1", "2") -> {
-                            batchNicknameQueryCount++
-                            listOf(
-                                mapOf("user_id" to "1", "nickname" to "alice", "enc" to "0"),
-                                mapOf("user_id" to "2", "nickname" to "bob", "enc" to "0"),
-                            )
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, bindArgs, _ ->
+                        when {
+                            sqlQuery == "SELECT link_id FROM chat_rooms WHERE id = ?" -> listOf(mapOf("link_id" to "777"))
+                            sqlQuery.contains("FROM chat_logs WHERE chat_id = ? AND created_at >= ?") ->
+                                listOf(
+                                    mapOf("user_id" to "1", "type" to "0", "cnt" to "10", "last_active" to "1000"),
+                                    mapOf("user_id" to "2", "type" to "0", "cnt" to "7", "last_active" to "900"),
+                                )
+                            sqlQuery.contains("FROM db2.open_chat_member") &&
+                                sqlQuery.contains("WHERE link_id = ? AND user_id IN (?, ?)") &&
+                                bindArgs?.toList() == listOf("777", "1", "2") -> {
+                                batchNicknameQueryCount++
+                                listOf(
+                                    mapOf("user_id" to "1", "nickname" to "alice", "enc" to "0"),
+                                    mapOf("user_id" to "2", "nickname" to "bob", "enc" to "0"),
+                                )
+                            }
+                            sqlQuery == "SELECT nickname, enc FROM db2.open_chat_member WHERE user_id = ? AND link_id = ? LIMIT 1" ->
+                                error("roomStats should not resolve nicknames with per-user queries")
+                            else -> emptyList()
                         }
-                        sqlQuery == "SELECT nickname, enc FROM db2.open_chat_member WHERE user_id = ? AND link_id = ? LIMIT 1" ->
-                            error("roomStats should not resolve nicknames with per-user queries")
-                        else -> emptyList()
-                    }
-                },
+                    },
                 decrypt = { _, raw, _ -> raw },
                 botId = 1L,
             )
@@ -202,38 +211,39 @@ class MemberRepositoryTest {
     fun `listMembers includes current member activity metadata without former members`() {
         val repo =
             MemberRepository(
-                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
-                    when {
-                        sqlQuery == "SELECT link_id FROM chat_rooms WHERE id = ?" -> listOf(mapOf("link_id" to "777"))
-                        sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
-                            listOf(mapOf("link_id" to "777", "type" to "OM", "members" to "[]", "active_members_count" to "2"))
-                        sqlQuery.contains("FROM db2.open_chat_member WHERE link_id = ?") ->
-                            listOf(
-                                mapOf(
-                                    "user_id" to "1",
-                                    "nickname" to "alice",
-                                    "link_member_type" to "1",
-                                    "profile_image_url" to null,
-                                    "enc" to "0",
-                                ),
-                                mapOf(
-                                    "user_id" to "2",
-                                    "nickname" to "bob",
-                                    "link_member_type" to "2",
-                                    "profile_image_url" to null,
-                                    "enc" to "0",
-                                ),
-                            )
-                        sqlQuery.contains("SELECT user_id, COUNT(*) as message_count, MAX(created_at) as last_active") ->
-                            listOf(
-                                mapOf("user_id" to "1", "message_count" to "10", "last_active" to "1000"),
-                                mapOf("user_id" to "3", "message_count" to "99", "last_active" to "5000"),
-                            )
-                        sqlQuery == "SELECT nickname, enc FROM db2.open_chat_member WHERE user_id = ? AND link_id = ? LIMIT 1" ->
-                            listOf(mapOf("nickname" to "user-${bindArgs?.get(0)}", "enc" to "0"))
-                        else -> emptyList()
-                    }
-                },
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, bindArgs, _ ->
+                        when {
+                            sqlQuery == "SELECT link_id FROM chat_rooms WHERE id = ?" -> listOf(mapOf("link_id" to "777"))
+                            sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
+                                listOf(mapOf("link_id" to "777", "type" to "OM", "members" to "[]", "active_members_count" to "2"))
+                            sqlQuery.contains("FROM db2.open_chat_member WHERE link_id = ?") ->
+                                listOf(
+                                    mapOf(
+                                        "user_id" to "1",
+                                        "nickname" to "alice",
+                                        "link_member_type" to "1",
+                                        "profile_image_url" to null,
+                                        "enc" to "0",
+                                    ),
+                                    mapOf(
+                                        "user_id" to "2",
+                                        "nickname" to "bob",
+                                        "link_member_type" to "2",
+                                        "profile_image_url" to null,
+                                        "enc" to "0",
+                                    ),
+                                )
+                            sqlQuery.contains("SELECT user_id, COUNT(*) as message_count, MAX(created_at) as last_active") ->
+                                listOf(
+                                    mapOf("user_id" to "1", "message_count" to "10", "last_active" to "1000"),
+                                    mapOf("user_id" to "3", "message_count" to "99", "last_active" to "5000"),
+                                )
+                            sqlQuery == "SELECT nickname, enc FROM db2.open_chat_member WHERE user_id = ? AND link_id = ? LIMIT 1" ->
+                                listOf(mapOf("nickname" to "user-${bindArgs?.get(0)}", "enc" to "0"))
+                            else -> emptyList()
+                        }
+                    },
                 decrypt = { _, raw, _ -> raw },
                 botId = 1L,
             )
@@ -253,36 +263,37 @@ class MemberRepositoryTest {
     fun `listMembers scopes activity aggregation to current member ids`() {
         val repo =
             MemberRepository(
-                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
-                    when {
-                        sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
-                            listOf(mapOf("link_id" to "777", "type" to "OM", "members" to "[]", "active_members_count" to "2"))
-                        sqlQuery.contains("FROM db2.open_chat_member WHERE link_id = ?") ->
-                            listOf(
-                                mapOf(
-                                    "user_id" to "1",
-                                    "nickname" to "alice",
-                                    "link_member_type" to "1",
-                                    "profile_image_url" to null,
-                                    "enc" to "0",
-                                ),
-                                mapOf(
-                                    "user_id" to "2",
-                                    "nickname" to "bob",
-                                    "link_member_type" to "2",
-                                    "profile_image_url" to null,
-                                    "enc" to "0",
-                                ),
-                            )
-                        sqlQuery.contains("FROM chat_logs") &&
-                            sqlQuery.contains("user_id IN (?, ?)") &&
-                            bindArgs?.take(3) == listOf("100", "1", "2") ->
-                            listOf(
-                                mapOf("user_id" to "1", "message_count" to "10", "last_active" to "1000"),
-                            )
-                        else -> emptyList()
-                    }
-                },
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, bindArgs, _ ->
+                        when {
+                            sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
+                                listOf(mapOf("link_id" to "777", "type" to "OM", "members" to "[]", "active_members_count" to "2"))
+                            sqlQuery.contains("FROM db2.open_chat_member WHERE link_id = ?") ->
+                                listOf(
+                                    mapOf(
+                                        "user_id" to "1",
+                                        "nickname" to "alice",
+                                        "link_member_type" to "1",
+                                        "profile_image_url" to null,
+                                        "enc" to "0",
+                                    ),
+                                    mapOf(
+                                        "user_id" to "2",
+                                        "nickname" to "bob",
+                                        "link_member_type" to "2",
+                                        "profile_image_url" to null,
+                                        "enc" to "0",
+                                    ),
+                                )
+                            sqlQuery.contains("FROM chat_logs") &&
+                                sqlQuery.contains("user_id IN (?, ?)") &&
+                                bindArgs?.take(3) == listOf("100", "1", "2") ->
+                                listOf(
+                                    mapOf("user_id" to "1", "message_count" to "10", "last_active" to "1000"),
+                                )
+                            else -> emptyList()
+                        }
+                    },
                 decrypt = { _, raw, _ -> raw },
                 botId = 1L,
             )
@@ -299,38 +310,39 @@ class MemberRepositoryTest {
         var activityQueryCount = 0
         val repo =
             MemberRepository(
-                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
-                    when {
-                        sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
-                            listOf(mapOf("link_id" to "777", "type" to "OM", "members" to "[]", "active_members_count" to "2"))
-                        sqlQuery.contains("FROM db2.open_chat_member WHERE link_id = ?") ->
-                            listOf(
-                                mapOf(
-                                    "user_id" to "1",
-                                    "nickname" to "alice",
-                                    "link_member_type" to "1",
-                                    "profile_image_url" to null,
-                                    "enc" to "0",
-                                ),
-                                mapOf(
-                                    "user_id" to "2",
-                                    "nickname" to "bob",
-                                    "link_member_type" to "2",
-                                    "profile_image_url" to null,
-                                    "enc" to "0",
-                                ),
-                            )
-                        sqlQuery.contains("FROM chat_logs") &&
-                            sqlQuery.contains("user_id IN (?, ?)") &&
-                            bindArgs?.toList() == listOf("100", "1", "2") -> {
-                            activityQueryCount++
-                            listOf(
-                                mapOf("user_id" to "1", "message_count" to "10", "last_active" to "1000"),
-                            )
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, bindArgs, _ ->
+                        when {
+                            sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
+                                listOf(mapOf("link_id" to "777", "type" to "OM", "members" to "[]", "active_members_count" to "2"))
+                            sqlQuery.contains("FROM db2.open_chat_member WHERE link_id = ?") ->
+                                listOf(
+                                    mapOf(
+                                        "user_id" to "1",
+                                        "nickname" to "alice",
+                                        "link_member_type" to "1",
+                                        "profile_image_url" to null,
+                                        "enc" to "0",
+                                    ),
+                                    mapOf(
+                                        "user_id" to "2",
+                                        "nickname" to "bob",
+                                        "link_member_type" to "2",
+                                        "profile_image_url" to null,
+                                        "enc" to "0",
+                                    ),
+                                )
+                            sqlQuery.contains("FROM chat_logs") &&
+                                sqlQuery.contains("user_id IN (?, ?)") &&
+                                bindArgs?.toList() == listOf("100", "1", "2") -> {
+                                activityQueryCount++
+                                listOf(
+                                    mapOf("user_id" to "1", "message_count" to "10", "last_active" to "1000"),
+                                )
+                            }
+                            else -> emptyList()
                         }
-                        else -> emptyList()
-                    }
-                },
+                    },
                 decrypt = { _, raw, _ -> raw },
                 botId = 1L,
             )
@@ -345,32 +357,33 @@ class MemberRepositoryTest {
     fun `listRooms deduplicates same open link and prefers positive chat id`() {
         val repo =
             MemberRepository(
-                executeQueryTyped = legacyQuery { _, _, _ ->
-                    listOf(
-                        mapOf(
-                            "id" to "-1774565104303",
-                            "type" to "OD",
-                            "active_members_count" to "2",
-                            "link_id" to "455150406",
-                            "link_name" to "카푸",
-                            "link_url" to "https://open.kakao.com/o/s5Ee5Tmi",
-                            "member_limit" to null,
-                            "searchable" to "1",
-                            "bot_role" to "1",
-                        ),
-                        mapOf(
-                            "id" to "18478615493603057",
-                            "type" to "OD",
-                            "active_members_count" to "2",
-                            "link_id" to "455150406",
-                            "link_name" to "카푸",
-                            "link_url" to "https://open.kakao.com/o/s5Ee5Tmi",
-                            "member_limit" to null,
-                            "searchable" to "1",
-                            "bot_role" to "1",
-                        ),
-                    )
-                },
+                executeQueryTyped =
+                    legacyQuery { _, _, _ ->
+                        listOf(
+                            mapOf(
+                                "id" to "-1774565104303",
+                                "type" to "OD",
+                                "active_members_count" to "2",
+                                "link_id" to "455150406",
+                                "link_name" to "카푸",
+                                "link_url" to "https://open.kakao.com/o/s5Ee5Tmi",
+                                "member_limit" to null,
+                                "searchable" to "1",
+                                "bot_role" to "1",
+                            ),
+                            mapOf(
+                                "id" to "18478615493603057",
+                                "type" to "OD",
+                                "active_members_count" to "2",
+                                "link_id" to "455150406",
+                                "link_name" to "카푸",
+                                "link_url" to "https://open.kakao.com/o/s5Ee5Tmi",
+                                "member_limit" to null,
+                                "searchable" to "1",
+                                "bot_role" to "1",
+                            ),
+                        )
+                    },
                 decrypt = { _, raw, _ -> raw },
                 botId = 1L,
             )
@@ -386,42 +399,43 @@ class MemberRepositoryTest {
     fun `listRooms includes non open rooms with resolved display names`() {
         val repo =
             MemberRepository(
-                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
-                    when {
-                        sqlQuery.contains("FROM chat_rooms cr") ->
-                            listOf(
-                                mapOf(
-                                    "id" to "366795577484293",
-                                    "type" to "MultiChat",
-                                    "active_members_count" to "6",
-                                    "link_id" to null,
-                                    "link_name" to null,
-                                    "link_url" to null,
-                                    "member_limit" to null,
-                                    "searchable" to null,
-                                    "bot_role" to null,
-                                    "meta" to """[{"type":3,"content":"홀붕이"}]""",
-                                    "members" to "[27126526,203887151,222348861]",
-                                ),
-                                mapOf(
-                                    "id" to "464252100463241",
-                                    "type" to "DirectChat",
-                                    "active_members_count" to "2",
-                                    "link_id" to null,
-                                    "link_name" to null,
-                                    "link_url" to null,
-                                    "member_limit" to null,
-                                    "searchable" to null,
-                                    "bot_role" to null,
-                                    "meta" to "[]",
-                                    "members" to "[267947734]",
-                                ),
-                            )
-                        sqlQuery.contains("SELECT id, name, enc FROM db2.friends WHERE id IN (?)") && bindArgs?.toList() == listOf("267947734") ->
-                            listOf(mapOf("id" to "267947734", "name" to "카푸", "enc" to "0"))
-                        else -> emptyList()
-                    }
-                },
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, bindArgs, _ ->
+                        when {
+                            sqlQuery.contains("FROM chat_rooms cr") ->
+                                listOf(
+                                    mapOf(
+                                        "id" to "366795577484293",
+                                        "type" to "MultiChat",
+                                        "active_members_count" to "6",
+                                        "link_id" to null,
+                                        "link_name" to null,
+                                        "link_url" to null,
+                                        "member_limit" to null,
+                                        "searchable" to null,
+                                        "bot_role" to null,
+                                        "meta" to """[{"type":3,"content":"홀붕이"}]""",
+                                        "members" to "[27126526,203887151,222348861]",
+                                    ),
+                                    mapOf(
+                                        "id" to "464252100463241",
+                                        "type" to "DirectChat",
+                                        "active_members_count" to "2",
+                                        "link_id" to null,
+                                        "link_name" to null,
+                                        "link_url" to null,
+                                        "member_limit" to null,
+                                        "searchable" to null,
+                                        "bot_role" to null,
+                                        "meta" to "[]",
+                                        "members" to "[267947734]",
+                                    ),
+                                )
+                            sqlQuery.contains("SELECT id, name, enc FROM db2.friends WHERE id IN (?)") && bindArgs?.toList() == listOf("267947734") ->
+                                listOf(mapOf("id" to "267947734", "name" to "카푸", "enc" to "0"))
+                            else -> emptyList()
+                        }
+                    },
                 decrypt = { _, raw, _ -> raw },
                 botId = 438562408L,
             )
@@ -436,31 +450,32 @@ class MemberRepositoryTest {
     fun `listMembers returns non open members from members and chat logs`() {
         val repo =
             MemberRepository(
-                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
-                    when {
-                        sqlQuery == "SELECT link_id FROM chat_rooms WHERE id = ?" ->
-                            listOf(mapOf("link_id" to null))
-                        sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
-                            listOf(
-                                mapOf(
-                                    "link_id" to null,
-                                    "type" to "DirectChat",
-                                    "members" to "[267947734]",
-                                    "active_members_count" to "2",
-                                ),
-                            )
-                        sqlQuery.contains("FROM chat_logs") && sqlQuery.contains("GROUP BY user_id") ->
-                            listOf(
-                                mapOf("user_id" to "267947734", "message_count" to "1", "last_active" to "1000"),
-                                mapOf("user_id" to "438562408", "message_count" to "1", "last_active" to "1001"),
-                            )
-                        sqlQuery == "SELECT name, enc FROM db2.friends WHERE id = ? LIMIT 1" && bindArgs?.toList() == listOf("267947734") ->
-                            listOf(mapOf("name" to "카푸", "enc" to "0"))
-                        sqlQuery == "SELECT name, enc FROM db2.friends WHERE id = ? LIMIT 1" && bindArgs?.toList() == listOf("438562408") ->
-                            listOf(mapOf("name" to "봇", "enc" to "0"))
-                        else -> emptyList()
-                    }
-                },
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, bindArgs, _ ->
+                        when {
+                            sqlQuery == "SELECT link_id FROM chat_rooms WHERE id = ?" ->
+                                listOf(mapOf("link_id" to null))
+                            sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
+                                listOf(
+                                    mapOf(
+                                        "link_id" to null,
+                                        "type" to "DirectChat",
+                                        "members" to "[267947734]",
+                                        "active_members_count" to "2",
+                                    ),
+                                )
+                            sqlQuery.contains("FROM chat_logs") && sqlQuery.contains("GROUP BY user_id") ->
+                                listOf(
+                                    mapOf("user_id" to "267947734", "message_count" to "1", "last_active" to "1000"),
+                                    mapOf("user_id" to "438562408", "message_count" to "1", "last_active" to "1001"),
+                                )
+                            sqlQuery == "SELECT name, enc FROM db2.friends WHERE id = ? LIMIT 1" && bindArgs?.toList() == listOf("267947734") ->
+                                listOf(mapOf("name" to "카푸", "enc" to "0"))
+                            sqlQuery == "SELECT name, enc FROM db2.friends WHERE id = ? LIMIT 1" && bindArgs?.toList() == listOf("438562408") ->
+                                listOf(mapOf("name" to "봇", "enc" to "0"))
+                            else -> emptyList()
+                        }
+                    },
                 decrypt = { _, raw, _ -> raw },
                 botId = 438562408L,
             )
@@ -479,25 +494,26 @@ class MemberRepositoryTest {
     fun `listMembers falls back to user id string when non open nickname sources are missing`() {
         val repo =
             MemberRepository(
-                executeQueryTyped = legacyQuery { sqlQuery, _, _ ->
-                    when {
-                        sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
-                            listOf(
-                                mapOf(
-                                    "link_id" to null,
-                                    "type" to "DirectChat",
-                                    "members" to "[267947734]",
-                                    "active_members_count" to "2",
-                                ),
-                            )
-                        sqlQuery.contains("FROM chat_logs") && sqlQuery.contains("GROUP BY user_id") ->
-                            listOf(
-                                mapOf("user_id" to "267947734", "message_count" to "1", "last_active" to "1000"),
-                                mapOf("user_id" to "438562408", "message_count" to "1", "last_active" to "1001"),
-                            )
-                        else -> emptyList()
-                    }
-                },
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, _, _ ->
+                        when {
+                            sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
+                                listOf(
+                                    mapOf(
+                                        "link_id" to null,
+                                        "type" to "DirectChat",
+                                        "members" to "[267947734]",
+                                        "active_members_count" to "2",
+                                    ),
+                                )
+                            sqlQuery.contains("FROM chat_logs") && sqlQuery.contains("GROUP BY user_id") ->
+                                listOf(
+                                    mapOf("user_id" to "267947734", "message_count" to "1", "last_active" to "1000"),
+                                    mapOf("user_id" to "438562408", "message_count" to "1", "last_active" to "1001"),
+                                )
+                            else -> emptyList()
+                        }
+                    },
                 decrypt = { _, raw, _ -> raw },
                 botId = 438562408L,
             )
@@ -513,27 +529,28 @@ class MemberRepositoryTest {
     fun `listRooms falls back to member id when direct chat name sources are missing`() {
         val repo =
             MemberRepository(
-                executeQueryTyped = legacyQuery { sqlQuery, _, _ ->
-                    when {
-                        sqlQuery.contains("FROM chat_rooms cr") ->
-                            listOf(
-                                mapOf(
-                                    "id" to "464252100463241",
-                                    "type" to "DirectChat",
-                                    "active_members_count" to "2",
-                                    "link_id" to null,
-                                    "link_name" to null,
-                                    "link_url" to null,
-                                    "member_limit" to null,
-                                    "searchable" to null,
-                                    "bot_role" to null,
-                                    "meta" to "[]",
-                                    "members" to "[267947734]",
-                                ),
-                            )
-                        else -> emptyList()
-                    }
-                },
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, _, _ ->
+                        when {
+                            sqlQuery.contains("FROM chat_rooms cr") ->
+                                listOf(
+                                    mapOf(
+                                        "id" to "464252100463241",
+                                        "type" to "DirectChat",
+                                        "active_members_count" to "2",
+                                        "link_id" to null,
+                                        "link_name" to null,
+                                        "link_url" to null,
+                                        "member_limit" to null,
+                                        "searchable" to null,
+                                        "bot_role" to null,
+                                        "meta" to "[]",
+                                        "members" to "[267947734]",
+                                    ),
+                                )
+                            else -> emptyList()
+                        }
+                    },
                 decrypt = { _, raw, _ -> raw },
                 botId = 438562408L,
             )
@@ -547,35 +564,36 @@ class MemberRepositoryTest {
     fun `listRooms uses observed profile room name for direct chat fallback`() {
         val repo =
             MemberRepository(
-                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
-                    when {
-                        sqlQuery.contains("FROM chat_rooms cr") ->
-                            listOf(
-                                mapOf(
-                                    "id" to "464252100463241",
-                                    "type" to "DirectChat",
-                                    "active_members_count" to "2",
-                                    "link_id" to null,
-                                    "link_name" to null,
-                                    "link_url" to null,
-                                    "member_limit" to null,
-                                    "searchable" to null,
-                                    "bot_role" to null,
-                                    "meta" to "[]",
-                                    "members" to "[267947734]",
-                                ),
-                            )
-                        sqlQuery.contains("FROM db3.observed_profiles") &&
-                            bindArgs?.toList() == listOf("464252100463241") ->
-                            listOf(
-                                mapOf(
-                                    "display_name" to "박준우",
-                                    "room_name" to "박준우",
-                                ),
-                            )
-                        else -> emptyList()
-                    }
-                },
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, bindArgs, _ ->
+                        when {
+                            sqlQuery.contains("FROM chat_rooms cr") ->
+                                listOf(
+                                    mapOf(
+                                        "id" to "464252100463241",
+                                        "type" to "DirectChat",
+                                        "active_members_count" to "2",
+                                        "link_id" to null,
+                                        "link_name" to null,
+                                        "link_url" to null,
+                                        "member_limit" to null,
+                                        "searchable" to null,
+                                        "bot_role" to null,
+                                        "meta" to "[]",
+                                        "members" to "[267947734]",
+                                    ),
+                                )
+                            sqlQuery.contains("FROM db3.observed_profiles") &&
+                                bindArgs?.toList() == listOf("464252100463241") ->
+                                listOf(
+                                    mapOf(
+                                        "display_name" to "박준우",
+                                        "room_name" to "박준우",
+                                    ),
+                                )
+                            else -> emptyList()
+                        }
+                    },
                 decrypt = { _, raw, _ -> raw },
                 botId = 438562408L,
             )
@@ -589,33 +607,34 @@ class MemberRepositoryTest {
     fun `listMembers uses observed profile display name for direct chat participant`() {
         val repo =
             MemberRepository(
-                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
-                    when {
-                        sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
-                            listOf(
-                                mapOf(
-                                    "link_id" to null,
-                                    "type" to "DirectChat",
-                                    "members" to "[267947734]",
-                                    "active_members_count" to "2",
-                                ),
-                            )
-                        sqlQuery.contains("FROM chat_logs") && sqlQuery.contains("GROUP BY user_id") ->
-                            listOf(
-                                mapOf("user_id" to "267947734", "message_count" to "1", "last_active" to "1000"),
-                                mapOf("user_id" to "438562408", "message_count" to "1", "last_active" to "1001"),
-                            )
-                        sqlQuery.contains("FROM db3.observed_profiles") &&
-                            bindArgs?.toList() == listOf("464252100463241") ->
-                            listOf(
-                                mapOf(
-                                    "display_name" to "박준우",
-                                    "room_name" to "박준우",
-                                ),
-                            )
-                        else -> emptyList()
-                    }
-                },
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, bindArgs, _ ->
+                        when {
+                            sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
+                                listOf(
+                                    mapOf(
+                                        "link_id" to null,
+                                        "type" to "DirectChat",
+                                        "members" to "[267947734]",
+                                        "active_members_count" to "2",
+                                    ),
+                                )
+                            sqlQuery.contains("FROM chat_logs") && sqlQuery.contains("GROUP BY user_id") ->
+                                listOf(
+                                    mapOf("user_id" to "267947734", "message_count" to "1", "last_active" to "1000"),
+                                    mapOf("user_id" to "438562408", "message_count" to "1", "last_active" to "1001"),
+                                )
+                            sqlQuery.contains("FROM db3.observed_profiles") &&
+                                bindArgs?.toList() == listOf("464252100463241") ->
+                                listOf(
+                                    mapOf(
+                                        "display_name" to "박준우",
+                                        "room_name" to "박준우",
+                                    ),
+                                )
+                            else -> emptyList()
+                        }
+                    },
                 decrypt = { _, raw, _ -> raw },
                 botId = 438562408L,
                 learnObservedProfileUserMappings = { _, _ -> },
@@ -632,27 +651,28 @@ class MemberRepositoryTest {
     fun `listMembers uses learned observed profile display name fallback`() {
         val repo =
             MemberRepository(
-                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
-                    when {
-                        sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
-                            listOf(
-                                mapOf(
-                                    "link_id" to null,
-                                    "type" to "MultiChat",
-                                    "members" to "[203887151]",
-                                    "active_members_count" to "1",
-                                ),
-                            )
-                        sqlQuery.contains("FROM chat_logs") && sqlQuery.contains("GROUP BY user_id") ->
-                            listOf(
-                                mapOf("user_id" to "203887151", "message_count" to "1", "last_active" to "1000"),
-                            )
-                        sqlQuery.contains("FROM db3.observed_profile_user_links") &&
-                            bindArgs?.toList() == listOf("366795577484293", "203887151") ->
-                            listOf(mapOf("user_id" to "203887151", "display_name" to "재균"))
-                        else -> emptyList()
-                    }
-                },
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, bindArgs, _ ->
+                        when {
+                            sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
+                                listOf(
+                                    mapOf(
+                                        "link_id" to null,
+                                        "type" to "MultiChat",
+                                        "members" to "[203887151]",
+                                        "active_members_count" to "1",
+                                    ),
+                                )
+                            sqlQuery.contains("FROM chat_logs") && sqlQuery.contains("GROUP BY user_id") ->
+                                listOf(
+                                    mapOf("user_id" to "203887151", "message_count" to "1", "last_active" to "1000"),
+                                )
+                            sqlQuery.contains("FROM db3.observed_profile_user_links") &&
+                                bindArgs?.toList() == listOf("366795577484293", "203887151") ->
+                                listOf(mapOf("user_id" to "203887151", "display_name" to "재균"))
+                            else -> emptyList()
+                        }
+                    },
                 decrypt = { _, raw, _ -> raw },
                 botId = 438562408L,
                 learnObservedProfileUserMappings = { _, _ -> },
@@ -668,15 +688,16 @@ class MemberRepositoryTest {
     fun `resolveDisplayName uses learned observed profile fallback for non open room`() {
         val repo =
             MemberRepository(
-                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
-                    when {
-                        sqlQuery == "SELECT name, enc FROM db2.friends WHERE id = ? LIMIT 1" -> emptyList()
-                        sqlQuery.contains("FROM db3.observed_profile_user_links") &&
-                            bindArgs?.toList() == listOf("366795577484293", "203887151") ->
-                            listOf(mapOf("user_id" to "203887151", "display_name" to "재균"))
-                        else -> emptyList()
-                    }
-                },
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, bindArgs, _ ->
+                        when {
+                            sqlQuery == "SELECT name, enc FROM db2.friends WHERE id = ? LIMIT 1" -> emptyList()
+                            sqlQuery.contains("FROM db3.observed_profile_user_links") &&
+                                bindArgs?.toList() == listOf("366795577484293", "203887151") ->
+                                listOf(mapOf("user_id" to "203887151", "display_name" to "재균"))
+                            else -> emptyList()
+                        }
+                    },
                 decrypt = { _, raw, _ -> raw },
                 botId = 438562408L,
             )
@@ -694,27 +715,28 @@ class MemberRepositoryTest {
     fun `listMembers scopes non open activity aggregation to current members and bot`() {
         val repo =
             MemberRepository(
-                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
-                    when {
-                        sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
-                            listOf(
-                                mapOf(
-                                    "link_id" to null,
-                                    "type" to "MultiChat",
-                                    "members" to "[203887151,243338321]",
-                                    "active_members_count" to "3",
-                                ),
-                            )
-                        sqlQuery.contains("FROM chat_logs") &&
-                            sqlQuery.contains("user_id IN (?, ?, ?)") &&
-                            bindArgs?.toList() == listOf("366795577484293", "203887151", "243338321", "438562408") ->
-                            listOf(
-                                mapOf("user_id" to "203887151", "message_count" to "10", "last_active" to "1000"),
-                                mapOf("user_id" to "438562408", "message_count" to "2", "last_active" to "1001"),
-                            )
-                        else -> emptyList()
-                    }
-                },
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, bindArgs, _ ->
+                        when {
+                            sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
+                                listOf(
+                                    mapOf(
+                                        "link_id" to null,
+                                        "type" to "MultiChat",
+                                        "members" to "[203887151,243338321]",
+                                        "active_members_count" to "3",
+                                    ),
+                                )
+                            sqlQuery.contains("FROM chat_logs") &&
+                                sqlQuery.contains("user_id IN (?, ?, ?)") &&
+                                bindArgs?.toList() == listOf("366795577484293", "203887151", "243338321", "438562408") ->
+                                listOf(
+                                    mapOf("user_id" to "203887151", "message_count" to "10", "last_active" to "1000"),
+                                    mapOf("user_id" to "438562408", "message_count" to "2", "last_active" to "1001"),
+                                )
+                            else -> emptyList()
+                        }
+                    },
                 decrypt = { _, raw, _ -> raw },
                 botId = 438562408L,
                 learnObservedProfileUserMappings = { _, _ -> },
@@ -733,28 +755,29 @@ class MemberRepositoryTest {
         var activityQueryCount = 0
         val repo =
             MemberRepository(
-                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
-                    when {
-                        sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
-                            listOf(
-                                mapOf(
-                                    "link_id" to null,
-                                    "type" to "MultiChat",
-                                    "members" to "[203887151,243338321]",
-                                    "active_members_count" to "3",
-                                ),
-                            )
-                        sqlQuery.contains("FROM chat_logs") &&
-                            sqlQuery.contains("user_id IN (?, ?, ?)") &&
-                            bindArgs?.toList() == listOf("366795577484293", "203887151", "243338321", "438562408") -> {
-                            activityQueryCount++
-                            listOf(
-                                mapOf("user_id" to "203887151", "message_count" to "10", "last_active" to "1000"),
-                            )
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, bindArgs, _ ->
+                        when {
+                            sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
+                                listOf(
+                                    mapOf(
+                                        "link_id" to null,
+                                        "type" to "MultiChat",
+                                        "members" to "[203887151,243338321]",
+                                        "active_members_count" to "3",
+                                    ),
+                                )
+                            sqlQuery.contains("FROM chat_logs") &&
+                                sqlQuery.contains("user_id IN (?, ?, ?)") &&
+                                bindArgs?.toList() == listOf("366795577484293", "203887151", "243338321", "438562408") -> {
+                                activityQueryCount++
+                                listOf(
+                                    mapOf("user_id" to "203887151", "message_count" to "10", "last_active" to "1000"),
+                                )
+                            }
+                            else -> emptyList()
                         }
-                        else -> emptyList()
-                    }
-                },
+                    },
                 decrypt = { _, raw, _ -> raw },
                 botId = 438562408L,
                 learnObservedProfileUserMappings = { _, _ -> },
@@ -772,31 +795,32 @@ class MemberRepositoryTest {
         var learnedNames: Map<Long, String>? = null
         val repo =
             MemberRepository(
-                executeQueryTyped = legacyQuery { sqlQuery, _, _ ->
-                    when {
-                        sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
-                            listOf(mapOf("link_id" to "777", "type" to "OD", "members" to "[]", "active_members_count" to "1"))
-                        sqlQuery.contains("FROM db2.open_chat_member WHERE link_id = ?") ->
-                            listOf(
-                                mapOf(
-                                    "user_id" to "6729110572752592365",
-                                    "nickname" to "박준우",
-                                    "link_member_type" to "2",
-                                    "profile_image_url" to null,
-                                    "enc" to "0",
-                                ),
-                            )
-                        sqlQuery.contains("FROM chat_logs") && sqlQuery.contains("GROUP BY user_id") ->
-                            listOf(
-                                mapOf(
-                                    "user_id" to "6729110572752592365",
-                                    "message_count" to "1",
-                                    "last_active" to "1000",
-                                ),
-                            )
-                        else -> emptyList()
-                    }
-                },
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, _, _ ->
+                        when {
+                            sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
+                                listOf(mapOf("link_id" to "777", "type" to "OD", "members" to "[]", "active_members_count" to "1"))
+                            sqlQuery.contains("FROM db2.open_chat_member WHERE link_id = ?") ->
+                                listOf(
+                                    mapOf(
+                                        "user_id" to "6729110572752592365",
+                                        "nickname" to "박준우",
+                                        "link_member_type" to "2",
+                                        "profile_image_url" to null,
+                                        "enc" to "0",
+                                    ),
+                                )
+                            sqlQuery.contains("FROM chat_logs") && sqlQuery.contains("GROUP BY user_id") ->
+                                listOf(
+                                    mapOf(
+                                        "user_id" to "6729110572752592365",
+                                        "message_count" to "1",
+                                        "last_active" to "1000",
+                                    ),
+                                )
+                            else -> emptyList()
+                        }
+                    },
                 decrypt = { _, raw, _ -> raw },
                 botId = 438562408L,
                 learnObservedProfileUserMappings = { chatId, names ->
@@ -817,29 +841,30 @@ class MemberRepositoryTest {
         var learnedNames: Map<Long, String>? = null
         val repo =
             MemberRepository(
-                executeQueryTyped = legacyQuery { sqlQuery, _, _ ->
-                    when {
-                        sqlQuery == "SELECT members, blinded_member_ids, link_id FROM chat_rooms WHERE id = ?" ->
-                            listOf(
-                                mapOf(
-                                    "members" to "[6729110572752592365]",
-                                    "blinded_member_ids" to "[]",
-                                    "link_id" to "455150406",
-                                ),
-                            )
-                        sqlQuery == "SELECT user_id, nickname, link_member_type, profile_image_url, enc FROM db2.open_chat_member WHERE link_id = ?" ->
-                            listOf(
-                                mapOf(
-                                    "user_id" to "6729110572752592365",
-                                    "nickname" to "박준우",
-                                    "link_member_type" to "2",
-                                    "profile_image_url" to null,
-                                    "enc" to "0",
-                                ),
-                            )
-                        else -> emptyList()
-                    }
-                },
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, _, _ ->
+                        when {
+                            sqlQuery == "SELECT members, blinded_member_ids, link_id FROM chat_rooms WHERE id = ?" ->
+                                listOf(
+                                    mapOf(
+                                        "members" to "[6729110572752592365]",
+                                        "blinded_member_ids" to "[]",
+                                        "link_id" to "455150406",
+                                    ),
+                                )
+                            sqlQuery == "SELECT user_id, nickname, link_member_type, profile_image_url, enc FROM db2.open_chat_member WHERE link_id = ?" ->
+                                listOf(
+                                    mapOf(
+                                        "user_id" to "6729110572752592365",
+                                        "nickname" to "박준우",
+                                        "link_member_type" to "2",
+                                        "profile_image_url" to null,
+                                        "enc" to "0",
+                                    ),
+                                )
+                            else -> emptyList()
+                        }
+                    },
                 decrypt = { _, raw, _ -> raw },
                 botId = 438562408L,
                 learnObservedProfileUserMappings = { chatId, names ->
@@ -858,25 +883,26 @@ class MemberRepositoryTest {
     fun `snapshot uses learned observed profile fallback for non open members`() {
         val repo =
             MemberRepository(
-                executeQueryTyped = legacyQuery { sqlQuery, bindArgs, _ ->
-                    when {
-                        sqlQuery == "SELECT members, blinded_member_ids, link_id FROM chat_rooms WHERE id = ?" ->
-                            listOf(
-                                mapOf(
-                                    "members" to "[203887151,243338321]",
-                                    "blinded_member_ids" to "[]",
-                                    "link_id" to null,
-                                ),
-                            )
-                        sqlQuery.contains("SELECT id, name, enc FROM db2.friends WHERE id IN (?,?)") &&
-                            bindArgs?.toList() == listOf("203887151", "243338321") ->
-                            emptyList()
-                        sqlQuery.contains("FROM db3.observed_profile_user_links") &&
-                            bindArgs?.toList() == listOf("366795577484293", "203887151", "243338321") ->
-                            listOf(mapOf("user_id" to "203887151", "display_name" to "재균"))
-                        else -> emptyList()
-                    }
-                },
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, bindArgs, _ ->
+                        when {
+                            sqlQuery == "SELECT members, blinded_member_ids, link_id FROM chat_rooms WHERE id = ?" ->
+                                listOf(
+                                    mapOf(
+                                        "members" to "[203887151,243338321]",
+                                        "blinded_member_ids" to "[]",
+                                        "link_id" to null,
+                                    ),
+                                )
+                            sqlQuery.contains("SELECT id, name, enc FROM db2.friends WHERE id IN (?,?)") &&
+                                bindArgs?.toList() == listOf("203887151", "243338321") ->
+                                emptyList()
+                            sqlQuery.contains("FROM db3.observed_profile_user_links") &&
+                                bindArgs?.toList() == listOf("366795577484293", "203887151", "243338321") ->
+                                listOf(mapOf("user_id" to "203887151", "display_name" to "재균"))
+                            else -> emptyList()
+                        }
+                    },
                 decrypt = { _, raw, _ -> raw },
                 botId = 438562408L,
             )
