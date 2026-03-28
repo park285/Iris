@@ -1,0 +1,19 @@
+[Unit]
+Description=Iris Daemon (health check, config sync, process management)
+After=network.target docker.service
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/iris-daemon watch
+ExecStartPre=/usr/local/bin/iris-daemon init
+Restart=always
+RestartSec=5
+EnvironmentFile=/root/work/arm-iris-runtime/configs/iris/iris.env
+Environment=CONTAINER_CLI=docker
+Environment=IRIS_DEVICE=192.168.219.201:5555
+Environment=REDROID_CONTAINER=redroid
+WatchdogSec=120
+NotifyAccess=main
+
+[Install]
+WantedBy=multi-user.target

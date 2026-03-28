@@ -1,0 +1,46 @@
+[workspace]
+members = ["iris-common", "iris-ctl", "iris-daemon"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85.0"
+
+[workspace.dependencies]
+tokio = { version = "1.50", features = ["full"] }
+reqwest = { version = "0.13", features = ["json", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+anyhow = "1"
+dirs = "6"
+clap = { version = "4", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+tracing-journald = "0.3"
+sd-notify = "0.5"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+unused_qualifications = "warn"
+elided_lifetimes_in_paths = "warn"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cognitive_complexity = "deny"
+too_many_lines = "deny"
+fn_params_excessive_bools = "deny"
+large_stack_frames = "deny"
+cast_possible_truncation = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+option_if_let_else = "allow"
+significant_drop_tightening = "allow"

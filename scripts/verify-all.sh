@@ -27,9 +27,12 @@ run_step "Gradle lint/format checks/tests" ./gradlew \
   :app:testDebugUnitTest \
   :bridge:testDebugUnitTest
 
-run_step "Rust format" cargo fmt --manifest-path "$repo_root/tools/iris-ctl/Cargo.toml" --check
-run_step "Rust lint" cargo clippy --manifest-path "$repo_root/tools/iris-ctl/Cargo.toml" --all-targets -- -D warnings
-run_step "Rust tests" cargo test --manifest-path "$repo_root/tools/iris-ctl/Cargo.toml"
+run_step "Rust format" cargo fmt --manifest-path "$repo_root/tools/Cargo.toml" --all -- --check
+run_step "Rust lint" cargo clippy --manifest-path "$repo_root/tools/Cargo.toml" --workspace --all-targets -- -D warnings
+run_step "Rust tests" cargo test --manifest-path "$repo_root/tools/Cargo.toml" --workspace
+run_step "Rust audit" cargo audit --file "$repo_root/tools/Cargo.lock"
+run_step "Rust deny" cargo deny --manifest-path "$repo_root/tools/Cargo.toml" check
+run_step "Rust miri" env MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test --manifest-path "$repo_root/tools/Cargo.toml" --workspace
 
 run_step "Bridge architecture guardrails" "$repo_root/scripts/check-bridge-boundaries.sh"
 

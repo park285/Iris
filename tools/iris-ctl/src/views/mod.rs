@@ -8,12 +8,13 @@ use ratatui::Frame;
 
 #[allow(dead_code)]
 pub trait View {
-    fn render(&self, frame: &mut Frame, area: ratatui::layout::Rect);
+    fn render(&self, frame: &mut Frame<'_>, area: ratatui::layout::Rect);
     fn handle_key(&mut self, key: KeyEvent) -> ViewAction;
     fn title(&self) -> &str;
 }
 
 #[allow(dead_code)]
+#[derive(Clone, Copy)]
 pub enum ViewAction {
     None,
     SwitchTo(TabId),
@@ -33,23 +34,23 @@ pub enum TabId {
 }
 
 impl TabId {
-    pub fn all() -> &'static [TabId] {
-        &[TabId::Rooms, TabId::Members, TabId::Stats, TabId::Events]
+    pub const fn all() -> &'static [Self] {
+        &[Self::Rooms, Self::Members, Self::Stats, Self::Events]
     }
-    pub fn label(&self) -> &str {
+    pub const fn label(&self) -> &str {
         match self {
-            TabId::Rooms => "Rooms",
-            TabId::Members => "Members",
-            TabId::Stats => "Stats",
-            TabId::Events => "Events",
+            Self::Rooms => "Rooms",
+            Self::Members => "Members",
+            Self::Stats => "Stats",
+            Self::Events => "Events",
         }
     }
-    pub fn index(&self) -> usize {
+    pub const fn index(self) -> usize {
         match self {
-            TabId::Rooms => 0,
-            TabId::Members => 1,
-            TabId::Stats => 2,
-            TabId::Events => 3,
+            Self::Rooms => 0,
+            Self::Members => 1,
+            Self::Stats => 2,
+            Self::Events => 3,
         }
     }
 }

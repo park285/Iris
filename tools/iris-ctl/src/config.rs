@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use iris_common::config::IrisConnection;
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -30,7 +31,7 @@ impl Default for UiConfig {
     }
 }
 
-fn default_poll_interval() -> u64 {
+const fn default_poll_interval() -> u64 {
     5
 }
 
@@ -51,17 +52,20 @@ impl Config {
                 );
             }
         }
-        let mut config: Config = toml::from_str(&content)?;
+        let mut config: Self = toml::from_str(&content)?;
         if let Ok(token) = std::env::var("IRIS_TOKEN") {
             config.server.token = token;
         }
         Ok(config)
     }
-    pub fn token(&self) -> &str {
-        &self.server.token
-    }
-    pub fn base_url(&self) -> &str {
+}
+
+impl IrisConnection for Config {
+    fn base_url(&self) -> &str {
         &self.server.url
+    }
+    fn token(&self) -> &str {
+        &self.server.token
     }
 }
 

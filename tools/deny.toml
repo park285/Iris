@@ -1,0 +1,45 @@
+[graph]
+all-features = true
+
+[advisories]
+ignore = []
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "OpenSSL",
+    "Zlib",
+    "MPL-2.0",
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+
+[[licenses.clarify]]
+name = "iris-common"
+expression = "MIT"
+license-files = []
+
+[[licenses.clarify]]
+name = "iris-ctl"
+expression = "MIT"
+license-files = []
+
+[[licenses.clarify]]
+name = "iris-daemon"
+expression = "MIT"
+license-files = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"  # workspace path deps are inherently wildcard
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -146,7 +146,7 @@ pub struct SseEvent {
 }
 
 impl RoomSummary {
-    pub fn role_name(&self) -> &str {
+    pub const fn role_name(&self) -> &str {
         match self.bot_role {
             Some(1) => "owner",
             Some(4) => "admin",
@@ -154,4 +154,18 @@ impl RoomSummary {
             _ => "member",
         }
     }
+}
+
+/// daemon health probe용 응답 모델
+#[derive(Deserialize, Debug, Clone)]
+pub struct HealthResponse {
+    pub status: String,
+}
+
+/// daemon bridge diagnostics 응답 모델
+#[derive(Deserialize, Debug, Clone)]
+pub struct BridgeDiagnosticsResponse {
+    pub status: String,
+    #[serde(default)]
+    pub details: Option<String>,
 }

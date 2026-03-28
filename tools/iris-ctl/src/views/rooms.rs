@@ -1,6 +1,6 @@
 use super::{View, ViewAction};
-use crate::models::RoomSummary;
 use crossterm::event::{KeyCode, KeyEvent};
+use iris_common::models::RoomSummary;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::Stylize;
@@ -35,11 +35,11 @@ impl RoomsView {
 }
 
 impl View for RoomsView {
-    fn render(&self, frame: &mut Frame, area: Rect) {
+    fn render(&self, frame: &mut Frame<'_>, area: Rect) {
         let header = Row::new(["#", "Room", "Type", "Members", "Role", "Link"])
             .bold()
             .bottom_margin(1);
-        let rows: Vec<Row> = self
+        let rows: Vec<Row<'_>> = self
             .rooms
             .iter()
             .enumerate()
@@ -95,14 +95,7 @@ impl View for RoomsView {
                     }));
                 ViewAction::None
             }
-            KeyCode::Char('s') => {
-                if let Some(chat_id) = self.selected_chat_id() {
-                    ViewAction::ShowRoomStats(chat_id)
-                } else {
-                    ViewAction::None
-                }
-            }
-            KeyCode::Char('i') => {
+            KeyCode::Char('s' | 'i') => {
                 if let Some(chat_id) = self.selected_chat_id() {
                     ViewAction::ShowRoomStats(chat_id)
                 } else {
@@ -119,7 +112,7 @@ impl View for RoomsView {
             _ => ViewAction::None,
         }
     }
-    fn title(&self) -> &str {
+    fn title(&self) -> &'static str {
         "Rooms"
     }
 }

@@ -2,10 +2,12 @@ use anyhow::Result;
 use hmac::{Hmac, Mac};
 use reqwest::header::{HeaderMap, HeaderValue};
 use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// 쿼리 파라미터를 정렬하여 canonical target 문자열을 생성한다.
 pub fn canonical_target(path: &str, query: &[(String, String)]) -> String {
     if query.is_empty() {
         return path.to_string();
@@ -20,19 +22,22 @@ pub fn canonical_target(path: &str, query: &[(String, String)]) -> String {
     format!("{path}?{encoded}")
 }
 
+/// HMAC-SHA256 서명 헤더를 생성한다.
 pub fn signed_headers(token: &str, method: &str, target: &str, body: &[u8]) -> Result<HeaderMap> {
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)?
         .as_millis()
         .to_string();
     let nonce = format!(
-        "iris-ctl-{}",
+        "iris-{}",
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
     );
     signed_headers_with(token, method, target, body, &now_ms, &nonce)
 }
 
-fn signed_headers_with(
+/// 테스트용: timestamp와 nonce를 직접 지정하여 서명 헤더를 생성한다.
+#[allow(clippy::too_many_arguments)] // HMAC 프로토콜 필드가 6개 — 구조체화하면 호출측이 더 복잡
+pub fn signed_headers_with(
     token: &str,
     method: &str,
     target: &str,
@@ -69,8 +74,10 @@ fn hex_sha256(body: &[u8]) -> String {
 fn hex_bytes(bytes: &[u8]) -> String {
     bytes
         .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>()
+        .fold(String::with_capacity(bytes.len() * 2), |mut out, byte| {
+            let _ = write!(&mut out, "{byte:02x}");
+            out
+        })
 }
 
 #[cfg(test)]
@@ -90,13 +97,31 @@ mod tests {
     }
 
     #[test]
+    fn canonical_target_returns_path_when_no_query() {
+        assert_eq!(canonical_target("/health", &[]), "/health");
+    }
+
+    #[test]
     fn signed_headers_include_only_hmac_fields() {
         let headers = signed_headers_with("secret", "GET", "/rooms", b"", "1000", "nonce-1")
             .expect("headers should build");
-
         assert_eq!(headers["X-Iris-Timestamp"], "1000");
         assert_eq!(headers["X-Iris-Nonce"], "nonce-1");
         assert!(headers.contains_key("X-Iris-Signature"));
         assert!(!headers.contains_key("X-Bot-Token"));
+    }
+
+    #[test]
+    fn signed_headers_deterministic_for_same_inputs() {
+        let h1 = signed_headers_with("tok", "POST", "/reply", b"{}", "500", "n1").unwrap();
+        let h2 = signed_headers_with("tok", "POST", "/reply", b"{}", "500", "n1").unwrap();
+        assert_eq!(h1["X-Iris-Signature"], h2["X-Iris-Signature"]);
+    }
+
+    #[test]
+    fn signed_headers_differ_for_different_body() {
+        let h1 = signed_headers_with("tok", "POST", "/reply", b"a", "500", "n1").unwrap();
+        let h2 = signed_headers_with("tok", "POST", "/reply", b"b", "500", "n1").unwrap();
+        assert_ne!(h1["X-Iris-Signature"], h2["X-Iris-Signature"]);
     }
 }
