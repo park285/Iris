@@ -1,6 +1,6 @@
 use super::{View, ViewAction};
-use iris_common::models::{MemberActivityResponse, RoomInfoResponse, StatsResponse};
 use crossterm::event::{KeyCode, KeyEvent};
+use iris_common::models::{MemberActivityResponse, RoomInfoResponse, StatsResponse};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Stylize;

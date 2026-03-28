@@ -1,6 +1,6 @@
 use super::{View, ViewAction};
-use iris_common::models::SseEvent;
 use crossterm::event::{KeyCode, KeyEvent};
+use iris_common::models::SseEvent;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::widgets::{Block, List, ListItem, ListState};

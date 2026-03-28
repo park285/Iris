@@ -14,9 +14,7 @@ pub struct IrisApi {
 
 impl IrisApi {
     pub fn new(conn: &dyn IrisConnection) -> Result<Self> {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()?;
+        let client = Client::builder().timeout(Duration::from_secs(10)).build()?;
         Ok(Self {
             client,
             base_url: conn.base_url().trim_end_matches('/').to_string(),
@@ -150,9 +148,12 @@ impl IrisApi {
     /// SSE 전용: timeout 없는 클라이언트로 SSE request를 생성한다.
     pub fn sse_request_with_client(&self, sse_client: &Client) -> Result<reqwest::RequestBuilder> {
         let target = canonical_target("/events/stream", &[]);
-        Ok(sse_client
-            .get(self.sse_url())
-            .headers(signed_headers(&self.token, "GET", &target, b"")?))
+        Ok(sse_client.get(self.sse_url()).headers(signed_headers(
+            &self.token,
+            "GET",
+            &target,
+            b"",
+        )?))
     }
 
     pub fn base_url(&self) -> &str {

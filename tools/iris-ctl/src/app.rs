@@ -2,8 +2,8 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
 
-use iris_common::models::*;
 use crate::views::*;
+use iris_common::models::*;
 use ratatui::widgets::{Block, Tabs};
 
 pub enum AppEvent {
