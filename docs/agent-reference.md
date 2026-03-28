@@ -45,7 +45,7 @@ POST /reply -> IrisServer -> Replier -> Android hidden API
 
 - Kotlin/Java uses ktlint android mode and excludes generated code.
 - Android lint runs through AGP with `./gradlew lint`.
-- Commit messages use Korean. Conventional commit format is available when it helps readability.
+- Commit messages use English conventional commit format (e.g., `feat(app):`, `refactor(bridge):`, `docs:`).
 
 ## Image Bridge
 
@@ -75,7 +75,8 @@ markdown reply는 `/reply-markdown` route가 Kakao share intent를 열고, LSPos
 ## Testing Conventions
 
 - Use JVM tests from `app/src/test/java/party/qwer/iris/`.
-- Use bridge tests with `com.sun.net.httpserver.HttpServer` for real HTTP behavior.
+- Webhook delivery tests in `app/src/test/.../delivery/webhook/` use `com.sun.net.httpserver.HttpServer` for real HTTP behavior.
+- Bridge tests in `bridge/src/test/.../imagebridge/runtime/` use reflection stubs and mock class loaders.
 - Use table-driven coverage and include failure cases for each new public API.
 - Use `kotlin("test-junit")` as the current test dependency.
 

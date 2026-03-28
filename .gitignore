@@ -40,6 +40,8 @@ AGENTS.md
 
 # Ops snapshots (local-only)
 docs/current-staging-split.md
+docs/superpowers/plans/
+docs/superpowers/specs/
 
 # Backup files
 *.backup
