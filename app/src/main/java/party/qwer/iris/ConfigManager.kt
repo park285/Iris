@@ -85,7 +85,7 @@ class ConfigManager(
                     snapshotUser = userConfigState,
                     appliedUser = userConfigState.copy(),
                     discovered = it.discovered,
-                    isDirty = decodedConfig.migratedLegacyEndpoint || decodedConfig.migratedRoutingDefaults,
+                    isDirty = decodedConfig.migratedLegacyEndpoint,
                 )
             }
             IrisLogger.debug(
@@ -95,9 +95,6 @@ class ConfigManager(
             )
             if (decodedConfig.migratedLegacyEndpoint) {
                 IrisLogger.info("Migrated legacy webhook config to route-aware model")
-            }
-            if (decodedConfig.migratedRoutingDefaults) {
-                IrisLogger.info("Seeded routing defaults into persisted config")
             }
         } catch (e: IOException) {
             IrisLogger.error("Error reading config.json from $configPath, using in-memory defaults: ${e.message}")

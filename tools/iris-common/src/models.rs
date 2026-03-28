@@ -164,8 +164,80 @@ pub struct HealthResponse {
 
 /// daemon bridge diagnostics 응답 모델
 #[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct BridgeDiagnosticsResponse {
-    pub status: String,
+    pub reachable: bool,
+    pub running: bool,
+    pub spec_ready: bool,
     #[serde(default)]
-    pub details: Option<String>,
+    pub checked_at_epoch_ms: Option<i64>,
+    pub restart_count: i32,
+    #[serde(default)]
+    pub last_crash_message: Option<String>,
+    #[serde(default)]
+    pub checks: Vec<BridgeDiagnosticsCheck>,
+    #[serde(default)]
+    pub discovery_install_attempted: bool,
+    #[serde(default)]
+    pub discovery_hooks: Vec<BridgeDiagnosticsHook>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct BridgeDiagnosticsCheck {
+    pub name: String,
+    pub ok: bool,
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BridgeDiagnosticsHook {
+    pub name: String,
+    pub installed: bool,
+    #[serde(default)]
+    pub install_error: Option<String>,
+    pub invocation_count: i32,
+    #[serde(default)]
+    pub last_seen_epoch_ms: Option<i64>,
+    #[serde(default)]
+    pub last_summary: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bridge_diagnostics_response_parses_runtime_payload() {
+        let payload = r#"{
+            "reachable": true,
+            "running": true,
+            "specReady": true,
+            "checkedAtEpochMs": 1774616292238,
+            "restartCount": 0,
+            "checks": [
+                {"name": "class ChatMediaSender", "ok": true, "detail": "bh.c"}
+            ],
+            "discoveryInstallAttempted": true,
+            "discoveryHooks": [
+                {
+                    "name": "ChatMediaSender#sendMultiple",
+                    "installed": true,
+                    "invocationCount": 3,
+                    "lastSeenEpochMs": 1774617677760,
+                    "lastSummary": "uris=1 type=Photo"
+                }
+            ]
+        }"#;
+
+        let parsed = serde_json::from_str::<BridgeDiagnosticsResponse>(payload);
+
+        assert!(
+            parsed.is_ok(),
+            "bridge diagnostics should parse runtime payload: {parsed:?}"
+        );
+    }
 }

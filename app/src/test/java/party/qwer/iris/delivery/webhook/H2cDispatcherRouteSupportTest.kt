@@ -1,8 +1,6 @@
 package party.qwer.iris.delivery.webhook
 
 import party.qwer.iris.CommandParser
-import party.qwer.iris.DEFAULT_COMMAND_ROUTE_PREFIXES
-import party.qwer.iris.DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES
 import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -12,8 +10,15 @@ import kotlin.test.assertSame
 class H2cDispatcherRouteSupportTest {
     private val seededRouteConfig =
         TestConfigProvider(
-            commandRoutes = DEFAULT_COMMAND_ROUTE_PREFIXES,
-            imageRoutes = DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES,
+            commandRoutes =
+                mapOf(
+                    "settlement" to listOf("!정산", "!정산완료"),
+                    "chatbotgo" to listOf("!질문", "!이미지", "!그림", "!리셋", "!관리자", "!한강"),
+                ),
+            imageRoutes =
+                mapOf(
+                    "chatbotgo" to listOf("2"),
+                ),
         )
 
     private val emptyRouteConfig = TestConfigProvider()

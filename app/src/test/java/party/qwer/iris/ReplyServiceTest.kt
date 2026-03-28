@@ -9,6 +9,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -436,9 +437,70 @@ class ReplyServiceTest {
             )
 
         assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
-        assertEquals(1, decodeCalls.get(), "validation should decode payload exactly once")
         assertTrue(latch.await(5, TimeUnit.SECONDS))
+        assertEquals(1, decodeCalls.get(), "worker should decode payload exactly once")
         service.shutdown()
+        imageDir.deleteRecursively()
+    }
+
+    @Test
+    fun `sendNativePhoto admission does not wait for image decode`() {
+        val decodeStarted = CountDownLatch(1)
+        val allowDecode = CountDownLatch(1)
+        val sendCompleted = CountDownLatch(1)
+        val resultRef = AtomicReference<ReplyAdmissionResult?>()
+        val imageDir = Files.createTempDirectory("iris-reply-deferred-decode").toFile()
+        val service =
+            ReplyService(
+                testConfig,
+                nativeImageReplySender =
+                    object : NativeImageReplySender {
+                        override fun send(
+                            roomId: Long,
+                            imagePaths: List<String>,
+                            threadId: Long?,
+                            threadScope: Int?,
+                            requestId: String?,
+                        ) {
+                            sendCompleted.countDown()
+                        }
+                    },
+                imageDecoder = { payload ->
+                    decodeStarted.countDown()
+                    assertTrue(allowDecode.await(5, TimeUnit.SECONDS), "worker decode should be releasable")
+                    Base64.getMimeDecoder().decode(payload)
+                },
+                mediaScanner = {},
+                imageDir = imageDir,
+            )
+        service.start()
+
+        val admissionReturned = CountDownLatch(1)
+        val caller =
+            Thread {
+                resultRef.set(
+                    service.sendNativePhoto(
+                        room = 18478615493603057L,
+                        base64ImageDataString = VALID_TEST_PNG_BASE64,
+                        threadId = null,
+                        threadScope = null,
+                    ),
+                )
+                admissionReturned.countDown()
+            }
+        caller.start()
+
+        assertTrue(
+            admissionReturned.await(500, TimeUnit.MILLISECONDS),
+            "queue admission should not block on image decode",
+        )
+        assertEquals(ReplyAdmissionStatus.ACCEPTED, resultRef.get()?.status)
+        assertTrue(decodeStarted.await(5, TimeUnit.SECONDS), "worker should eventually start image decode")
+        allowDecode.countDown()
+        assertTrue(sendCompleted.await(5, TimeUnit.SECONDS), "native send should complete after worker decode")
+
+        service.shutdown()
+        caller.join(5_000)
         imageDir.deleteRecursively()
     }
 

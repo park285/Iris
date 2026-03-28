@@ -1,5 +1,7 @@
 package party.qwer.iris
 
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -63,23 +65,23 @@ class ConfigManagerPersistenceTest {
     }
 
     @Test
-    fun `missing config seeds routing defaults and preserves them after reload`() {
+    fun `missing config keeps routing maps empty after reload`() {
         val configDir = Files.createTempDirectory("iris-config-manager-routing-defaults").toFile()
         val configPath = configDir.resolve("config.json").absolutePath
         val manager = ConfigManager(configPath = configPath)
 
-        assertEquals(DEFAULT_COMMAND_ROUTE_PREFIXES, manager.commandRoutePrefixes())
-        assertEquals(DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES, manager.imageMessageTypeRoutes())
+        assertEquals(emptyMap(), manager.commandRoutePrefixes())
+        assertEquals(emptyMap(), manager.imageMessageTypeRoutes())
         assertTrue(manager.saveConfigNow())
 
         val reloaded = ConfigManager(configPath = configPath)
-        assertEquals(DEFAULT_COMMAND_ROUTE_PREFIXES, reloaded.commandRoutePrefixes())
-        assertEquals(DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES, reloaded.imageMessageTypeRoutes())
+        assertEquals(emptyMap(), reloaded.commandRoutePrefixes())
+        assertEquals(emptyMap(), reloaded.imageMessageTypeRoutes())
         configDir.deleteRecursively()
     }
 
     @Test
-    fun `legacy empty routing maps are migrated and persisted on save`() {
+    fun `legacy empty routing maps remain empty on save`() {
         val configDir = Files.createTempDirectory("iris-config-manager-routing-migration").toFile()
         val configPath = configDir.resolve("config.json").absolutePath
         configDir.resolve("config.json").writeText(
@@ -94,17 +96,18 @@ class ConfigManagerPersistenceTest {
 
         val manager = ConfigManager(configPath = configPath)
 
-        assertEquals(DEFAULT_COMMAND_ROUTE_PREFIXES, manager.commandRoutePrefixes())
-        assertEquals(DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES, manager.imageMessageTypeRoutes())
+        assertEquals(emptyMap(), manager.commandRoutePrefixes())
+        assertEquals(emptyMap(), manager.imageMessageTypeRoutes())
         assertTrue(manager.saveConfigNow())
 
         val configText = configDir.resolve("config.json").readText()
-        assertTrue(configText.contains("!정산"))
-        assertTrue(configText.contains("\"chatbotgo\""))
+        val root = Json.parseToJsonElement(configText).jsonObject
+        assertTrue(root.getValue("commandRoutePrefixes").jsonObject.isEmpty())
+        assertTrue(root.getValue("imageMessageTypeRoutes").jsonObject.isEmpty())
 
         val reloaded = ConfigManager(configPath = configPath)
-        assertEquals(DEFAULT_COMMAND_ROUTE_PREFIXES, reloaded.commandRoutePrefixes())
-        assertEquals(DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES, reloaded.imageMessageTypeRoutes())
+        assertEquals(emptyMap(), reloaded.commandRoutePrefixes())
+        assertEquals(emptyMap(), reloaded.imageMessageTypeRoutes())
         configDir.deleteRecursively()
     }
 }

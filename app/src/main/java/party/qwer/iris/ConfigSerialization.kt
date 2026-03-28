@@ -13,7 +13,6 @@ internal const val DEFAULT_WEBHOOK_ROUTE = "default"
 internal data class DecodedConfigValues(
     val values: ConfigValues,
     val migratedLegacyEndpoint: Boolean,
-    val migratedRoutingDefaults: Boolean,
 )
 
 internal fun decodeConfigValues(
@@ -21,11 +20,7 @@ internal fun decodeConfigValues(
     jsonString: String,
 ): DecodedConfigValues {
     val rawRoot = json.parseToJsonElement(jsonString).jsonObject
-    val migratedRoutingDefaults = requiresRoutingDefaultsMigration(rawRoot)
-    val decodedValues =
-        seedRoutingDefaults(
-            json.decodeFromJsonElement(ConfigValues.serializer(), rawRoot),
-        )
+    val decodedValues = json.decodeFromJsonElement(ConfigValues.serializer(), rawRoot)
     val legacyEndpoint =
         decodedValues.endpoint
             .trim()
@@ -44,36 +39,7 @@ internal fun decodeConfigValues(
     return DecodedConfigValues(
         values = normalizedValues,
         migratedLegacyEndpoint = migratedLegacyEndpoint,
-        migratedRoutingDefaults = migratedRoutingDefaults,
     )
-}
-
-internal fun seedRoutingDefaults(values: ConfigValues): ConfigValues =
-    values.copy(
-        commandRoutePrefixes =
-            values.commandRoutePrefixes.ifEmpty {
-                DEFAULT_COMMAND_ROUTE_PREFIXES
-            },
-        imageMessageTypeRoutes =
-            values.imageMessageTypeRoutes.ifEmpty {
-                DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES
-            },
-    )
-
-internal fun requiresRoutingDefaultsMigration(root: JsonObject): Boolean =
-    requiresRoutingDefaultsMigration(root, "commandRoutePrefixes") ||
-        requiresRoutingDefaultsMigration(root, "imageMessageTypeRoutes")
-
-private fun requiresRoutingDefaultsMigration(
-    root: JsonObject,
-    key: String,
-): Boolean {
-    if (!root.containsKey(key)) {
-        return true
-    }
-
-    val element = root[key] ?: return true
-    return element is JsonObject && element.isEmpty()
 }
 
 internal fun configuredWebhookEndpoint(

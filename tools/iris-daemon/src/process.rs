@@ -8,6 +8,9 @@ const KAKAOTALK_PACKAGE: &str = "com.kakao.talk";
 const SIGTERM_WAIT_SECS: u64 = 5;
 const STARTUP_RETRY_COUNT: usize = 10;
 const KILL_RETRY_WAIT_SECS: u64 = 1;
+const DEFAULT_IRIS_BIND_HOST: &str = "0.0.0.0";
+const DEFAULT_IRIS_LOG_LEVEL: &str = "INFO";
+const DEFAULT_IRIS_LOG_DEST: &str = "/data/local/tmp/iris.log";
 
 pub async fn iris_pid(adb: &Adb) -> Option<u32> {
     let output = adb
@@ -71,15 +74,36 @@ pub async fn stop_iris(adb: &Adb) -> Result<()> {
     Ok(())
 }
 
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn env_or_default(key: &str, fallback: &str) -> String {
+    std::env::var(key).unwrap_or_else(|_| fallback.to_string())
+}
+
 fn start_command(cfg: &DaemonConfig) -> String {
+    let webhook_token = env_or_default("IRIS_WEBHOOK_TOKEN", &cfg.iris.shared_token);
+    let bot_token = env_or_default("IRIS_BOT_TOKEN", &cfg.iris.shared_token);
+    let bind_host = env_or_default("IRIS_BIND_HOST", DEFAULT_IRIS_BIND_HOST);
+    let log_level = env_or_default("IRIS_LOG_LEVEL", DEFAULT_IRIS_LOG_LEVEL);
     format!(
-        "nohup app_process -Djava.class.path={apk} / {main} \
-         --health-url={url} --shared-token={tok} \
-         > /dev/null 2>&1 &",
-        apk = cfg.init.apk_dest,
+        "nohup env KAKAOTALK_APP_UID=0 \
+         IRIS_CONFIG_PATH={config} \
+         IRIS_WEBHOOK_TOKEN={webhook} \
+         IRIS_BOT_TOKEN={bot} \
+         IRIS_BIND_HOST={bind_host} \
+         IRIS_LOG_LEVEL={log_level} \
+         CLASSPATH={apk} \
+         app_process / {main} > {log_dest} 2>&1 &",
+        config = shell_quote(&cfg.init.config_dest),
+        webhook = shell_quote(&webhook_token),
+        bot = shell_quote(&bot_token),
+        bind_host = shell_quote(&bind_host),
+        log_level = shell_quote(&log_level),
+        apk = shell_quote(&cfg.init.apk_dest),
         main = IRIS_PROCESS_NAME,
-        url = cfg.iris.health_url,
-        tok = cfg.iris.shared_token,
+        log_dest = shell_quote(DEFAULT_IRIS_LOG_DEST),
     )
 }
 
@@ -133,11 +157,19 @@ mod tests {
 
     #[test]
     fn start_command_includes_runtime_arguments() {
-        let cfg = DaemonConfig::default();
+        let mut cfg = DaemonConfig::default();
+        cfg.iris.shared_token = "shared-token".to_string();
         let command = start_command(&cfg);
 
         assert!(command.contains(IRIS_PROCESS_NAME));
-        assert!(command.contains("--health-url=http://localhost:3000"));
-        assert!(command.contains("--shared-token="));
+        assert!(command.contains("IRIS_CONFIG_PATH='/data/local/tmp/config.json'"));
+        assert!(command.contains("IRIS_WEBHOOK_TOKEN='shared-token'"));
+        assert!(command.contains("IRIS_BOT_TOKEN='shared-token'"));
+        assert!(command.contains("IRIS_BIND_HOST='0.0.0.0'"));
+        assert!(command.contains("IRIS_LOG_LEVEL='INFO'"));
+        assert!(command.contains("CLASSPATH='/data/local/tmp/Iris.apk'"));
+        assert!(command.contains("> '/data/local/tmp/iris.log' 2>&1 &"));
+        assert!(!command.contains("--health-url="));
+        assert!(!command.contains("--shared-token="));
     }
 }
