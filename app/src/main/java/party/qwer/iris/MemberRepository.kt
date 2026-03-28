@@ -595,11 +595,11 @@ class MemberRepository(
                 """
                 SELECT display_name, room_name
                 FROM db3.observed_profiles
-                WHERE notification_key LIKE ?
+                WHERE chat_id = ?
                 ORDER BY updated_at DESC
                 LIMIT 1
                 """.trimIndent(),
-                arrayOf("%|$chatId|%"),
+                arrayOf(chatId.toString()),
                 1,
             ).firstOrNull()?.let { row ->
                 ObservedProfileHint(
