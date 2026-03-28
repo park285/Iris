@@ -73,7 +73,7 @@ private fun updateBotPortConfig(
 }
 
 private fun resolveEndpointRoute(rawRoute: String?): String {
-    val normalized = rawRoute?.trim().orEmpty()
+    val normalized = canonicalWebhookRoute(rawRoute)
     if (normalized.isEmpty()) return DEFAULT_WEBHOOK_ROUTE
     if (!normalized.all { it.isLetterOrDigit() || it == '-' || it == '_' }) {
         throw ApiRequestException("route must contain only letters, digits, '-' or '_'")

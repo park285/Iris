@@ -1,5 +1,6 @@
 package party.qwer.iris
 
+import party.qwer.iris.model.ConfigDiscoveredState
 import party.qwer.iris.model.ConfigPendingRestart
 import party.qwer.iris.model.ConfigResponse
 import party.qwer.iris.model.ConfigState
@@ -9,8 +10,9 @@ import party.qwer.iris.model.ConfigValues
 private const val FIELD_BOT_HTTP_PORT = "bot_http_port"
 
 internal data class ConfigContractState(
-    val snapshot: ConfigState,
-    val effective: ConfigState,
+    val user: ConfigState,
+    val applied: ConfigState,
+    val discovered: ConfigDiscoveredState,
     val pendingRestart: ConfigPendingRestart,
 )
 
@@ -27,8 +29,9 @@ internal fun buildConfigResponse(
 ): ConfigResponse {
     val contractState = buildConfigContractState(snapshot, effective)
     return ConfigResponse(
-        snapshot = contractState.snapshot,
-        effective = contractState.effective,
+        user = contractState.user,
+        applied = contractState.applied,
+        discovered = contractState.discovered,
         pendingRestart = contractState.pendingRestart,
     )
 }
@@ -44,8 +47,9 @@ internal fun buildConfigUpdateResponse(
         persisted = status.persisted,
         applied = status.applied,
         requiresRestart = status.requiresRestart,
-        snapshot = contractState.snapshot,
-        effective = contractState.effective,
+        user = contractState.user,
+        runtimeApplied = contractState.applied,
+        discovered = contractState.discovered,
         pendingRestart = contractState.pendingRestart,
     )
 }
@@ -56,8 +60,9 @@ internal fun buildConfigContractState(
 ): ConfigContractState {
     val pendingRestartFields = pendingRestartFieldNames(snapshot, effective)
     return ConfigContractState(
-        snapshot = snapshot.toConfigState(),
-        effective = effective.toConfigState(),
+        user = snapshot.toConfigState(),
+        applied = effective.toConfigState(),
+        discovered = ConfigDiscoveredState(botId = effective.botId),
         pendingRestart =
             ConfigPendingRestart(
                 required = pendingRestartFields.isNotEmpty(),
@@ -84,5 +89,6 @@ private fun ConfigValues.toConfigState(): ConfigState =
         botHttpPort = botHttpPort,
         dbPollingRate = dbPollingRate,
         messageSendRate = messageSendRate,
-        botId = botId,
+        commandRoutePrefixes = commandRoutePrefixes,
+        imageMessageTypeRoutes = imageMessageTypeRoutes,
     )

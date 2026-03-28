@@ -4,7 +4,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class ConfigValues(
+data class UserConfigValues(
     val botName: String = "Iris",
     val botHttpPort: Int = 3000,
     @SerialName("endpoint")
@@ -19,5 +19,4 @@ data class ConfigValues(
     val messageSendRate: Long = 50,
     val commandRoutePrefixes: Map<String, List<String>> = emptyMap(),
     val imageMessageTypeRoutes: Map<String, List<String>> = emptyMap(),
-    val botId: Long = 0L,
 )

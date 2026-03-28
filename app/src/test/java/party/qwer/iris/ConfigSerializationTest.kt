@@ -33,7 +33,7 @@ class ConfigSerializationTest {
     }
 
     @Test
-    fun `migrates legacy webhooks config to single endpoint`() {
+    fun `reads default webhook config as endpoint`() {
         val decoded =
             decodeConfigValues(
                 json,
@@ -41,19 +41,19 @@ class ConfigSerializationTest {
                 {
                   "botName": "Iris",
                   "webhooks": {
-                    "hololive": "http://legacy"
+                    "default": "http://default"
                   }
                 }
                 """.trimIndent(),
             )
 
-        assertEquals("http://legacy", decoded.values.endpoint)
-        assertEquals("http://legacy", decoded.values.webhooks["hololive"])
+        assertEquals("http://default", decoded.values.endpoint)
+        assertEquals("http://default", decoded.values.webhooks[DEFAULT_WEBHOOK_ROUTE])
         assertTrue(decoded.migratedLegacyEndpoint)
     }
 
     @Test
-    fun `preserves multiple webhook routes while deriving default endpoint from hololive`() {
+    fun `preserves multiple webhook routes while deriving default endpoint from default route`() {
         val decoded =
             decodeConfigValues(
                 json,
@@ -61,15 +61,15 @@ class ConfigSerializationTest {
                 {
                   "botName": "Iris",
                   "webhooks": {
-                    "hololive": "http://hololive",
+                    "default": "http://default",
                     "chatbotgo": "http://chatbotgo"
                   }
                 }
                 """.trimIndent(),
             )
 
-        assertEquals("http://hololive", decoded.values.endpoint)
-        assertEquals("http://hololive", decoded.values.webhooks["hololive"])
+        assertEquals("http://default", decoded.values.endpoint)
+        assertEquals("http://default", decoded.values.webhooks[DEFAULT_WEBHOOK_ROUTE])
         assertEquals("http://chatbotgo", decoded.values.webhooks["chatbotgo"])
         assertTrue(decoded.migratedLegacyEndpoint)
     }
@@ -81,7 +81,7 @@ class ConfigSerializationTest {
                 """
                 {
                   "webhooks": {
-                    "hololive": ""
+                    "default": ""
                   }
                 }
                 """.trimIndent(),
@@ -91,5 +91,10 @@ class ConfigSerializationTest {
             extractLegacyEndpoint(legacyRoot)
 
         assertNull(legacyEndpoint)
+    }
+
+    @Test
+    fun `keeps default route name unchanged`() {
+        assertEquals(DEFAULT_WEBHOOK_ROUTE, canonicalWebhookRoute("default"))
     }
 }

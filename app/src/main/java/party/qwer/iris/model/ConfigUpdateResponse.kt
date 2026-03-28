@@ -10,8 +10,9 @@ data class ConfigUpdateResponse(
     val persisted: Boolean,
     val applied: Boolean,
     val requiresRestart: Boolean,
-    val snapshot: ConfigState,
-    val effective: ConfigState,
+    val user: ConfigState,
+    val runtimeApplied: ConfigState,
+    val discovered: ConfigDiscoveredState,
     @SerialName("pending_restart")
     val pendingRestart: ConfigPendingRestart,
 )

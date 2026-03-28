@@ -17,6 +17,14 @@ data class ConfigState(
     val dbPollingRate: Long,
     @SerialName("message_send_rate")
     val messageSendRate: Long,
+    @SerialName("command_route_prefixes")
+    val commandRoutePrefixes: Map<String, List<String>> = emptyMap(),
+    @SerialName("image_message_type_routes")
+    val imageMessageTypeRoutes: Map<String, List<String>> = emptyMap(),
+)
+
+@Serializable
+data class ConfigDiscoveredState(
     @SerialName("bot_id")
     val botId: Long,
 )
@@ -29,22 +37,9 @@ data class ConfigPendingRestart(
 
 @Serializable
 data class ConfigResponse(
-    val snapshot: ConfigState,
-    val effective: ConfigState,
+    val user: ConfigState,
+    val applied: ConfigState,
+    val discovered: ConfigDiscoveredState,
     @SerialName("pending_restart")
     val pendingRestart: ConfigPendingRestart,
-    @SerialName("bot_name")
-    val botName: String = effective.botName,
-    @SerialName("web_endpoint")
-    val webEndpoint: String = effective.webEndpoint,
-    @SerialName("webhooks")
-    val webhooks: Map<String, String> = effective.webhooks,
-    @SerialName("bot_http_port")
-    val botHttpPort: Int = effective.botHttpPort,
-    @SerialName("db_polling_rate")
-    val dbPollingRate: Long = effective.dbPollingRate,
-    @SerialName("message_send_rate")
-    val messageSendRate: Long = effective.messageSendRate,
-    @SerialName("bot_id")
-    val botId: Long = effective.botId,
 )

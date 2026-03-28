@@ -8,7 +8,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import party.qwer.iris.model.ConfigValues
 
 private const val LEGACY_WEBHOOKS_KEY = "webhooks"
-internal const val DEFAULT_WEBHOOK_ROUTE = "hololive"
+internal const val DEFAULT_WEBHOOK_ROUTE = "default"
 
 internal data class DecodedConfigValues(
     val values: ConfigValues,
@@ -46,7 +46,7 @@ internal fun configuredWebhookEndpoint(
     values: ConfigValues,
     route: String,
 ): String {
-    val normalizedRoute = route.trim()
+    val normalizedRoute = canonicalWebhookRoute(route)
     if (normalizedRoute.isEmpty()) {
         return ""
     }
@@ -65,7 +65,7 @@ internal fun normalizeWebhookConfig(values: ConfigValues): ConfigValues {
         values.webhooks.entries
             .asSequence()
             .mapNotNull { entry ->
-                val route = entry.key.trim()
+                val route = canonicalWebhookRoute(entry.key)
                 val endpoint = entry.value.trim()
                 if (route.isEmpty() || endpoint.isEmpty()) {
                     null
@@ -92,7 +92,7 @@ internal fun updateWebhookConfig(
     route: String,
     endpoint: String,
 ): ConfigValues {
-    val normalizedRoute = route.trim()
+    val normalizedRoute = canonicalWebhookRoute(route)
     val normalizedEndpoint = endpoint.trim()
     val updatedWebhooks = values.webhooks.toMutableMap()
 
@@ -126,3 +126,5 @@ internal fun extractLegacyEndpoint(root: JsonObject): String? {
 
     return null
 }
+
+internal fun canonicalWebhookRoute(rawRoute: String?): String = rawRoute?.trim().orEmpty()

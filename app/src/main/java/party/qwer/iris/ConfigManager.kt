@@ -5,7 +5,9 @@ import kotlinx.serialization.json.Json
 import party.qwer.iris.model.ConfigResponse
 import party.qwer.iris.model.ConfigUpdateResponse
 import party.qwer.iris.model.ConfigValues
+import party.qwer.iris.model.UserConfigValues
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
@@ -15,10 +17,13 @@ class ConfigManager(
     private val configPath: String = System.getenv("IRIS_CONFIG_PATH") ?: "/data/local/tmp/config.json",
 ) : ConfigProvider {
     @Volatile
-    private var snapshotValues: ConfigValues = ConfigValues()
+    private var snapshotUser: UserConfigState = UserConfigState()
 
     @Volatile
-    private var effectiveValues: ConfigValues = ConfigValues()
+    private var appliedUser: UserConfigState = UserConfigState()
+
+    @Volatile
+    private var discoveredState: DiscoveredConfigState = DiscoveredConfigState()
 
     @Volatile
     private var isDirty = false
@@ -28,8 +33,6 @@ class ConfigManager(
             encodeDefaults = true
             ignoreUnknownKeys = true
         }
-
-    var onMessageSendRateChanged: (() -> Unit)? = null
 
     init {
         loadConfig()
@@ -46,12 +49,13 @@ class ConfigManager(
         try {
             val jsonString = configFile.readText()
             val decodedConfig = decodeConfigValues(json, jsonString)
-            snapshotValues = decodedConfig.values
-            effectiveValues = decodedConfig.values.copy()
+            snapshotUser = decodedConfig.values.toUserConfigState()
+            appliedUser = snapshotUser.copy()
+            discoveredState = decodedConfig.values.toDiscoveredConfigState()
             IrisLogger.debug(
                 "Loaded config from $configPath " +
-                    "(webhookTokenConfigured=${snapshotValues.webhookToken.isNotBlank()}, " +
-                    "botTokenConfigured=${snapshotValues.botToken.isNotBlank()})",
+                    "(webhookTokenConfigured=${snapshotUser.webhookToken.isNotBlank()}, " +
+                    "botTokenConfigured=${snapshotUser.botToken.isNotBlank()})",
             )
             if (decodedConfig.migratedLegacyEndpoint) {
                 IrisLogger.info("Migrated legacy webhook config to route-aware model")
@@ -76,14 +80,17 @@ class ConfigManager(
 
         val tempFile = File("${configFile.absolutePath}.tmp")
         try {
-            val jsonString = json.encodeToString(ConfigValues.serializer(), snapshotValues)
+            val jsonString = json.encodeToString(UserConfigValues.serializer(), snapshotUser.toPersistedConfigValues())
             IrisLogger.debug(
                 "Saving config to $configPath " +
-                    "(webhookTokenConfigured=${snapshotValues.webhookToken.isNotBlank()}, " +
-                    "botTokenConfigured=${snapshotValues.botToken.isNotBlank()})",
+                    "(webhookTokenConfigured=${snapshotUser.webhookToken.isNotBlank()}, " +
+                    "botTokenConfigured=${snapshotUser.botToken.isNotBlank()})",
             )
 
-            tempFile.writeText(jsonString)
+            FileOutputStream(tempFile).use { output ->
+                output.write(jsonString.toByteArray())
+                output.fd.sync()
+            }
             moveConfigAtomically(tempFile, configFile)
             isDirty = false
             return true
@@ -110,51 +117,49 @@ class ConfigManager(
     }
 
     override var botId: Long
-        get() = effectiveValues.botId
+        get() = discoveredState.botId
         set(value) {
             synchronized(this) {
-                if (snapshotValues.botId == value && effectiveValues.botId == value) {
+                if (discoveredState.botId == value) {
                     return
                 }
-                snapshotValues = snapshotValues.copy(botId = value)
-                effectiveValues = effectiveValues.copy(botId = value)
-                markDirty()
+                discoveredState = discoveredState.copy(botId = value)
                 IrisLogger.debug("Bot Id is updated to: $botId")
             }
         }
 
     override var botName: String
-        get() = effectiveValues.botName
+        get() = appliedUser.botName
         set(value) {
             synchronized(this) {
-                if (snapshotValues.botName == value && effectiveValues.botName == value) {
+                if (snapshotUser.botName == value && appliedUser.botName == value) {
                     return
                 }
-                snapshotValues = snapshotValues.copy(botName = value)
-                effectiveValues = effectiveValues.copy(botName = value)
+                snapshotUser = snapshotUser.copy(botName = value)
+                appliedUser = appliedUser.copy(botName = value)
                 markDirty()
                 IrisLogger.debug("Bot name updated to: $botName")
             }
         }
 
     override var botSocketPort: Int
-        get() = effectiveValues.botHttpPort
+        get() = appliedUser.botHttpPort
         set(value) {
             synchronized(this) {
-                if (snapshotValues.botHttpPort == value) {
+                if (snapshotUser.botHttpPort == value) {
                     return
                 }
-                snapshotValues = snapshotValues.copy(botHttpPort = value)
+                snapshotUser = snapshotUser.copy(botHttpPort = value)
                 markDirty()
                 IrisLogger.debug(
-                    "Bot port snapshot updated to: ${snapshotValues.botHttpPort} " +
-                        "(effective=${effectiveValues.botHttpPort})",
+                    "Bot port snapshot updated to: ${snapshotUser.botHttpPort} " +
+                        "(effective=${appliedUser.botHttpPort})",
                 )
             }
         }
 
     var defaultWebhookEndpoint: String
-        get() = effectiveValues.endpoint
+        get() = appliedUser.endpoint
         set(value) {
             val normalized = value.trim()
             synchronized(this) {
@@ -176,14 +181,14 @@ class ConfigManager(
                 return
             }
 
-            val updatedSnapshot = updateWebhookConfig(snapshotValues, normalizedRoute, normalizedEndpoint)
-            val updatedEffective = updateWebhookConfig(effectiveValues, normalizedRoute, normalizedEndpoint)
-            if (snapshotValues == updatedSnapshot && effectiveValues == updatedEffective) {
+            val updatedSnapshot = updateWebhookConfig(snapshotUser.toLegacyConfigValues(), normalizedRoute, normalizedEndpoint).toUserConfigState()
+            val updatedEffective = updateWebhookConfig(appliedUser.toLegacyConfigValues(), normalizedRoute, normalizedEndpoint).toUserConfigState()
+            if (snapshotUser == updatedSnapshot && appliedUser == updatedEffective) {
                 return
             }
 
-            snapshotValues = updatedSnapshot
-            effectiveValues = updatedEffective
+            snapshotUser = updatedSnapshot
+            appliedUser = updatedEffective
             markDirty()
             if (normalizedRoute == DEFAULT_WEBHOOK_ROUTE) {
                 IrisLogger.debug("Default webhook endpoint updated")
@@ -193,48 +198,51 @@ class ConfigManager(
         }
     }
 
-    override fun webhookEndpointFor(route: String): String = configuredWebhookEndpoint(effectiveValues, route)
+    override fun webhookEndpointFor(route: String): String = configuredWebhookEndpoint(appliedUser.toLegacyConfigValues(), route)
 
     override val webhookToken: String
-        get() = snapshotValues.webhookToken.ifBlank { System.getenv("IRIS_WEBHOOK_TOKEN") ?: "" }
+        get() = snapshotUser.webhookToken
 
     override val botToken: String
-        get() = snapshotValues.botToken.ifBlank { System.getenv("IRIS_BOT_TOKEN") ?: "" }
+        get() = snapshotUser.botToken
+
+    internal fun signingSecret(): String = snapshotUser.webhookToken
 
     override var dbPollingRate: Long
-        get() = effectiveValues.dbPollingRate
+        get() = appliedUser.dbPollingRate
         set(value) {
             synchronized(this) {
-                if (snapshotValues.dbPollingRate == value && effectiveValues.dbPollingRate == value) {
+                if (snapshotUser.dbPollingRate == value && appliedUser.dbPollingRate == value) {
                     return
                 }
-                snapshotValues = snapshotValues.copy(dbPollingRate = value)
-                effectiveValues = effectiveValues.copy(dbPollingRate = value)
+                snapshotUser = snapshotUser.copy(dbPollingRate = value)
+                appliedUser = appliedUser.copy(dbPollingRate = value)
                 markDirty()
                 IrisLogger.debug("DbPollingRate updated to: $dbPollingRate")
             }
         }
 
     override var messageSendRate: Long
-        get() = effectiveValues.messageSendRate
+        get() = appliedUser.messageSendRate
         set(value) {
-            val callback =
-                synchronized(this) {
-                    if (snapshotValues.messageSendRate == value && effectiveValues.messageSendRate == value) {
-                        return
-                    }
-                    snapshotValues = snapshotValues.copy(messageSendRate = value)
-                    effectiveValues = effectiveValues.copy(messageSendRate = value)
-                    markDirty()
-                    IrisLogger.debug("MessageSendRate updated to: $messageSendRate")
-                    onMessageSendRateChanged
+            synchronized(this) {
+                if (snapshotUser.messageSendRate == value && appliedUser.messageSendRate == value) {
+                    return
                 }
-            callback?.invoke()
+                snapshotUser = snapshotUser.copy(messageSendRate = value)
+                appliedUser = appliedUser.copy(messageSendRate = value)
+                markDirty()
+                IrisLogger.debug("MessageSendRate updated to: $messageSendRate")
+            }
         }
+
+    override fun commandRoutePrefixes(): Map<String, List<String>> = appliedUser.commandRoutePrefixes
+
+    override fun imageMessageTypeRoutes(): Map<String, List<String>> = appliedUser.imageMessageTypeRoutes
 
     fun configResponse(): ConfigResponse =
         synchronized(this) {
-            buildConfigResponse(snapshotValues.copy(), effectiveValues.copy())
+            buildConfigResponse(snapshotConfigValues(), effectiveConfigValues())
         }
 
     fun configUpdateResponse(
@@ -252,10 +260,22 @@ class ConfigManager(
                         applied = applied,
                         requiresRestart = requiresRestart,
                     ),
-                snapshot = snapshotValues.copy(),
-                effective = effectiveValues.copy(),
+                snapshot = snapshotConfigValues(),
+                effective = effectiveConfigValues(),
             )
         }
+
+    private fun snapshotConfigValues(): ConfigValues =
+        AppliedConfigState(
+            user = snapshotUser,
+            discovered = discoveredState,
+        ).toLegacyConfigValues()
+
+    private fun effectiveConfigValues(): ConfigValues =
+        AppliedConfigState(
+            user = appliedUser,
+            discovered = discoveredState,
+        ).toLegacyConfigValues()
 
     private fun backupBrokenConfig(configFile: File) {
         if (!configFile.exists()) {

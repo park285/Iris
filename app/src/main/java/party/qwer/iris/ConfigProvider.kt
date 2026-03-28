@@ -10,4 +10,8 @@ interface ConfigProvider {
     val messageSendRate: Long
 
     fun webhookEndpointFor(route: String): String
+
+    fun commandRoutePrefixes(): Map<String, List<String>> = emptyMap()
+
+    fun imageMessageTypeRoutes(): Map<String, List<String>> = emptyMap()
 }
