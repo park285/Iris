@@ -17,14 +17,6 @@ impl TuiApi {
         Ok(Self { inner, sse_client })
     }
 
-    pub fn api(&self) -> &IrisApi {
-        &self.inner
-    }
-
-    pub fn sse_client(&self) -> &Client {
-        &self.sse_client
-    }
-
     pub fn sse_request(&self) -> Result<reqwest::RequestBuilder> {
         self.inner.sse_request_with_client(&self.sse_client)
     }

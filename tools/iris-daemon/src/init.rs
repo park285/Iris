@@ -33,7 +33,10 @@ async fn wait_for_boot(adb: &Adb, timeout_secs: u64) -> Result<()> {
             return Ok(());
         }
         if tokio::time::Instant::now() >= deadline {
-            bail!("부팅 대기 timeout ({}초): sys.boot_completed=1 미확인", timeout_secs);
+            bail!(
+                "부팅 대기 timeout ({}초): sys.boot_completed=1 미확인",
+                timeout_secs
+            );
         }
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
@@ -47,7 +50,9 @@ async fn disable_phantom_killer(adb: &Adb) {
     for cmd in &commands {
         match adb.shell(cmd).await {
             Ok(_) => tracing::debug!(cmd = cmd, "phantom killer 비활성화 명령 성공"),
-            Err(e) => tracing::warn!(cmd = cmd, error = %e, "phantom killer 비활성화 명령 실패 (무시)"),
+            Err(e) => {
+                tracing::warn!(cmd = cmd, error = %e, "phantom killer 비활성화 명령 실패 (무시)")
+            }
         }
     }
     tracing::info!("phantom process killer 비활성화 완료");

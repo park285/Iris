@@ -3,7 +3,7 @@ use iris_common::config::IrisConnection;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Clone, Debug, Default)]
 pub struct DaemonConfig {
     #[serde(default)]
     pub iris: IrisConfig,
@@ -48,7 +48,9 @@ pub struct AdbConfig {
 
 impl Default for AdbConfig {
     fn default() -> Self {
-        Self { device: default_device() }
+        Self {
+            device: default_device(),
+        }
     }
 }
 
@@ -79,23 +81,25 @@ impl Default for WatchConfig {
     }
 }
 
-fn default_check_interval() -> u64 { 30 }
-fn default_health_fail_threshold() -> u32 { 2 }
-fn default_curl_timeout() -> u64 { 3 }
-fn default_config_check_every() -> u32 { 10 }
+fn default_check_interval() -> u64 {
+    30
+}
+fn default_health_fail_threshold() -> u32 {
+    2
+}
+fn default_curl_timeout() -> u64 {
+    3
+}
+fn default_config_check_every() -> u32 {
+    10
+}
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Clone, Debug, Default)]
 pub struct AlertConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
     pub webhook_url: String,
-}
-
-impl Default for AlertConfig {
-    fn default() -> Self {
-        Self { enabled: false, webhook_url: String::new() }
-    }
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -118,8 +122,12 @@ impl Default for RollbackConfig {
     }
 }
 
-fn default_max_consecutive_failures() -> u32 { 5 }
-fn default_backup_dir() -> String { "/root/work/Iris/.backup-latest".to_string() }
+fn default_max_consecutive_failures() -> u32 {
+    5
+}
+fn default_backup_dir() -> String {
+    "/root/work/Iris/.backup-latest".to_string()
+}
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct InitConfig {
@@ -147,15 +155,29 @@ impl Default for InitConfig {
     }
 }
 
-fn default_phantom_killer_disable() -> bool { true }
-fn default_boot_timeout() -> u64 { 120 }
-fn default_config_template() -> String { "/root/work/arm-iris-runtime/configs/iris/config.json".to_string() }
-fn default_config_dest() -> String { "/data/local/tmp/config.json".to_string() }
-fn default_apk_dest() -> String { "/data/local/tmp/Iris.apk".to_string() }
+fn default_phantom_killer_disable() -> bool {
+    true
+}
+fn default_boot_timeout() -> u64 {
+    120
+}
+fn default_config_template() -> String {
+    "/root/work/arm-iris-runtime/configs/iris/config.json".to_string()
+}
+fn default_config_dest() -> String {
+    "/data/local/tmp/config.json".to_string()
+}
+fn default_apk_dest() -> String {
+    "/data/local/tmp/Iris.apk".to_string()
+}
 
 impl IrisConnection for DaemonConfig {
-    fn base_url(&self) -> &str { &self.iris.health_url }
-    fn token(&self) -> &str { &self.iris.shared_token }
+    fn base_url(&self) -> &str {
+        &self.iris.health_url
+    }
+    fn token(&self) -> &str {
+        &self.iris.shared_token
+    }
 }
 
 impl DaemonConfig {
@@ -169,27 +191,22 @@ impl DaemonConfig {
         } else {
             DaemonConfig::default()
         };
-        if let Ok(url) = std::env::var("IRIS_HEALTH_URL") { config.iris.health_url = url; }
-        if let Ok(token) = std::env::var("IRIS_SHARED_TOKEN") { config.iris.shared_token = token; }
-        if let Ok(device) = std::env::var("IRIS_DEVICE") { config.adb.device = device; }
+        if let Ok(url) = std::env::var("IRIS_HEALTH_URL") {
+            config.iris.health_url = url;
+        }
+        if let Ok(token) = std::env::var("IRIS_SHARED_TOKEN") {
+            config.iris.shared_token = token;
+        }
+        if let Ok(device) = std::env::var("IRIS_DEVICE") {
+            config.adb.device = device;
+        }
         Ok(config)
     }
 }
 
-impl Default for DaemonConfig {
-    fn default() -> Self {
-        Self {
-            iris: IrisConfig::default(),
-            adb: AdbConfig::default(),
-            watch: WatchConfig::default(),
-            alert: AlertConfig::default(),
-            rollback: RollbackConfig::default(),
-            init: InitConfig::default(),
-        }
-    }
+fn default_config_path() -> PathBuf {
+    PathBuf::from("/etc/iris-daemon/config.toml")
 }
-
-fn default_config_path() -> PathBuf { PathBuf::from("/etc/iris-daemon/config.toml") }
 
 #[cfg(test)]
 mod tests {

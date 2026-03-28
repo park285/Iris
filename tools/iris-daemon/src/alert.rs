@@ -37,7 +37,12 @@ pub async fn send_transition_alert(cfg: &DaemonConfig, transition: &Transition) 
         }
     };
 
-    match client.post(&cfg.alert.webhook_url).json(&payload).send().await {
+    match client
+        .post(&cfg.alert.webhook_url)
+        .json(&payload)
+        .send()
+        .await
+    {
         Ok(response) => {
             if response.status().is_success() {
                 tracing::info!(url = %cfg.alert.webhook_url, from = %transition.from, to = %transition.to, "알림 전송 성공");
@@ -52,7 +57,10 @@ pub async fn send_transition_alert(cfg: &DaemonConfig, transition: &Transition) 
 }
 
 fn current_timestamp_iso() -> String {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
     let secs_per_day = 86400u64;
     let days_since_epoch = now / secs_per_day;
     let time_of_day = now % secs_per_day;
@@ -84,7 +92,10 @@ fn current_timestamp_iso() -> String {
         month += 1;
     }
     let day = remaining_days + 1;
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", year, month, day, hours, minutes, seconds)
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, day, hours, minutes, seconds
+    )
 }
 
 fn is_leap_year(year: i32) -> bool {

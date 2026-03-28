@@ -56,7 +56,11 @@ impl StateMachine {
         self.rollback_attempted = false;
         if prev != State::Healthy {
             self.state = State::Healthy;
-            Some(Transition { from: prev, to: State::Healthy, reason: "health check 성공".to_string() })
+            Some(Transition {
+                from: prev,
+                to: State::Healthy,
+                reason: "health check 성공".to_string(),
+            })
         } else {
             None
         }
@@ -70,25 +74,41 @@ impl StateMachine {
                 if self.fail_count >= self.health_fail_threshold {
                     self.state = State::Degraded;
                     Some(Transition {
-                        from: prev, to: State::Degraded,
-                        reason: format!("health check {}회 연속 실패 (임계값: {})", self.fail_count, self.health_fail_threshold),
+                        from: prev,
+                        to: State::Degraded,
+                        reason: format!(
+                            "health check {}회 연속 실패 (임계값: {})",
+                            self.fail_count, self.health_fail_threshold
+                        ),
                     })
-                } else { None }
+                } else {
+                    None
+                }
             }
             State::Degraded => {
                 self.state = State::Recovering;
                 self.recovery_count += 1;
-                Some(Transition { from: State::Degraded, to: State::Recovering, reason: "recovery 시작".to_string() })
+                Some(Transition {
+                    from: State::Degraded,
+                    to: State::Recovering,
+                    reason: "recovery 시작".to_string(),
+                })
             }
             State::Recovering => {
                 self.recovery_count += 1;
                 if self.recovery_count > self.max_consecutive_failures && !self.rollback_attempted {
                     self.state = State::RollbackNeeded;
                     Some(Transition {
-                        from: State::Recovering, to: State::RollbackNeeded,
-                        reason: format!("recovery {}회 반복 실패, 롤백 필요 (임계값: {})", self.recovery_count, self.max_consecutive_failures),
+                        from: State::Recovering,
+                        to: State::RollbackNeeded,
+                        reason: format!(
+                            "recovery {}회 반복 실패, 롤백 필요 (임계값: {})",
+                            self.recovery_count, self.max_consecutive_failures
+                        ),
                     })
-                } else { None }
+                } else {
+                    None
+                }
             }
             State::RollbackNeeded => None,
         }
@@ -99,7 +119,11 @@ impl StateMachine {
         self.rollback_attempted = true;
         self.recovery_count = 0;
         self.state = State::Recovering;
-        Transition { from: prev, to: State::Recovering, reason: "롤백 완료, health 재확인 시작".to_string() }
+        Transition {
+            from: prev,
+            to: State::Recovering,
+            reason: "롤백 완료, health 재확인 시작".to_string(),
+        }
     }
 }
 

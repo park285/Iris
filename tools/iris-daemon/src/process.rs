@@ -9,7 +9,9 @@ const SIGTERM_WAIT_SECS: u64 = 5;
 
 pub async fn iris_pid(adb: &Adb) -> Option<u32> {
     let output = adb
-        .shell(&format!("ps -ef | grep '{IRIS_PROCESS_NAME}' | grep -v grep"))
+        .shell(&format!(
+            "ps -ef | grep '{IRIS_PROCESS_NAME}' | grep -v grep"
+        ))
         .await
         .ok()?;
     for line in output.lines() {

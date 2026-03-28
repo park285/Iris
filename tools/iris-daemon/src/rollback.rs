@@ -52,7 +52,12 @@ mod tests {
     fn find_latest_backup_apk_returns_error_for_missing_dir() {
         let result = find_latest_backup_apk(Path::new("/nonexistent/dir"));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("백업 디렉토리 없음"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("백업 디렉토리 없음")
+        );
     }
 
     #[test]

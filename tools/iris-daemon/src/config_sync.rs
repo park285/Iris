@@ -81,10 +81,16 @@ mod tests {
     fn envsubst_replaces_dollar_brace_vars() {
         let template = r#"{"url": "${IRIS_WEBHOOK_URL}", "token": "${IRIS_SHARED_TOKEN}"}"#;
         let mut vars = HashMap::new();
-        vars.insert("IRIS_WEBHOOK_URL".to_string(), "http://example.com".to_string());
+        vars.insert(
+            "IRIS_WEBHOOK_URL".to_string(),
+            "http://example.com".to_string(),
+        );
         vars.insert("IRIS_SHARED_TOKEN".to_string(), "secret123".to_string());
         let result = envsubst(template, &vars);
-        assert_eq!(result, r#"{"url": "http://example.com", "token": "secret123"}"#);
+        assert_eq!(
+            result,
+            r#"{"url": "http://example.com", "token": "secret123"}"#
+        );
     }
 
     #[test]

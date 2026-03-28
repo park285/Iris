@@ -1,4 +1,3 @@
-use anyhow::Result;
 use iris_common::api::IrisApi;
 use std::fmt;
 

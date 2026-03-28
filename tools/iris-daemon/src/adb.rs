@@ -8,7 +8,9 @@ pub struct Adb {
 
 impl Adb {
     pub fn new(device: &str) -> Self {
-        Self { device: device.to_string() }
+        Self {
+            device: device.to_string(),
+        }
     }
 
     pub fn device(&self) -> &str {
@@ -58,13 +60,23 @@ impl Adb {
 
     pub async fn install(&self, apk_path: &Path) -> Result<()> {
         let output = Command::new("adb")
-            .args(["-s", &self.device, "install", "-r", &apk_path.to_string_lossy()])
+            .args([
+                "-s",
+                &self.device,
+                "install",
+                "-r",
+                &apk_path.to_string_lossy(),
+            ])
             .output()
             .await
             .context("adb install 실행 실패")?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("adb install 실패 (exit {}): {}", output.status, stderr.trim());
+            bail!(
+                "adb install 실패 (exit {}): {}",
+                output.status,
+                stderr.trim()
+            );
         }
         tracing::info!(apk = %apk_path.display(), "APK 설치 완료");
         Ok(())
