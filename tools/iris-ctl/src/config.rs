@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use iris_common::config::IrisConnection;
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -57,11 +58,14 @@ impl Config {
         }
         Ok(config)
     }
-    pub fn token(&self) -> &str {
-        &self.server.token
-    }
-    pub fn base_url(&self) -> &str {
+}
+
+impl IrisConnection for Config {
+    fn base_url(&self) -> &str {
         &self.server.url
+    }
+    fn token(&self) -> &str {
+        &self.server.token
     }
 }
 

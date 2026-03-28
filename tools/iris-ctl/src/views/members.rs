@@ -1,5 +1,5 @@
 use super::{View, ViewAction};
-use crate::models::MemberInfo;
+use iris_common::models::MemberInfo;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};

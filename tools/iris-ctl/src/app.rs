@@ -2,7 +2,7 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
 
-use crate::models::*;
+use iris_common::models::*;
 use crate::views::*;
 use ratatui::widgets::{Block, Tabs};
 

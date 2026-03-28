@@ -1,22 +1,20 @@
 mod api;
 mod app;
-mod auth;
 mod config;
-#[allow(dead_code)]
-mod models;
 mod sse;
 mod views;
 
 use anyhow::Result;
 use crossterm::event::EventStream;
 use futures_util::StreamExt;
+use iris_common::models::SseEvent;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
 
-async fn refresh_app_data(iris: &api::IrisApi, app: &mut app::App) {
+async fn refresh_app_data(iris: &api::TuiApi, app: &mut app::App) {
     if let Ok(rooms) = iris.rooms().await {
         app.rooms_view.set_rooms(rooms.rooms);
     }
@@ -62,9 +60,9 @@ async fn refresh_app_data(iris: &api::IrisApi, app: &mut app::App) {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cfg = config::Config::load()?;
-    let iris = api::IrisApi::new(&cfg)?;
+    let iris = api::TuiApi::new(&cfg)?;
     let poll_interval = Duration::from_secs(cfg.ui.poll_interval_secs);
-    let (sse_tx, sse_rx) = mpsc::unbounded_channel();
+    let (sse_tx, sse_rx) = mpsc::unbounded_channel::<SseEvent>();
     let sse_api = iris.clone();
     let last_event_id = Arc::new(AtomicI64::new(0));
     let sse_last_id = last_event_id.clone();

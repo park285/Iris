@@ -1,5 +1,5 @@
 use super::{View, ViewAction};
-use crate::models::RoomSummary;
+use iris_common::models::RoomSummary;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Rect};

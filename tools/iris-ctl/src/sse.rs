@@ -1,12 +1,12 @@
-use crate::api::IrisApi;
-use crate::models::SseEvent;
+use crate::api::TuiApi;
 use anyhow::Result;
+use iris_common::models::SseEvent;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use tokio::sync::mpsc;
 
 pub async fn subscribe(
-    api: &IrisApi,
+    api: &TuiApi,
     tx: mpsc::UnboundedSender<SseEvent>,
     last_id: Arc<AtomicI64>,
 ) -> Result<()> {
@@ -81,8 +81,8 @@ mod tests {
         assert_eq!(event.event.as_deref(), Some("join"));
     }
 
-    fn test_api(base_url: String) -> IrisApi {
-        IrisApi::new(&Config {
+    fn test_api(base_url: String) -> TuiApi {
+        TuiApi::new(&Config {
             server: ServerConfig {
                 url: base_url,
                 token: "token".to_string(),
