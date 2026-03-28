@@ -40,11 +40,6 @@ internal class RequestAuthenticator(
         if (kotlin.math.abs(now - timestamp) > maxAgeMs) {
             return AuthResult.UNAUTHORIZED
         }
-        purgeExpiredNonces(now)
-        if (nonceTimestamps.putIfAbsent(nonce, now) != null) {
-            return AuthResult.UNAUTHORIZED
-        }
-
         val expectedSignature =
             signIrisRequestWithBodyHash(
                 secret = expectedSecret,
@@ -55,16 +50,20 @@ internal class RequestAuthenticator(
                 bodySha256Hex = bodySha256Hex,
             )
 
-        return if (
-            MessageDigest.isEqual(
+        if (
+            !MessageDigest.isEqual(
                 signature.toByteArray(StandardCharsets.UTF_8),
                 expectedSignature.toByteArray(StandardCharsets.UTF_8),
             )
         ) {
-            AuthResult.AUTHORIZED
-        } else {
-            AuthResult.UNAUTHORIZED
+            return AuthResult.UNAUTHORIZED
         }
+
+        purgeExpiredNonces(now)
+        if (nonceTimestamps.putIfAbsent(nonce, now) != null) {
+            return AuthResult.UNAUTHORIZED
+        }
+        return AuthResult.AUTHORIZED
     }
 
     private fun purgeExpiredNonces(now: Long) {

@@ -152,4 +152,45 @@ class RequestAuthenticatorTest {
         assertEquals(AuthResult.AUTHORIZED, authorized)
         assertEquals(AuthResult.UNAUTHORIZED, tampered)
     }
+
+    @Test
+    fun `invalid signature does not consume nonce`() {
+        val authenticator = RequestAuthenticator(nowEpochMs = { 1_000L })
+        val body = ""
+        val timestamp = "1000"
+        val nonce = "nonce-reuse-after-bad-sig"
+        val validSignature =
+            signIrisRequest(
+                secret = "secret",
+                method = "GET",
+                path = "/config",
+                timestamp = timestamp,
+                nonce = nonce,
+                body = body,
+            )
+
+        val badResult =
+            authenticator.authenticate(
+                method = "GET",
+                path = "/config",
+                body = body,
+                expectedSecret = "secret",
+                timestampHeader = timestamp,
+                nonceHeader = nonce,
+                signatureHeader = "invalid-signature",
+            )
+        assertEquals(AuthResult.UNAUTHORIZED, badResult)
+
+        val goodResult =
+            authenticator.authenticate(
+                method = "GET",
+                path = "/config",
+                body = body,
+                expectedSecret = "secret",
+                timestampHeader = timestamp,
+                nonceHeader = nonce,
+                signatureHeader = validSignature,
+            )
+        assertEquals(AuthResult.AUTHORIZED, goodResult)
+    }
 }
