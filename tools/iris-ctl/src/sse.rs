@@ -1,5 +1,6 @@
 use crate::api::TuiApi;
 use anyhow::Result;
+use futures_util::StreamExt;
 use iris_common::models::SseEvent;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -21,7 +22,6 @@ pub async fn subscribe(
     let mut bytes = response.bytes_stream();
     let mut buffer = String::new();
 
-    use futures_util::StreamExt;
     while let Some(chunk) = bytes.next().await {
         let chunk = chunk?;
         buffer.push_str(&String::from_utf8_lossy(&chunk));
@@ -111,7 +111,7 @@ mod tests {
         let (tx, _rx) = mpsc::unbounded_channel();
         let last_id = Arc::new(AtomicI64::new(0));
 
-        let result = subscribe(&test_api(format!("http://{}", addr)), tx, last_id).await;
+        let result = subscribe(&test_api(format!("http://{addr}")), tx, last_id).await;
 
         assert!(result.is_err());
     }
@@ -146,7 +146,7 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let last_id = Arc::new(AtomicI64::new(22));
 
-        subscribe(&test_api(format!("http://{}", addr)), tx, last_id.clone())
+        subscribe(&test_api(format!("http://{addr}")), tx, last_id.clone())
             .await
             .expect("subscribe should succeed");
 

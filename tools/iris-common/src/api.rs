@@ -1,6 +1,9 @@
 use crate::auth::{canonical_target, signed_headers};
 use crate::config::IrisConnection;
-use crate::models::*;
+use crate::models::{
+    BridgeDiagnosticsResponse, HealthResponse, MemberActivityResponse, MemberListResponse,
+    RoomInfoResponse, RoomListResponse, StatsResponse,
+};
 use anyhow::Result;
 use reqwest::Client;
 use std::time::Duration;

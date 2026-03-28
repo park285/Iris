@@ -1,5 +1,6 @@
 use crate::config::DaemonConfig;
 use crate::state::Transition;
+use anyhow::anyhow;
 use serde::Serialize;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -69,7 +70,8 @@ fn current_timestamp_iso() -> String {
     let seconds = time_of_day % 60;
 
     let mut year = 1970i32;
-    let mut remaining_days = days_since_epoch as i64;
+    let mut remaining_days = i64::try_from(days_since_epoch)
+        .unwrap_or_else(|_| panic!("{}", anyhow!("system time days exceed i64 range")));
     loop {
         let days_in_year = if is_leap_year(year) { 366 } else { 365 };
         if remaining_days < days_in_year {
@@ -92,10 +94,7 @@ fn current_timestamp_iso() -> String {
         month += 1;
     }
     let day = remaining_days + 1;
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        year, month, day, hours, minutes, seconds
-    )
+    format!("{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
 }
 
 fn is_leap_year(year: i32) -> bool {

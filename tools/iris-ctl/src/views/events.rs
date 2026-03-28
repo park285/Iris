@@ -22,7 +22,7 @@ impl EventsView {
             filter_active: false,
         }
     }
-    pub fn push_event(&mut self, event: SseEvent) {
+    pub fn push_event(&mut self, event: &SseEvent) {
         if self.paused {
             return;
         }
@@ -89,7 +89,7 @@ impl EventsView {
                     || e.contains("KICK")
                     || e.contains("NICK")
             })
-            .map(|e| e.as_str())
+            .map(std::string::String::as_str)
             .collect()
     }
 
@@ -155,7 +155,7 @@ impl View for EventsView {
             _ => ViewAction::None,
         }
     }
-    fn title(&self) -> &str {
+    fn title(&self) -> &'static str {
         "Events"
     }
 }
@@ -188,8 +188,8 @@ mod tests {
     #[test]
     fn filter_toggle_limits_visible_events_to_member_changes() {
         let mut view = EventsView::new();
-        view.push_event(member_event("join"));
-        view.push_event(SseEvent {
+        view.push_event(&member_event("join"));
+        view.push_event(&SseEvent {
             event_type: "profile_change".to_string(),
             event: None,
             chat_id: Some(1),
@@ -218,7 +218,7 @@ mod tests {
             let mut event = member_event("join");
             event.timestamp = Some(idx);
             event.nickname = Some(format!("user-{idx}"));
-            view.push_event(event);
+            view.push_event(&event);
         }
 
         assert_eq!(view.visible_events().len(), 500);

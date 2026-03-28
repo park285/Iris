@@ -182,7 +182,7 @@ impl IrisConnection for DaemonConfig {
 
 impl DaemonConfig {
     pub fn load(path: Option<&Path>) -> Result<Self> {
-        let config_path = path.map(PathBuf::from).unwrap_or_else(default_config_path);
+        let config_path = path.map_or_else(default_config_path, PathBuf::from);
         let mut config: DaemonConfig = if config_path.exists() {
             let content = std::fs::read_to_string(&config_path)
                 .with_context(|| format!("설정 파일 읽기 실패: {}", config_path.display()))?;

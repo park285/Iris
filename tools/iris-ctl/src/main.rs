@@ -51,7 +51,7 @@ async fn refresh_app_data(iris: &api::TuiApi, app: &mut app::App) {
             let blinded_count = info.blinded_member_ids.len();
             app.stats_view.set_room_info(info);
             if notice_count > 0 || blinded_count > 0 {
-                app.status = format!("Room: {} notices, {} blinded", notice_count, blinded_count);
+                app.status = format!("Room: {notice_count} notices, {blinded_count} blinded");
             }
         }
     }
@@ -69,7 +69,7 @@ async fn main() -> Result<()> {
     tokio::spawn(async move {
         loop {
             if let Err(e) = sse::subscribe(&sse_api, sse_tx.clone(), sse_last_id.clone()).await {
-                eprintln!("SSE error: {}, reconnecting in 5s...", e);
+                eprintln!("SSE error: {e}, reconnecting in 5s...");
                 tokio::time::sleep(Duration::from_secs(5)).await;
             } else {
                 tokio::time::sleep(Duration::from_secs(1)).await;
@@ -107,14 +107,11 @@ async fn main() -> Result<()> {
                 }
             }
             sse = sse_rx.recv(), if !sse_closed => {
-                match sse {
-                    Some(event) => {
-                        app.handle_app_event(app::AppEvent::Server(event));
-                    }
-                    None => {
-                        sse_closed = true;
-                        app.status = "Server event stream closed".to_string();
-                    }
+                if let Some(event) = sse {
+                    app.handle_app_event(app::AppEvent::Server(event));
+                } else {
+                    sse_closed = true;
+                    app.status = "Server event stream closed".to_string();
                 }
             }
             _ = poll_tick.tick() => {

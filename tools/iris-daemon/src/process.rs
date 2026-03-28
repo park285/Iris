@@ -26,12 +26,9 @@ pub async fn iris_pid(adb: &Adb) -> Option<u32> {
 }
 
 pub async fn stop_iris(adb: &Adb) -> Result<()> {
-    let pid = match iris_pid(adb).await {
-        Some(pid) => pid,
-        None => {
-            tracing::info!("Iris 프로세스 미실행, 종료 불필요");
-            return Ok(());
-        }
+    let Some(pid) = iris_pid(adb).await else {
+        tracing::info!("Iris 프로세스 미실행, 종료 불필요");
+        return Ok(());
     };
     tracing::info!(pid = pid, "Iris 프로세스 종료 시도 (SIGTERM)");
     let _ = adb.shell(&format!("kill {pid}")).await;

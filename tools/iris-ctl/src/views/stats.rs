@@ -113,12 +113,10 @@ impl View for StatsView {
                         activity.message_count,
                         activity
                             .first_message_at
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "-".to_string()),
+                            .map_or_else(|| "-".to_string(), |v| v.to_string()),
                         activity
                             .last_message_at
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "-".to_string()),
+                            .map_or_else(|| "-".to_string(), |v| v.to_string()),
                     ),
                     format!(
                         "Types: {}",
@@ -146,7 +144,7 @@ impl View for StatsView {
                     .map(|m| {
                         (
                             m.nickname.as_deref().unwrap_or("?").to_string(),
-                            m.message_count as u64,
+                            u64::try_from(m.message_count).unwrap_or(0),
                         )
                     })
                     .collect();
@@ -177,7 +175,7 @@ impl View for StatsView {
             _ => ViewAction::None,
         }
     }
-    fn title(&self) -> &str {
+    fn title(&self) -> &'static str {
         "Stats"
     }
 }

@@ -14,6 +14,7 @@ pub trait View {
 }
 
 #[allow(dead_code)]
+#[derive(Clone, Copy)]
 pub enum ViewAction {
     None,
     SwitchTo(TabId),
@@ -44,7 +45,7 @@ impl TabId {
             TabId::Events => "Events",
         }
     }
-    pub fn index(&self) -> usize {
+    pub fn index(self) -> usize {
         match self {
             TabId::Rooms => 0,
             TabId::Members => 1,

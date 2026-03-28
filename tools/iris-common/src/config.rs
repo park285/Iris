@@ -1,5 +1,5 @@
 /// Iris 서버 연결에 필요한 최소 정보.
-/// iris-ctl Config, iris-daemon DaemonConfig 모두 이 trait을 구현한다.
+/// iris-ctl Config, iris-daemon `DaemonConfig` 모두 이 trait을 구현한다.
 pub trait IrisConnection {
     fn base_url(&self) -> &str;
     fn token(&self) -> &str;

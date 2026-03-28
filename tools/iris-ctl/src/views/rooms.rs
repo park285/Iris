@@ -95,14 +95,7 @@ impl View for RoomsView {
                     }));
                 ViewAction::None
             }
-            KeyCode::Char('s') => {
-                if let Some(chat_id) = self.selected_chat_id() {
-                    ViewAction::ShowRoomStats(chat_id)
-                } else {
-                    ViewAction::None
-                }
-            }
-            KeyCode::Char('i') => {
+            KeyCode::Char('s' | 'i') => {
                 if let Some(chat_id) = self.selected_chat_id() {
                     ViewAction::ShowRoomStats(chat_id)
                 } else {
@@ -119,7 +112,7 @@ impl View for RoomsView {
             _ => ViewAction::None,
         }
     }
-    fn title(&self) -> &str {
+    fn title(&self) -> &'static str {
         "Rooms"
     }
 }

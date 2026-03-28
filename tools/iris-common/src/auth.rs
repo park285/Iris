@@ -2,6 +2,7 @@ use anyhow::Result;
 use hmac::{Hmac, Mac};
 use reqwest::header::{HeaderMap, HeaderValue};
 use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 type HmacSha256 = Hmac<Sha256>;
@@ -72,8 +73,10 @@ fn hex_sha256(body: &[u8]) -> String {
 fn hex_bytes(bytes: &[u8]) -> String {
     bytes
         .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>()
+        .fold(String::with_capacity(bytes.len() * 2), |mut out, byte| {
+            let _ = write!(&mut out, "{byte:02x}");
+            out
+        })
 }
 
 #[cfg(test)]

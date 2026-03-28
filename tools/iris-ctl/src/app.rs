@@ -2,8 +2,8 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
 
-use crate::views::*;
-use iris_common::models::*;
+use crate::views::{TabId, View, ViewAction, events, members, rooms, stats};
+use iris_common::models::SseEvent;
 use ratatui::widgets::{Block, Tabs};
 
 pub enum AppEvent {
@@ -40,7 +40,7 @@ impl App {
                 Constraint::Length(1),
             ])
             .split(frame.area());
-        let tabs = Tabs::new(TabId::all().iter().map(|t| t.label()))
+        let tabs = Tabs::new(TabId::all().iter().map(super::views::TabId::label))
             .block(Block::bordered().title(" Iris Control "))
             .select(self.active_tab.index())
             .highlight_style(ratatui::style::Style::default().yellow().bold());
@@ -75,7 +75,7 @@ impl App {
                 false
             }
             ViewAction::SelectMember(chat_id, user_id) => {
-                self.status = format!("Loading activity for user {}...", user_id);
+                self.status = format!("Loading activity for user {user_id}...");
                 self.stats_view.select_member(chat_id, user_id);
                 self.active_tab = TabId::Stats;
                 false
@@ -125,18 +125,18 @@ impl App {
         self.apply_action(action)
     }
 
-    fn handle_terminal_event(&mut self, event: Event) -> bool {
+    fn handle_terminal_event(&mut self, event: &Event) -> bool {
         match event {
-            Event::Key(key) => self.handle_key_event(key),
+            Event::Key(key) => self.handle_key_event(*key),
             _ => false,
         }
     }
 
     pub fn handle_app_event(&mut self, event: AppEvent) -> bool {
         match event {
-            AppEvent::Terminal(event) => self.handle_terminal_event(event),
+            AppEvent::Terminal(event) => self.handle_terminal_event(&event),
             AppEvent::Server(sse) => {
-                self.events_view.push_event(sse);
+                self.events_view.push_event(&sse);
                 false
             }
         }

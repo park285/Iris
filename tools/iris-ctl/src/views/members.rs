@@ -196,7 +196,8 @@ fn format_last_active(ts: Option<i64>, now_epoch_secs: i64) -> String {
 fn last_active_label(ts: Option<i64>) -> String {
     let now_epoch_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_secs()).ok())
         .unwrap_or(0);
     format_last_active(ts, now_epoch_secs)
 }
@@ -355,7 +356,7 @@ impl View for MembersView {
             }
         }
     }
-    fn title(&self) -> &str {
+    fn title(&self) -> &'static str {
         "Members"
     }
 }

@@ -9,12 +9,11 @@ pub fn find_latest_backup_apk(backup_dir: &Path) -> Result<PathBuf> {
         bail!("백업 디렉토리 없음: {}", backup_dir.display());
     }
     let mut apk_files: Vec<PathBuf> = std::fs::read_dir(backup_dir)?
-        .filter_map(|entry| entry.ok())
+        .filter_map(std::result::Result::ok)
         .map(|entry| entry.path())
         .filter(|path| {
             path.extension()
-                .map(|ext| ext.eq_ignore_ascii_case("apk"))
-                .unwrap_or(false)
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("apk"))
         })
         .collect();
     if apk_files.is_empty() {
@@ -66,7 +65,7 @@ mod tests {
         let _ = fs::create_dir_all(&tmp);
         for entry in fs::read_dir(&tmp).unwrap() {
             let path = entry.unwrap().path();
-            if path.extension().map(|e| e == "apk").unwrap_or(false) {
+            if path.extension().is_some_and(|e| e == "apk") {
                 let _ = fs::remove_file(path);
             }
         }

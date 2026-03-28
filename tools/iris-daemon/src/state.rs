@@ -54,15 +54,15 @@ impl StateMachine {
         self.fail_count = 0;
         self.recovery_count = 0;
         self.rollback_attempted = false;
-        if prev != State::Healthy {
+        if prev == State::Healthy {
+            None
+        } else {
             self.state = State::Healthy;
             Some(Transition {
                 from: prev,
                 to: State::Healthy,
                 reason: "health check 성공".to_string(),
             })
-        } else {
-            None
         }
     }
 
