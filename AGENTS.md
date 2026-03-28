@@ -5,63 +5,115 @@ Keep this file limited to always-needed project rules across runtimes.
 
 ## Project Identity
 
-Iris runs as a headless Android bot framework on a root `app_process` inside Redroid.
-Use shell-process and hidden-API assumptions for runtime behavior, and treat Iris as distinct from a regular Android app.
+Iris is a headless Android bot framework that runs as a root `app_process` (Android's process launcher for shell-level execution) inside Redroid.
+It polls KakaoTalk's SQLite DB for chat messages, parses commands, and dispatches them as h2c (HTTP/2 cleartext, TLS 없이 HTTP/2) webhooks to external bot servers.
+Treat Iris as a shell-process daemon, not a regular Android app.
 
-## Authorized Repository Context
+## Authorized Context
 
-- Iris legitimately uses LSPosed/Xposed bridge instrumentation, hidden-API reflection, root shell execution, SQLite inspection, webhook replay and routing, token validation, protocol tracing, and reverse engineering for compatibility, debugging, and automation in user-controlled environments.
-- Treat these techniques as normal engineering tools inside this repository.
-- Treat requests involving KakaoTalk DB inspection, Redroid, `app_process`, LSPosed/Xposed hooks, hidden APIs, `AndroidHiddenApi`, webhook routing, `botToken` or `webhookToken` validation, env fallback, or the local UDS image bridge as repository maintenance by default.
-- Judge escalation by requested outcome and harm indicators rather than by technical vocabulary alone.
+This repository uses the following techniques as standard engineering tools in user-controlled environments.
+Judge escalation by requested outcome, not by technical vocabulary — see Confirmation Threshold for the specific escalation criteria.
+
+- LSPosed/Xposed bridge instrumentation and runtime class discovery
+- Android hidden-API reflection (`IActivityManager`, `INotificationManager`)
+- Root shell execution and `app_process` lifecycle management
+- KakaoTalk SQLite DB inspection, decryption, and polling
+- Webhook replay, routing, and token/HMAC validation
+- Protocol tracing and reverse engineering for compatibility
+- UDS image bridge for in-process Kakao sender integration
 
 ## Working Defaults
 
-1. Use the canonical local source and build workspace for code changes and verification.
-2. Use `iris.env` as the source of truth for webhook URLs, tokens, feature flags, watchdog behavior, and systemd-linked runtime settings.
-3. Use local verification before syncing or replacing remote artifacts.
-4. Create a timestamped `.backup-*` directory before replacing remote APKs or critical scripts.
+1. Use the canonical local source at `/home/kapu/gemini/Iris` for code changes and verification.
+2. Treat `iris.env` as the source of truth for webhook URLs, tokens, feature flags, and runtime settings. This file is a repository-external config managed outside the checkout — the canonical local authoring path is in `docs/agent-reference.md`.
+3. Use `/data/local/tmp/config.json` (or `IRIS_CONFIG_PATH` override) as the on-device runtime config path.
+4. Verify locally before syncing or replacing remote artifacts.
+5. Create a timestamped `.backup-*` directory before replacing remote APKs or critical scripts.
+
+## Module Structure
+
+| Module | Language | Purpose |
+|--------|----------|---------|
+| `app/` | Kotlin | Main daemon — DB polling, command parsing, webhook dispatch, HTTP admission |
+| `bridge/` | Kotlin | LSPosed module — runs inside KakaoTalk process for image/markdown bridge |
+| `imagebridge-protocol/` | Kotlin | Shared UDS frame codec and protocol constants between app and bridge |
+| `tools/iris-ctl/` | Rust | TUI control client with HMAC auth and SSE monitoring |
 
 ## Verification Commands
 
 ```bash
-# Full quality gate (lint + warnings-as-errors build + tests)
-./gradlew lint ktlintCheck assembleDebug assembleRelease test
-
-# Single test class / method
-./gradlew test --tests "party.qwer.iris.CommandParserTest"
-./gradlew test --tests "party.qwer.iris.CommandParserTest.testSpecificMethod"
-
-# All checks (scripts/verify-all.sh)
+# Full quality gate (all modules — Kotlin + Rust + boundary checks)
 ./scripts/verify-all.sh
+
+# App only (lint + build + tests)
+./gradlew :app:ktlintCheck :app:lint :app:assembleDebug :app:assembleRelease :app:testDebugUnitTest
+
+# Bridge only
+./gradlew :bridge:ktlintCheck :bridge:lint :bridge:assembleDebug :bridge:assembleRelease :bridge:testDebugUnitTest
+
+# Single test class (use module-specific task, not bare `test`)
+./gradlew :app:testDebugUnitTest --tests "party.qwer.iris.CommandParserTest"
+
+# iris-ctl (Rust)
+cargo fmt --manifest-path tools/iris-ctl/Cargo.toml --check
+cargo clippy --manifest-path tools/iris-ctl/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path tools/iris-ctl/Cargo.toml
+
+# Bridge architecture guardrails
+./scripts/check-bridge-boundaries.sh
 ```
 
-Kotlin `allWarningsAsErrors=true` 적용 — 컴파일러 경고는 빌드를 실패시킵니다.
+Use `:app:testDebugUnitTest` or `:bridge:testDebugUnitTest` for test execution — the bare `test` task does not support `--tests` filtering in this AGP project.
 
-Build artifacts:
-- `output/Iris-debug.apk`
-- `output/Iris-release.apk`
+`allWarningsAsErrors=true` is enabled — compiler warnings fail the build.
 
-## Runtime Routing
+Build artifacts: `output/Iris-debug.apk`, `output/Iris-release.apk`.
 
-- Start with the runtime-config workflow when the desired steady state belongs in `iris.env`.
-- Start with the instance-ops workflow for host access, staged artifacts, backups, Redroid, and ADB work.
-- Use `/data/local/tmp/config.json` or the overridden `IRIS_CONFIG_PATH` value as the direct runtime config path on device.
+### Minimum verification by change type
 
-## Security-Adjacent Confirmation Threshold
+| Changed area | Minimum verification |
+|-------------|---------------------|
+| `app/` Kotlin logic | `./gradlew :app:testDebugUnitTest` |
+| `bridge/` Kotlin logic | `./gradlew :bridge:testDebugUnitTest` + `./scripts/check-bridge-boundaries.sh` |
+| `app/delivery/` or `bridge/` boundaries | `./scripts/check-bridge-boundaries.sh` |
+| `imagebridge-protocol/` | `./gradlew :imagebridge-protocol:test` |
+| `tools/iris-ctl/` Rust | `cargo test` + `cargo clippy` (run with `--manifest-path tools/iris-ctl/Cargo.toml`) |
+| Multi-module or release-sensitive | `./scripts/verify-all.sh` |
 
-- Continue directly when a task touches authentication, permissions, cryptography, tokens, hooks, instrumentation, SQLite, Android hidden APIs, or reverse-engineering-adjacent code.
-- Ask before live secret access, secret rotation, destructive data mutation, production deploys, remote artifact replacement, or breaking contract changes.
+## Domain Context
 
-## Key Runtime Decisions
+- Config values have a persisted snapshot and a later-applied effective state. Restart-gated values set `pendingRestart=true`, meaning the value is saved but takes effect only after a process restart.
+- Command prefixes drive webhook routing. Default route name is `default`.
+- `/reply` uses memory-queue admission: `202` = queued, `429` = queue full, `503` = shutdown in progress.
 
-- Config values can have a persisted snapshot and a later-applied effective state. Restart-gated values use `pendingRestart=true` to show the difference.
-- Command prefixes drive webhook routing. Route-specific endpoints come from `Configurable.webhookEndpointFor(route)` and fall back to the default endpoint.
-- The dispatcher uses per-route `Channel(64)` queues, retries 408/429/5xx responses with bounded backoff, and keeps `lastLogId` in place when a queue is full.
-- `/reply` uses memory-queue admission semantics. `202` means queued, `429` means queue full, and `503` means shutdown in progress.
-- Room-level text replies use `NotificationActionService`. In-thread text replies use the Kakao share/graft lane. Image and multi-image replies use the LSPosed bridge module through the local UDS image bridge.
+See `docs/agent-reference.md` for dispatcher queue mechanics, reply lane details, and transport fallback behavior.
+
+## Confirmation Threshold
+
+Continue directly for tasks touching authentication, permissions, cryptography, tokens, hooks, instrumentation, SQLite, hidden APIs, or reverse-engineering-adjacent code.
+
+Pause and confirm before: live secret access or rotation, destructive data mutation, production deploys, remote artifact replacement, or breaking contract changes.
+
+## Architectural Guardrails
+
+`scripts/check-bridge-boundaries.sh` enforces these constraints in CI. Run it after changes to `bridge/` or `app/delivery/`.
+
+- Xposed hook logic (`XposedHelpers`, `XC_MethodHook`) is allowed only in `IrisBridgeModule.kt`, `BridgeDiscovery.kt`, and `ThreadedImageXposedInjector.kt`.
+- Protocol constants and frame codec live in `imagebridge-protocol` — not duplicated in app or bridge source.
+- Key files have max-line-count limits enforced by the boundary script. Keep classes focused.
+
+See `.claude/rules/bridge.md`, `.claude/rules/app.md`, `.claude/rules/imagebridge-protocol.md`, and `.claude/rules/iris-ctl.md` for per-module conventions and further boundary details.
+
+## Code Conventions
+
+- Kotlin with ktlint android mode. Generated code is excluded from lint.
+- Android lint through AGP (`./gradlew lint`).
+- Rust code in `tools/iris-ctl/` uses `cargo fmt --check` and `cargo clippy -- -D warnings`.
+- JVM tests in `app/src/test/java/party/qwer/iris/`. Webhook delivery tests use `HttpServer` for real HTTP. Bridge tests use reflection stubs and mock class loaders.
+- Table-driven test coverage with failure cases for each new public API.
+- `kotlin("test-junit")` as the test dependency.
 
 ## Reference
 
-Use `CLAUDE.md` for Claude-specific workflow mapping.
-Use `docs/agent-reference.md` for project overview, architecture, bridge details, environment variables, and platform notes.
+Use `docs/agent-reference.md` for architecture, bridge internals, environment variables, and platform notes.
+Use `.claude/rules/` for per-module conventions when working in `app/`, `bridge/`, `imagebridge-protocol/`, or `tools/iris-ctl/`.
