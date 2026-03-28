@@ -179,7 +179,7 @@ class ReplyServiceTest {
     }
 
     @Test
-    fun `same lane mutex prevents concurrent send calls`() {
+    fun `global gate prevents concurrent send calls`() {
         val service = ReplyService(testConfig)
         service.start()
         val concurrent = AtomicInteger(0)
@@ -199,12 +199,12 @@ class ReplyServiceTest {
         }
 
         assertTrue(latch.await(5, TimeUnit.SECONDS), "all sends should complete")
-        assertEquals(1, maxConcurrent.get(), "send calls must not overlap (mutex)")
+        assertEquals(1, maxConcurrent.get(), "send calls must not overlap (global gate)")
         service.shutdown()
     }
 
     @Test
-    fun `different lanes can execute concurrently`() {
+    fun `global gate serializes sends across all lanes`() {
         val service = ReplyService(testConfig)
         service.start()
         val concurrent = AtomicInteger(0)
@@ -227,7 +227,7 @@ class ReplyServiceTest {
         }
 
         assertTrue(latch.await(5, TimeUnit.SECONDS), "different lanes should complete")
-        assertTrue(maxConcurrent.get() >= 2, "different lanes should be able to overlap")
+        assertEquals(1, maxConcurrent.get(), "all lanes must be serialized through global gate")
         service.shutdown()
     }
 
@@ -249,8 +249,8 @@ class ReplyServiceTest {
     }
 
     @Test
-    fun `different keys process independently`() {
-        val slowConfig =
+    fun `global gate enforces pacing between sends from different workers`() {
+        val pacingConfig =
             object : ConfigProvider {
                 override val botId = 0L
                 override val botName = ""
@@ -258,27 +258,65 @@ class ReplyServiceTest {
                 override val botToken = ""
                 override val webhookToken = ""
                 override val dbPollingRate = 1000L
-                override val messageSendRate = 200L
+                override val messageSendRate = 100L
                 override val messageSendJitterMax = 0L
 
                 override fun webhookEndpointFor(route: String) = ""
             }
-        val service = ReplyService(slowConfig)
+        val service = ReplyService(pacingConfig)
         service.start()
-        val latch = CountDownLatch(2)
+        val timestamps = CopyOnWriteArrayList<Long>()
+        val latch = CountDownLatch(3)
 
-        val startTime = System.currentTimeMillis()
-        for (i in 0L until 2L) {
+        for (i in 0L until 3L) {
             service.enqueueAction(chatId = i, threadId = null) {
+                timestamps.add(System.currentTimeMillis())
                 latch.countDown()
             }
         }
 
-        assertTrue(latch.await(5, TimeUnit.SECONDS), "both workers should complete")
-        val elapsed = System.currentTimeMillis() - startTime
-        // 직렬이면 최소 200ms+ (첫 번째 워커의 rate limit delay), 병렬이면 거의 즉시
-        assertTrue(elapsed < 150, "different key workers should not wait for each other's rate limit (took ${elapsed}ms)")
+        assertTrue(latch.await(5, TimeUnit.SECONDS), "all sends should complete")
+        assertEquals(3, timestamps.size)
+        val sorted = timestamps.sorted()
+        for (i in 1 until sorted.size) {
+            val gap = sorted[i] - sorted[i - 1]
+            assertTrue(gap >= 80, "sends should be paced by at least ~100ms (gap was ${gap}ms)")
+        }
         service.shutdown()
+    }
+
+    @Test
+    fun `shutdown terminates workers blocked in dispatch gate pacing`() {
+        val pacingConfig =
+            object : ConfigProvider {
+                override val botId = 0L
+                override val botName = ""
+                override val botSocketPort = 0
+                override val botToken = ""
+                override val webhookToken = ""
+                override val dbPollingRate = 1000L
+                override val messageSendRate = 5_000L
+                override val messageSendJitterMax = 0L
+
+                override fun webhookEndpointFor(route: String) = ""
+            }
+        val service = ReplyService(pacingConfig)
+        service.start()
+        val firstDone = CountDownLatch(1)
+
+        service.enqueueAction(chatId = 1L, threadId = null) {
+            firstDone.countDown()
+        }
+        assertTrue(firstDone.await(5, TimeUnit.SECONDS), "first send should complete")
+
+        service.enqueueAction(chatId = 1L, threadId = null) {}
+        Thread.sleep(100)
+
+        val start = System.currentTimeMillis()
+        service.shutdown()
+        val elapsed = System.currentTimeMillis() - start
+
+        assertTrue(elapsed < 15_000, "shutdown should complete by cancelling gate-blocked workers (took ${elapsed}ms)")
     }
 
     @Test

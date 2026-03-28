@@ -11,11 +11,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import party.qwer.iris.model.ReplyStatusSnapshot
 import java.io.File
@@ -62,10 +59,10 @@ internal class ReplyService(
 
     private val workerRegistry = ConcurrentHashMap<ReplyQueueKey, ReplyWorkerState>()
     private val coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val laneMutexes =
-        mapOf(
-            ReplySendLane.TEXT to Mutex(),
-            ReplySendLane.NATIVE_IMAGE to Mutex(),
+    private val dispatchGate =
+        GlobalDispatchGate(
+            baseIntervalMs = { config.messageSendRate },
+            jitterMaxMs = { config.messageSendJitterMax },
         )
     private val statusStore = ReplyStatusStore()
     private var started = false
@@ -378,12 +375,11 @@ internal class ReplyService(
                             request.requestId?.let { statusStore.update(it, "preparing") }
                             request.prepare()
                             request.requestId?.let { statusStore.update(it, "prepared") }
-                            mutexFor(request.lane).withLock {
+                            dispatchGate.dispatch {
                                 request.requestId?.let { statusStore.update(it, "sending") }
                                 request.send()
                             }
                             request.requestId?.let { statusStore.update(it, "handoff_completed") }
-                            delay(config.messageSendRate)
                         } catch (e: Exception) {
                             request.requestId?.let { statusStore.update(it, "failed", e.message) }
                             IrisLogger.error("[ReplyService] worker($key) send error: ${e.message}", e)
@@ -520,8 +516,6 @@ internal class ReplyService(
 
         suspend fun send()
     }
-
-    private fun mutexFor(lane: ReplySendLane): Mutex = laneMutexes.getValue(lane)
 
     internal fun replyStatusOrNull(requestId: String): ReplyStatusSnapshot? = statusStore.get(requestId)
 }
