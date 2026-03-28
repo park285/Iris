@@ -62,6 +62,7 @@ class WebhookRequestFactoryTest {
         override val botToken: String = ""
         override val dbPollingRate: Long = 0L
         override val messageSendRate: Long = 0L
+        override val messageSendJitterMax: Long = 0L
 
         override fun webhookEndpointFor(route: String): String = ""
     }

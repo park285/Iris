@@ -13,6 +13,7 @@ class ChatLogDecryptorTest {
             override val webhookToken = ""
             override val dbPollingRate = 1000L
             override val messageSendRate = 0L
+            override val messageSendJitterMax = 0L
 
             override fun webhookEndpointFor(route: String): String = ""
         }

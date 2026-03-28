@@ -17,6 +17,7 @@ class H2cDispatcherRouteSupportTest {
             override val webhookToken = ""
             override val dbPollingRate = 0L
             override val messageSendRate = 0L
+            override val messageSendJitterMax = 0L
 
             override fun webhookEndpointFor(route: String): String = ""
 

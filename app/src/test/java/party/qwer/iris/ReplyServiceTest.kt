@@ -29,6 +29,7 @@ class ReplyServiceTest {
             override val webhookToken = ""
             override val dbPollingRate = 1000L
             override val messageSendRate = 0L
+            override val messageSendJitterMax = 0L
 
             override fun webhookEndpointFor(route: String) = ""
         }
@@ -83,6 +84,7 @@ class ReplyServiceTest {
                 override val webhookToken = ""
                 override val dbPollingRate = 1000L
                 override val messageSendRate = 60_000L
+                override val messageSendJitterMax = 0L
 
                 override fun webhookEndpointFor(route: String) = ""
             }
@@ -257,6 +259,7 @@ class ReplyServiceTest {
                 override val webhookToken = ""
                 override val dbPollingRate = 1000L
                 override val messageSendRate = 200L
+                override val messageSendJitterMax = 0L
 
                 override fun webhookEndpointFor(route: String) = ""
             }
