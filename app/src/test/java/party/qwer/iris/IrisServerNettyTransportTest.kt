@@ -65,6 +65,21 @@ class IrisServerNettyTransportTest {
                             installed = true,
                             invocationCount = 1,
                         ),
+                        ImageBridgeDiscoveryHook(
+                            name = "ReplyMarkdown#ingress",
+                            installed = true,
+                            invocationCount = 1,
+                        ),
+                        ImageBridgeDiscoveryHook(
+                            name = "ReplyMarkdown#reuseIntent",
+                            installed = true,
+                            invocationCount = 0,
+                        ),
+                        ImageBridgeDiscoveryHook(
+                            name = "ReplyMarkdown#requestDispatch",
+                            installed = true,
+                            invocationCount = 1,
+                        ),
                     ),
             )
 
@@ -87,10 +102,76 @@ class IrisServerNettyTransportTest {
                             installed = true,
                             invocationCount = 1,
                         ),
+                        ImageBridgeDiscoveryHook(
+                            name = "ReplyMarkdown#ingress",
+                            installed = true,
+                            invocationCount = 1,
+                        ),
+                        ImageBridgeDiscoveryHook(
+                            name = "ReplyMarkdown#reuseIntent",
+                            installed = true,
+                            invocationCount = 0,
+                        ),
+                        ImageBridgeDiscoveryHook(
+                            name = "ReplyMarkdown#requestDispatch",
+                            installed = true,
+                            invocationCount = 1,
+                        ),
                     ),
             )
 
         assertFalse(IrisServer.isBridgeReadyForTest(health))
+    }
+
+    @Test
+    fun `bridge ready requires markdown discovery hooks`() {
+        val health =
+            ImageBridgeHealthResult(
+                reachable = true,
+                running = true,
+                specReady = true,
+                restartCount = 0,
+                discoveryInstallAttempted = true,
+                discoveryHooks =
+                    listOf(
+                        ImageBridgeDiscoveryHook(
+                            name = "ChatMediaSender#sendSingle",
+                            installed = true,
+                            invocationCount = 1,
+                        ),
+                        ImageBridgeDiscoveryHook(
+                            name = "ChatMediaSender#sendMultiple",
+                            installed = true,
+                            invocationCount = 1,
+                        ),
+                        ImageBridgeDiscoveryHook(
+                            name = "ReplyMarkdown#ingress",
+                            installed = true,
+                            invocationCount = 1,
+                        ),
+                        ImageBridgeDiscoveryHook(
+                            name = "ReplyMarkdown#requestDispatch",
+                            installed = true,
+                            invocationCount = 1,
+                        ),
+                    ),
+            )
+
+        assertFalse(IrisServer.isBridgeReadyForTest(health))
+    }
+
+    @Test
+    fun `runtime server disables http2 and h2c by default`() {
+        assertFalse(IrisServer.runtimeHttp2Enabled())
+        assertFalse(IrisServer.runtimeH2cEnabled())
+    }
+
+    @Test
+    fun `initial sse frames include keepalive comment before replay`() {
+        val frames = IrisServer.initialSseFramesForTest(listOf(2L to "{\"type\":\"member_event\"}"))
+
+        assertTrue(frames.startsWith(": connected\n\n"))
+        assertTrue(frames.contains("id: 2\ndata: {\"type\":\"member_event\"}\n\n"))
     }
 
     private fun restoreProperty(previous: String?) {

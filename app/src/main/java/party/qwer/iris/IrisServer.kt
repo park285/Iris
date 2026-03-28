@@ -1,7 +1,10 @@
 package party.qwer.iris
 
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.Parameters
+import io.ktor.http.encodeURLParameter
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
@@ -15,7 +18,7 @@ import io.ktor.server.netty.Netty
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.request.path
-import io.ktor.server.request.receive
+import io.ktor.server.request.receiveChannel
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondBytesWriter
 import io.ktor.server.response.respondText
@@ -24,8 +27,11 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
+import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.readAvailable
 import io.ktor.utils.io.writeStringUtf8
 import kotlinx.serialization.SerializationException
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
@@ -34,14 +40,13 @@ import party.qwer.iris.model.ApiErrorResponse
 import party.qwer.iris.model.CommonErrorResponse
 import party.qwer.iris.model.ConfigRequest
 import party.qwer.iris.model.ImageBridgeHealthResult
-import party.qwer.iris.model.QueryRequest
 import party.qwer.iris.model.QueryColumn
+import party.qwer.iris.model.QueryRequest
 import party.qwer.iris.model.QueryResponse
 import party.qwer.iris.model.ReplyAcceptedResponse
 import party.qwer.iris.model.ReplyRequest
 import party.qwer.iris.model.ReplyStatusSnapshot
 import party.qwer.iris.model.ReplyType
-import java.security.MessageDigest
 import java.util.UUID
 
 internal const val NETTY_NO_NATIVE_PROPERTY = "io.netty.transport.noNative"
@@ -67,6 +72,7 @@ internal class IrisServer(
     private val bindHost: String = DEFAULT_BIND_HOST,
     private val nettyWorkerThreads: Int = DEFAULT_NETTY_WORKER_THREADS,
 ) {
+    private val requestAuthenticator = RequestAuthenticator()
     private val serverJson =
         Json {
             ignoreUnknownKeys = true
@@ -119,8 +125,8 @@ internal class IrisServer(
                 port = configManager.botSocketPort
                 host = bindHost
             }
-            enableHttp2 = true
-            enableH2c = true
+            enableHttp2 = runtimeHttp2Enabled()
+            enableH2c = runtimeH2cEnabled()
             workerGroupSize = nettyWorkerThreads
         }
     }
@@ -216,7 +222,7 @@ internal class IrisServer(
         }
 
         get("/diagnostics/bridge") {
-            if (!requireBotToken(call)) {
+            if (!requireBotToken(call, method = "GET")) {
                 return@get
             }
             val bridgeHealth = bridgeHealthProvider?.invoke() ?: invalidRequest("bridge health unavailable")
@@ -224,7 +230,7 @@ internal class IrisServer(
         }
 
         get("/diagnostics/chatroom-fields/{chatId}") {
-            if (!requireBotToken(call)) return@get
+            if (!requireBotToken(call, method = "GET")) return@get
             val chatId =
                 call.parameters["chatId"]?.toLongOrNull()
                     ?: invalidRequest("chatId must be a number")
@@ -238,47 +244,26 @@ internal class IrisServer(
     private fun Route.configureConfigRoutes() {
         route("/config") {
             get {
-                if (!requireBotToken(call)) {
+                if (!requireBotToken(call, method = "GET")) {
                     return@get
                 }
                 call.respond(configManager.configResponse())
             }
 
             post("{name}") {
-                if (!requireBotToken(call)) {
-                    return@post
-                }
-
-                val name = call.parameters["name"] ?: throw ApiRequestException("missing config name")
-                val request = call.receive<ConfigRequest>()
-                val updateOutcome = applyConfigUpdate(configManager, name, request)
-
-                if (!configManager.saveConfigNow()) {
-                    throw ApiRequestException(
-                        "failed to persist config update",
-                        HttpStatusCode.InternalServerError,
-                    )
-                }
-
-                call.respond(
-                    configManager.configUpdateResponse(
-                        name = updateOutcome.name,
-                        persisted = true,
-                        applied = updateOutcome.applied,
-                        requiresRestart = updateOutcome.requiresRestart,
-                    ),
-                )
+                handleConfigUpdate(call)
             }
         }
     }
 
     private fun Route.configureReplyRoute() {
         post("/reply") {
-            if (!requireBotToken(call)) {
+            val rawBody = readProtectedRequestBody(call, MAX_REPLY_REQUEST_BODY_BYTES)
+            if (!requireBotToken(call, method = "POST", body = rawBody.body, bodySha256Hex = rawBody.sha256Hex)) {
                 return@post
             }
 
-            val replyRequest = call.receive<ReplyRequest>()
+            val replyRequest = serverJson.decodeFromString<ReplyRequest>(rawBody.body)
             val response = enqueueReply(replyRequest)
             call.respond(HttpStatusCode.Accepted, response)
         }
@@ -286,11 +271,12 @@ internal class IrisServer(
 
     private fun Route.configureReplyMarkdownRoute() {
         post("/reply-markdown") {
-            if (!requireBotToken(call)) {
+            val rawBody = readProtectedRequestBody(call, MAX_REPLY_REQUEST_BODY_BYTES)
+            if (!requireBotToken(call, method = "POST", body = rawBody.body, bodySha256Hex = rawBody.sha256Hex)) {
                 return@post
             }
 
-            val replyRequest = call.receive<ReplyRequest>()
+            val replyRequest = serverJson.decodeFromString<ReplyRequest>(rawBody.body)
             val response = enqueueReplyMarkdown(replyRequest)
             call.respond(HttpStatusCode.Accepted, response)
         }
@@ -298,7 +284,7 @@ internal class IrisServer(
 
     private fun Route.configureReplyStatusRoute() {
         get("/reply-status/{requestId}") {
-            if (!requireBotToken(call)) {
+            if (!requireBotToken(call, method = "GET")) {
                 return@get
             }
             val requestId = call.parameters["requestId"] ?: invalidRequest("missing requestId")
@@ -309,11 +295,12 @@ internal class IrisServer(
 
     private fun Route.configureReplyImageRoute() {
         post("/reply-image") {
-            if (!requireBotToken(call)) {
+            val rawBody = readProtectedRequestBody(call, MAX_REPLY_REQUEST_BODY_BYTES)
+            if (!requireBotToken(call, method = "POST", body = rawBody.body, bodySha256Hex = rawBody.sha256Hex)) {
                 return@post
             }
 
-            val replyRequest = call.receive<ReplyRequest>()
+            val replyRequest = serverJson.decodeFromString<ReplyRequest>(rawBody.body)
             val response = enqueueReplyImage(replyRequest)
             call.respond(HttpStatusCode.Accepted, response)
         }
@@ -321,10 +308,11 @@ internal class IrisServer(
 
     private fun Route.configureQueryRoute() {
         post("/query") {
-            if (!requireBotToken(call)) {
+            val rawBody = readProtectedRequestBody(call, MAX_QUERY_REQUEST_BODY_BYTES)
+            if (!requireBotToken(call, method = "POST", body = rawBody.body, bodySha256Hex = rawBody.sha256Hex)) {
                 return@post
             }
-            val queryRequest = call.receive<QueryRequest>()
+            val queryRequest = serverJson.decodeFromString<QueryRequest>(rawBody.body)
             requireQueryText(queryRequest.query)
             requireReadOnlyQuery(queryRequest.query)
 
@@ -466,12 +454,12 @@ internal class IrisServer(
         val bus = sseEventBus
 
         get("/rooms") {
-            if (!requireBotToken(call)) return@get
+            if (!requireBotToken(call, method = "GET")) return@get
             call.respond(repo.listRooms())
         }
 
         get("/rooms/{chatId}/members") {
-            if (!requireBotToken(call)) return@get
+            if (!requireBotToken(call, method = "GET")) return@get
             val chatId =
                 call.parameters["chatId"]?.toLongOrNull()
                     ?: invalidRequest("chatId must be a number")
@@ -479,7 +467,7 @@ internal class IrisServer(
         }
 
         get("/rooms/{chatId}/info") {
-            if (!requireBotToken(call)) return@get
+            if (!requireBotToken(call, method = "GET")) return@get
             val chatId =
                 call.parameters["chatId"]?.toLongOrNull()
                     ?: invalidRequest("chatId must be a number")
@@ -487,7 +475,7 @@ internal class IrisServer(
         }
 
         get("/rooms/{chatId}/stats") {
-            if (!requireBotToken(call)) return@get
+            if (!requireBotToken(call, method = "GET")) return@get
             val chatId =
                 call.parameters["chatId"]?.toLongOrNull()
                     ?: invalidRequest("chatId must be a number")
@@ -498,7 +486,7 @@ internal class IrisServer(
         }
 
         get("/rooms/{chatId}/members/{userId}/activity") {
-            if (!requireBotToken(call)) return@get
+            if (!requireBotToken(call, method = "GET")) return@get
             val chatId =
                 call.parameters["chatId"]?.toLongOrNull()
                     ?: invalidRequest("chatId must be a number")
@@ -511,15 +499,11 @@ internal class IrisServer(
 
         if (bus != null) {
             get("/events/stream") {
-                if (!requireBotToken(call)) return@get
+                if (!requireBotToken(call, method = "GET")) return@get
                 val lastEventId = call.request.headers["Last-Event-ID"]?.toLongOrNull() ?: 0L
                 call.respondBytesWriter(contentType = ContentType.Text.EventStream) {
-                    // Replay buffered events
-                    for ((id, data) in bus.replayFrom(lastEventId)) {
-                        writeStringUtf8("id: $id\ndata: $data\n\n")
-                        flush()
-                    }
-                    // Subscribe to live events
+                    writeStringUtf8(initialSseFrames(bus.replayFrom(lastEventId)))
+                    flush()
                     val channel = kotlinx.coroutines.channels.Channel<Pair<Long, String>>(64)
                     val listener: (Long, String) -> Unit = { id, data -> channel.trySend(id to data) }
                     bus.listeners.add(listener)
@@ -537,34 +521,52 @@ internal class IrisServer(
         }
     }
 
-    private suspend fun requireBotToken(call: ApplicationCall): Boolean {
-        val expectedToken = configManager.botToken
-        if (expectedToken.isBlank()) {
-            IrisLogger.error("[IrisServer] Refusing protected request because bot token is not configured")
-            call.respond(HttpStatusCode.ServiceUnavailable, CommonErrorResponse(message = "service unavailable"))
-            return false
-        }
-        val provided = call.request.headers[HEADER_BOT_TOKEN].orEmpty()
-        if (
-            MessageDigest.isEqual(
-                provided.toByteArray(Charsets.UTF_8),
-                expectedToken.toByteArray(Charsets.UTF_8),
+    private suspend fun requireBotToken(
+        call: ApplicationCall,
+        method: String,
+        body: String = "",
+        bodySha256Hex: String = sha256Hex(body.toByteArray()),
+    ): Boolean {
+        val expectedToken = configManager.signingSecret()
+        when (
+            requestAuthenticator.authenticate(
+                method = method,
+                path = canonicalRequestTarget(call.request.path(), call.request.queryParameters),
+                body = body,
+                bodySha256Hex = bodySha256Hex,
+                expectedSecret = expectedToken,
+                timestampHeader = call.request.headers[HEADER_IRIS_TIMESTAMP],
+                nonceHeader = call.request.headers[HEADER_IRIS_NONCE],
+                signatureHeader = call.request.headers[HEADER_IRIS_SIGNATURE],
             )
         ) {
-            return true
+            AuthResult.AUTHORIZED -> return true
+            AuthResult.SERVICE_UNAVAILABLE -> {
+                IrisLogger.error("[IrisServer] Refusing protected request because bot token is not configured")
+                call.respond(HttpStatusCode.ServiceUnavailable, CommonErrorResponse(message = "service unavailable"))
+                return false
+            }
+            AuthResult.UNAUTHORIZED -> {
+                call.respond(HttpStatusCode.Unauthorized, CommonErrorResponse(message = "unauthorized"))
+                return false
+            }
         }
-
-        call.respond(HttpStatusCode.Unauthorized, CommonErrorResponse(message = "unauthorized"))
-        return false
     }
 
     companion object {
         private const val MAX_QUERY_ROWS = 500
-        private const val HEADER_BOT_TOKEN = "X-Bot-Token"
+        private const val MAX_CONFIG_REQUEST_BODY_BYTES = 64 * 1024
+        private const val MAX_QUERY_REQUEST_BODY_BYTES = 256 * 1024
+        private const val MAX_REPLY_REQUEST_BODY_BYTES = 48 * 1024 * 1024
+        private const val HEADER_IRIS_TIMESTAMP = "X-Iris-Timestamp"
+        private const val HEADER_IRIS_NONCE = "X-Iris-Nonce"
+        private const val HEADER_IRIS_SIGNATURE = "X-Iris-Signature"
         private const val SERVER_GRACE_PERIOD_MS = 1_000L
         private const val SERVER_STOP_TIMEOUT_MS = 5_000L
         private const val DEFAULT_BIND_HOST = "127.0.0.1"
         private const val DEFAULT_NETTY_WORKER_THREADS = 2
+        private const val DEFAULT_ENABLE_HTTP2 = false
+        private const val DEFAULT_ENABLE_H2C = false
         private const val HEALTH_OK_JSON = """{"status":"ok"}"""
         private const val READY_OK_JSON = """{"status":"ready"}"""
         private val REQUIRED_DISCOVERY_HOOKS =
@@ -577,6 +579,10 @@ internal class IrisServer(
             )
 
         internal fun isBridgeReadyForTest(health: ImageBridgeHealthResult): Boolean = isBridgeReady(health)
+
+        internal fun runtimeHttp2Enabled(): Boolean = DEFAULT_ENABLE_HTTP2
+
+        internal fun runtimeH2cEnabled(): Boolean = DEFAULT_ENABLE_H2C
 
         private fun isBridgeReady(health: ImageBridgeHealthResult): Boolean {
             val hooksByName = health.discoveryHooks.associateBy { it.name }
@@ -599,6 +605,20 @@ internal class IrisServer(
                 HttpStatusCode.Forbidden -> "FORBIDDEN"
                 else -> "INTERNAL_ERROR"
             }
+
+        private fun initialSseFrames(replay: List<Pair<Long, String>>): String =
+            buildString {
+                append(": connected\n\n")
+                for ((id, data) in replay) {
+                    append("id: ")
+                    append(id)
+                    append("\ndata: ")
+                    append(data)
+                    append("\n\n")
+                }
+            }
+
+        internal fun initialSseFramesForTest(replay: List<Pair<Long, String>>): String = initialSseFrames(replay)
     }
 
     private fun executeQueryRequest(queryRequest: QueryRequest): QueryResponse {
@@ -618,7 +638,108 @@ internal class IrisServer(
             config = configManager,
         )
     }
+
+    private suspend fun handleConfigUpdate(call: ApplicationCall) {
+        val bodyResult = readProtectedRequestBody(call, MAX_CONFIG_REQUEST_BODY_BYTES)
+        if (!requireBotToken(call, method = "POST", body = bodyResult.body, bodySha256Hex = bodyResult.sha256Hex)) {
+            return
+        }
+
+        val name = call.parameters["name"] ?: throw ApiRequestException("missing config name")
+        val request = serverJson.decodeFromString<ConfigRequest>(bodyResult.body)
+        val updateOutcome = applyConfigUpdate(configManager, name, request)
+
+        if (!configManager.saveConfigNow()) {
+            throw ApiRequestException(
+                "failed to persist config update",
+                HttpStatusCode.InternalServerError,
+            )
+        }
+
+        call.respond(
+            configManager.configUpdateResponse(
+                name = updateOutcome.name,
+                persisted = true,
+                applied = updateOutcome.applied,
+                requiresRestart = updateOutcome.requiresRestart,
+            ),
+        )
+    }
 }
+
+private suspend fun readProtectedRequestBody(
+    call: ApplicationCall,
+    maxBodyBytes: Int,
+): RequestBodyReadResult =
+    readRequestBodyWithinLimit(
+        bodyChannel = call.receiveChannel(),
+        declaredContentLength = call.request.headers[HttpHeaders.ContentLength]?.toLongOrNull(),
+        maxBodyBytes = maxBodyBytes,
+    )
+
+private fun canonicalRequestTarget(
+    path: String,
+    queryParameters: Parameters,
+): String {
+    val encodedQuery =
+        queryParameters
+            .entries()
+            .asSequence()
+            .flatMap { (name, values) ->
+                if (values.isEmpty()) {
+                    sequenceOf(name.encodeURLParameter() to null)
+                } else {
+                    values.asSequence().map { value ->
+                        name.encodeURLParameter() to value.encodeURLParameter()
+                    }
+                }
+            }.sortedWith(compareBy({ it.first }, { it.second.orEmpty() }))
+            .joinToString("&") { (name, value) ->
+                if (value == null) {
+                    name
+                } else {
+                    "$name=$value"
+                }
+            }
+    return if (encodedQuery.isBlank()) path else "$path?$encodedQuery"
+}
+
+internal suspend fun readRequestBodyWithinLimit(
+    bodyChannel: ByteReadChannel,
+    declaredContentLength: Long?,
+    maxBodyBytes: Int,
+): RequestBodyReadResult {
+    if (declaredContentLength != null && declaredContentLength > maxBodyBytes) {
+        requestRejected("request body too large", HttpStatusCode.PayloadTooLarge)
+    }
+
+    val buffer = ByteArray(DEFAULT_BODY_READ_BUFFER_BYTES)
+    val output = java.io.ByteArrayOutputStream(minOf(maxBodyBytes, DEFAULT_BODY_READ_BUFFER_BYTES))
+    var totalRead = 0
+    while (true) {
+        val read = bodyChannel.readAvailable(buffer, 0, buffer.size)
+        if (read == -1) {
+            break
+        }
+        totalRead += read
+        if (totalRead > maxBodyBytes) {
+            requestRejected("request body too large", HttpStatusCode.PayloadTooLarge)
+        }
+        output.write(buffer, 0, read)
+    }
+    val bytes = output.toByteArray()
+    return RequestBodyReadResult(
+        body = bytes.toString(Charsets.UTF_8),
+        sha256Hex = sha256Hex(bytes),
+    )
+}
+
+private const val DEFAULT_BODY_READ_BUFFER_BYTES = 8 * 1024
+
+internal data class RequestBodyReadResult(
+    val body: String,
+    val sha256Hex: String,
+)
 
 internal class ApiRequestException(
     override val message: String,
@@ -715,7 +836,6 @@ internal fun buildQueryResponse(
         rowCount = effectiveRows.size,
         columns = queryResult.columns,
         rows = effectiveRows,
-        data = effectiveLegacyRows,
     )
 }
 

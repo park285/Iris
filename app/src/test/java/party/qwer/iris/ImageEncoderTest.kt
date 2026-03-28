@@ -1,8 +1,10 @@
 package party.qwer.iris
 
+import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 class ImageEncoderTest {
     @Test
@@ -71,5 +73,18 @@ class ImageEncoderTest {
         assertFailsWith<IllegalArgumentException> {
             require(oversized.length <= MAX_BASE64_IMAGE_PAYLOAD_LENGTH) { "payload exceeds size limit" }
         }
+    }
+
+    @Test
+    fun `saveImage writes file and leaves no temp file behind`() {
+        val outputDir = Files.createTempDirectory("iris-image-encoder").toFile()
+        val imageBytes = byteArrayOf(0x01, 0x02, 0x03)
+
+        val saved = saveImage(imageBytes, outputDir)
+
+        assertTrue(saved.exists())
+        assertEquals(imageBytes.toList(), saved.readBytes().toList())
+        assertTrue(outputDir.listFiles().orEmpty().none { it.name.endsWith(".tmp") })
+        outputDir.deleteRecursively()
     }
 }

@@ -34,6 +34,8 @@
 
 # 커스텀 KSerializer
 -keep class party.qwer.iris.util.IntAsStringSerializer { *; }
+-keep class party.qwer.iris.util.StrictLongSerializer { *; }
+-keep class party.qwer.iris.util.StrictIntSerializer { *; }
 
 # ── Ktor (ServiceLoader 기반 엔진 검색) ───────────────────────────────────
 -keep class io.ktor.server.netty.EngineMain { *; }
@@ -60,6 +62,9 @@
 
 # ── SLF4J (NOP 바인딩) ─────────────────────────────────────────────────────
 -dontwarn org.slf4j.**
+
+# ── Optional ServiceLoader entries bundled by transitive libs ─────────────
+-dontwarn reactor.blockhound.integration.BlockHoundIntegration
 
 # ── JVM management API (Android에 없음, Ktor 디버그 감지용) ─────────────────
 -dontwarn java.lang.management.ManagementFactory

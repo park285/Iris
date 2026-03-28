@@ -1,6 +1,5 @@
 package party.qwer.iris
 
-import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -15,9 +14,7 @@ class UdsImageBridgeClientTest {
         val responseBuffer = ByteArrayOutputStream()
         ImageBridgeProtocol.writeFrame(
             responseBuffer,
-            JSONObject().apply {
-                put("status", ImageBridgeProtocol.STATUS_SENT)
-            },
+            ImageBridgeProtocol.buildSuccessResponse(),
         )
         val fakeSocket =
             FakeBridgeSocket(
@@ -28,6 +25,7 @@ class UdsImageBridgeClientTest {
         val client =
             UdsImageBridgeClient(
                 socketName = "iris-image-bridge",
+                bridgeToken = "bridge-token",
                 socketFactory = { fakeSocket },
             )
 
@@ -45,8 +43,10 @@ class UdsImageBridgeClientTest {
         assertEquals(1, fakeSocket.connectCalls)
         assertEquals(30_000, fakeSocket.readTimeoutMs)
         assertTrue(fakeSocket.outputShutdown)
-        val request = ImageBridgeProtocol.readFrame(ByteArrayInputStream(fakeSocket.outputStream.toByteArray()))
-        assertEquals("req-1", request.getString("requestId"))
+        val request = ImageBridgeProtocol.readRequestFrame(ByteArrayInputStream(fakeSocket.outputStream.toByteArray()))
+        assertEquals("req-1", request.requestId)
+        assertEquals(ImageBridgeProtocol.PROTOCOL_VERSION, request.protocolVersion)
+        assertEquals("bridge-token", request.token)
     }
 
     @Test
@@ -95,49 +95,40 @@ class UdsImageBridgeClientTest {
         val responseBuffer = ByteArrayOutputStream()
         ImageBridgeProtocol.writeFrame(
             responseBuffer,
-            JSONObject().apply {
-                put("status", ImageBridgeProtocol.STATUS_OK)
-                put("running", true)
-                put("specReady", false)
-                put("restartCount", 2)
-                put("lastCrashMessage", "bind failed")
-                put(
-                    "discovery",
-                    JSONObject().apply {
-                        put("installAttempted", true)
-                        put(
-                            "hooks",
-                            org.json.JSONArray(
-                                listOf(
-                                    JSONObject().apply {
-                                        put("name", "bh.c#p")
-                                        put("installed", true)
-                                        put("invocationCount", 4)
-                                        put("lastSeenEpochMs", 99L)
-                                        put("lastSummary", "uris=2")
-                                    },
+            ImageBridgeProtocol.ImageBridgeResponse(
+                status = ImageBridgeProtocol.STATUS_OK,
+                running = true,
+                specReady = false,
+                checkedAtEpochMs = 1234L,
+                restartCount = 2,
+                lastCrashMessage = "bind failed",
+                discovery =
+                    ImageBridgeProtocol.ImageBridgeDiscovery(
+                        installAttempted = true,
+                        hooks =
+                            listOf(
+                                ImageBridgeProtocol.ImageBridgeDiscoveryHook(
+                                    name = "bh.c#p",
+                                    installed = true,
+                                    invocationCount = 4,
+                                    lastSeenEpochMs = 99L,
+                                    lastSummary = "uris=2",
                                 ),
                             ),
-                        )
-                    },
-                )
-                put(
-                    "checks",
-                    org.json.JSONArray(
-                        listOf(
-                            JSONObject().apply {
-                                put("name", "class bh.c")
-                                put("ok", true)
-                            },
-                            JSONObject().apply {
-                                put("name", "ChatMediaSender.p(...)")
-                                put("ok", false)
-                                put("detail", "method missing")
-                            },
+                    ),
+                checks =
+                    listOf(
+                        ImageBridgeProtocol.ImageBridgeCheck(
+                            name = "class bh.c",
+                            ok = true,
+                        ),
+                        ImageBridgeProtocol.ImageBridgeCheck(
+                            name = "ChatMediaSender.p(...)",
+                            ok = false,
+                            detail = "method missing",
                         ),
                     ),
-                )
-            },
+            ),
         )
 
         val client =
@@ -154,6 +145,7 @@ class UdsImageBridgeClientTest {
         assertTrue(result.reachable)
         assertTrue(result.running)
         assertFalse(result.specReady)
+        assertEquals(1234L, result.checkedAtEpochMs)
         assertEquals(2, result.restartCount)
         assertEquals("bind failed", result.lastCrashMessage)
         assertEquals(2, result.checks.size)

@@ -1,12 +1,16 @@
 package party.qwer.iris
 
 import kotlinx.coroutines.delay
+import java.io.File
+import java.nio.file.Files
+import java.util.Base64
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
@@ -310,6 +314,131 @@ class ReplyServiceTest {
     }
 
     @Test
+    fun `sendNativeMultiplePhotos rejects when image count exceeds limit`() {
+        val service = ReplyService(testConfig)
+        service.start()
+
+        val result =
+            service.sendNativeMultiplePhotos(
+                room = 18478615493603057L,
+                base64ImageDataStrings = List(9) { VALID_TEST_PNG_BASE64 },
+                threadId = null,
+                threadScope = null,
+            )
+
+        assertEquals(ReplyAdmissionStatus.INVALID_PAYLOAD, result.status)
+        service.shutdown()
+    }
+
+    @Test
+    fun `sendNativePhoto decodes payload only once`() {
+        val decodeCalls = AtomicInteger(0)
+        val latch = CountDownLatch(1)
+        val imageDir = Files.createTempDirectory("iris-reply-service").toFile()
+        val service =
+            ReplyService(
+                testConfig,
+                nativeImageReplySender =
+                    object : NativeImageReplySender {
+                        override fun send(
+                            roomId: Long,
+                            imagePaths: List<String>,
+                            threadId: Long?,
+                            threadScope: Int?,
+                            requestId: String?,
+                        ) {
+                            latch.countDown()
+                        }
+                    },
+                imageDecoder = { payload ->
+                    decodeCalls.incrementAndGet()
+                    Base64.getMimeDecoder().decode(payload)
+                },
+                mediaScanner = {},
+                imageDir = imageDir,
+            )
+        service.start()
+
+        val result =
+            service.sendNativePhoto(
+                room = 18478615493603057L,
+                base64ImageDataString = VALID_TEST_PNG_BASE64,
+                threadId = null,
+                threadScope = null,
+            )
+
+        assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
+        assertEquals(1, decodeCalls.get(), "validation should decode payload exactly once")
+        assertTrue(latch.await(5, TimeUnit.SECONDS))
+        service.shutdown()
+        imageDir.deleteRecursively()
+    }
+
+    @Test
+    fun `sendNativePhoto cleans up prepared files after successful native send`() {
+        val latch = CountDownLatch(1)
+        val imageDir = Files.createTempDirectory("iris-reply-cleanup").toFile()
+        val observedPaths = CopyOnWriteArrayList<String>()
+        val service =
+            ReplyService(
+                testConfig,
+                nativeImageReplySender =
+                    object : NativeImageReplySender {
+                        override fun send(
+                            roomId: Long,
+                            imagePaths: List<String>,
+                            threadId: Long?,
+                            threadScope: Int?,
+                            requestId: String?,
+                        ) {
+                            observedPaths += imagePaths
+                            latch.countDown()
+                        }
+                    },
+                mediaScanner = {},
+                imageDir = imageDir,
+            )
+        service.start()
+
+        val result =
+            service.sendNativePhoto(
+                room = 18478615493603057L,
+                base64ImageDataString = VALID_TEST_PNG_BASE64,
+                threadId = null,
+                threadScope = null,
+            )
+
+        assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
+        assertTrue(latch.await(5, TimeUnit.SECONDS))
+        var cleaned = false
+        repeat(20) {
+            if (observedPaths.isNotEmpty() && observedPaths.all { path -> !File(path).exists() }) {
+                cleaned = true
+                return@repeat
+            }
+            Thread.sleep(50)
+        }
+        assertTrue(observedPaths.isNotEmpty(), "native sender should observe prepared image paths")
+        assertTrue(cleaned, "prepared files should be cleaned after native send")
+        service.shutdown()
+        imageDir.deleteRecursively()
+    }
+
+    @Test
+    fun `validateImagePayloads rejects when decoded total exceeds limit`() {
+        val payloads = listOf("a", "b", "c")
+
+        assertFailsWith<IllegalArgumentException> {
+            validateImagePayloads(
+                payloads,
+                imageDecoder = { ByteArray(4) },
+                maxImagesPerRequest = 8,
+                maxTotalBytes = 10,
+            )
+        }
+    }
+
+    @Test
     fun `request id status advances through queue and send`() {
         val service = ReplyService(testConfig)
         service.start()
@@ -433,6 +562,37 @@ class ReplyServiceTest {
 
         assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
         assertTrue(latch.await(5, TimeUnit.SECONDS))
+        assertEquals(2, capturedScope.get())
+        service.shutdown()
+    }
+
+    @Test
+    fun `reply markdown alias uses shared text reply lane`() {
+        val shareStarts = AtomicInteger(0)
+        val capturedScope = AtomicInteger(-1)
+        val latch = CountDownLatch(1)
+        val service =
+            ReplyService(
+                testConfig,
+                sharedTextReplySender = { _, _, _, threadScope ->
+                    shareStarts.incrementAndGet()
+                    capturedScope.set(threadScope ?: -1)
+                    latch.countDown()
+                },
+            )
+        service.start()
+
+        val result =
+            service.sendReplyMarkdown(
+                room = 18478615493603057L,
+                msg = "**markdown alias**",
+                threadId = 3805486995143352321L,
+                threadScope = null,
+            )
+
+        assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
+        assertTrue(latch.await(5, TimeUnit.SECONDS))
+        assertEquals(1, shareStarts.get())
         assertEquals(2, capturedScope.get())
         service.shutdown()
     }

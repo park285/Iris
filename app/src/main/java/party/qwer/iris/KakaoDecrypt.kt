@@ -9,7 +9,7 @@ import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-// Kakaodecrypt : jiru/kakaodecrypt
+// 출처: jiru/kakaodecrypt
 
 class KakaoDecrypt {
     companion object {

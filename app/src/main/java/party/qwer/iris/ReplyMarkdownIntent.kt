@@ -1,6 +1,7 @@
 package party.qwer.iris
 
 import android.content.Intent
+import org.json.JSONObject
 import party.qwer.iris.model.ReplyType
 import java.util.UUID
 
@@ -55,7 +56,7 @@ internal fun buildReplyMarkdownIntentSpec(
         markdownParam = true,
         forceFlag = true,
         extraPackageName = "com.kakao.talk",
-        extraChatAttachment = "{\"callingPkg\":\"com.kakao.talk\",\"markdown\":true,\"f\":true}",
+        extraChatAttachment = buildReplyMarkdownAttachment(threadMetadata?.sessionId),
         innerAction = "com.kakao.talk.action.ACTION_SEND_CHAT_MESSAGE",
         innerMessageTypeValue = 1,
         room = room,
@@ -126,3 +127,16 @@ private fun Intent.putReplyMarkdownThreadMetadata(
     putExtra(ReplyMarkdownHookExtras.threadScope, metadata.threadScope)
     putExtra(ReplyMarkdownHookExtras.createdAt, metadata.createdAtEpochMs)
 }
+
+private fun buildReplyMarkdownAttachment(
+    sessionId: String?,
+): String =
+    JSONObject()
+        .apply {
+            put("callingPkg", "com.kakao.talk")
+            put("markdown", true)
+            put("f", true)
+            if (!sessionId.isNullOrBlank()) {
+                put("irisSessionId", sessionId)
+            }
+        }.toString()

@@ -14,7 +14,6 @@ class RoomSnapshotManager {
         val events = mutableListOf<Any>()
         val now = System.currentTimeMillis() / 1000
 
-        // Join events
         val joined = curr.memberIds - prev.memberIds
         for (uid in joined) {
             events.add(
@@ -30,7 +29,6 @@ class RoomSnapshotManager {
             )
         }
 
-        // Leave / kick events
         val left = prev.memberIds - curr.memberIds
         for (uid in left) {
             val isKicked = uid in curr.blindedIds && uid !in prev.blindedIds
@@ -47,7 +45,7 @@ class RoomSnapshotManager {
             )
         }
 
-        // Nickname changes (only for members still present)
+        // 닉네임 변경 (현재 재실 중인 멤버만 대상)
         val commonMembers = prev.memberIds.intersect(curr.memberIds)
         for (uid in commonMembers) {
             val oldNick = prev.nicknames[uid]
@@ -65,7 +63,6 @@ class RoomSnapshotManager {
                 )
             }
 
-            // Role changes
             val oldRole = prev.roles[uid]
             val newRole = curr.roles[uid]
             if (oldRole != null && newRole != null && oldRole != newRole) {
@@ -81,7 +78,6 @@ class RoomSnapshotManager {
                 )
             }
 
-            // Profile image changes
             val oldImg = prev.profileImages[uid]
             val newImg = curr.profileImages[uid]
             if (oldImg != newImg) {

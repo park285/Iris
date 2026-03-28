@@ -56,6 +56,7 @@ android {
                     "META-INF/*.md",
                     "META-INF/*.version",
                     "META-INF/DEPENDENCIES",
+                    "META-INF/services/reactor.blockhound.integration.BlockHoundIntegration",
                 )
         }
     }

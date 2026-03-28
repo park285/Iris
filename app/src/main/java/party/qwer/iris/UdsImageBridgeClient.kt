@@ -2,7 +2,6 @@ package party.qwer.iris
 
 import android.net.LocalSocket
 import android.net.LocalSocketAddress
-import org.json.JSONObject
 import party.qwer.iris.model.ImageBridgeDiscoveryHook
 import party.qwer.iris.model.ImageBridgeHealthCheck
 import party.qwer.iris.model.ImageBridgeHealthResult
@@ -82,6 +81,7 @@ internal class UdsImageBridgeClient(
     private val socketName: String = ImageBridgeProtocol.SOCKET_NAME,
     private val connectTimeoutMs: Int = 5_000,
     private val readTimeoutMs: Int = 30_000,
+    private val bridgeToken: String = System.getenv("IRIS_BRIDGE_TOKEN") ?: "",
     private val socketFactory: () -> BridgeSocket = { AndroidBridgeSocket() },
 ) {
     fun sendImage(
@@ -100,6 +100,7 @@ internal class UdsImageBridgeClient(
                         threadId,
                         threadScope,
                         requestId,
+                        bridgeToken,
                     ),
                 ),
             )
@@ -118,7 +119,7 @@ internal class UdsImageBridgeClient(
 
     fun queryHealth(): ImageBridgeHealthResult =
         try {
-            parseHealthResponse(exchange(ImageBridgeProtocol.buildHealthRequest()))
+            parseHealthResponse(exchange(ImageBridgeProtocol.buildHealthRequest(token = bridgeToken)))
         } catch (e: IOException) {
             ImageBridgeHealthResult(
                 reachable = false,
@@ -137,7 +138,7 @@ internal class UdsImageBridgeClient(
             )
         }
 
-    private fun exchange(request: JSONObject): JSONObject {
+    private fun exchange(request: ImageBridgeProtocol.ImageBridgeRequest): ImageBridgeProtocol.ImageBridgeResponse {
         val socket = socketFactory()
         try {
             try {
@@ -150,77 +151,64 @@ internal class UdsImageBridgeClient(
             ImageBridgeProtocol.writeFrame(socket.outputStream, request)
             socket.shutdownOutput()
 
-            return ImageBridgeProtocol.readFrame(socket.inputStream)
+            return ImageBridgeProtocol.readResponseFrame(socket.inputStream)
         } finally {
             runCatching { socket.close() }
         }
     }
 
-    private fun parseSendResponse(response: JSONObject): ImageBridgeResult {
-        val status = response.optString("status", "")
+    private fun parseSendResponse(response: ImageBridgeProtocol.ImageBridgeResponse): ImageBridgeResult {
+        val status = response.status
         return if (status == ImageBridgeProtocol.STATUS_SENT) {
             ImageBridgeResult(success = true)
         } else {
             ImageBridgeResult(
                 success = false,
-                error = response.optString("error", "unknown bridge error"),
+                error = response.error ?: "unknown bridge error",
             )
         }
     }
 
-    private fun parseHealthResponse(response: JSONObject): ImageBridgeHealthResult {
-        val status = response.optString("status", "")
+    private fun parseHealthResponse(response: ImageBridgeProtocol.ImageBridgeResponse): ImageBridgeHealthResult {
+        val status = response.status
         if (status != ImageBridgeProtocol.STATUS_OK) {
             return ImageBridgeHealthResult(
                 reachable = true,
                 running = false,
                 specReady = false,
                 restartCount = 0,
-                error = response.optString("error", "unknown bridge health error"),
+                error = response.error ?: "unknown bridge health error",
             )
         }
-        val checks =
-            response
-                .optJSONArray("checks")
-                ?.let { array ->
-                    List(array.length()) { index ->
-                        val item = array.getJSONObject(index)
-                        ImageBridgeHealthCheck(
-                            name = item.getString("name"),
-                            ok = item.getBoolean("ok"),
-                            detail = item.optString("detail").ifBlank { null },
-                        )
-                    }
-                }.orEmpty()
         return ImageBridgeHealthResult(
             reachable = true,
-            running = response.optBoolean("running", false),
-            specReady = response.optBoolean("specReady", false),
-            restartCount = response.optInt("restartCount", 0),
-            lastCrashMessage = response.optString("lastCrashMessage").ifBlank { null },
-            checks = checks,
-            discoveryInstallAttempted = response.optJSONObject("discovery")?.optBoolean("installAttempted", false) ?: false,
+            running = response.running ?: false,
+            specReady = response.specReady ?: false,
+            checkedAtEpochMs = response.checkedAtEpochMs,
+            restartCount = response.restartCount ?: 0,
+            lastCrashMessage = response.lastCrashMessage,
+            checks =
+                response.checks.map { item ->
+                    ImageBridgeHealthCheck(
+                        name = item.name,
+                        ok = item.ok,
+                        detail = item.detail,
+                    )
+                },
+            discoveryInstallAttempted = response.discovery?.installAttempted ?: false,
             discoveryHooks =
                 response
-                    .optJSONObject("discovery")
-                    ?.optJSONArray("hooks")
-                    ?.let { array ->
-                        List(array.length()) { index ->
-                            val item = array.getJSONObject(index)
-                            ImageBridgeDiscoveryHook(
-                                name = item.getString("name"),
-                                installed = item.getBoolean("installed"),
-                                installError = item.optString("installError").ifBlank { null },
-                                invocationCount = item.optInt("invocationCount", 0),
-                                lastSeenEpochMs =
-                                    if (item.has("lastSeenEpochMs")) {
-                                        item.getLong("lastSeenEpochMs")
-                                    } else {
-                                        null
-                                    },
-                                lastSummary = item.optString("lastSummary").ifBlank { null },
-                            )
-                        }
+                    .discovery
+                    ?.hooks
+                    ?.map { item ->
+                        ImageBridgeDiscoveryHook(
+                            name = item.name,
+                            installed = item.installed,
+                            installError = item.installError,
+                            invocationCount = item.invocationCount,
+                            lastSeenEpochMs = item.lastSeenEpochMs,
+                            lastSummary = item.lastSummary,
+                        )
                     }.orEmpty(),
         )
     }

@@ -1,5 +1,7 @@
 package party.qwer.iris
 
+import java.time.Instant
+
 object IrisLogger {
     enum class Level(
         val priority: Int,
@@ -15,7 +17,7 @@ object IrisLogger {
 
     fun error(message: String) {
         if (currentLevel.priority <= Level.ERROR.priority) {
-            System.err.println(message)
+            System.err.println(formatLogLine(level = "ERROR", message = message))
         }
     }
 
@@ -24,20 +26,20 @@ object IrisLogger {
         throwable: Throwable,
     ) {
         if (currentLevel.priority <= Level.ERROR.priority) {
-            System.err.println(message)
+            System.err.println(formatLogLine(level = "ERROR", message = message))
             System.err.println(throwable.stackTraceToString())
         }
     }
 
     fun info(message: String) {
         if (currentLevel.priority <= Level.INFO.priority) {
-            println(message)
+            println(formatLogLine(level = "INFO", message = message))
         }
     }
 
     fun debug(message: String) {
         if (currentLevel.priority <= Level.DEBUG.priority) {
-            println(message)
+            println(formatLogLine(level = "DEBUG", message = message))
         }
     }
 
@@ -45,9 +47,9 @@ object IrisLogger {
      * Lazy debug 로깅 - 로그 레벨이 DEBUG일 때만 messageProvider 평가.
      * 문자열 연결 오버헤드 방지.
      */
-    inline fun debugLazy(messageProvider: () -> String) {
+    fun debugLazy(messageProvider: () -> String) {
         if (currentLevel.priority <= Level.DEBUG.priority) {
-            println(messageProvider())
+            println(formatLogLine(level = "DEBUG", message = messageProvider()))
         }
     }
 }
@@ -60,3 +62,10 @@ internal fun parseIrisLogLevel(rawValue: String?): IrisLogger.Level {
 
     return IrisLogger.Level.entries.firstOrNull { it.name == normalized } ?: IrisLogger.Level.ERROR
 }
+
+internal fun formatLogLine(
+    level: String,
+    message: String,
+    threadName: String = Thread.currentThread().name,
+    now: () -> Instant = Instant::now,
+): String = "ts=${now()} level=$level thread=$threadName $message"

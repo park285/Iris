@@ -4,6 +4,8 @@ package party.qwer.iris
 
 import android.os.IBinder
 import android.service.notification.StatusBarNotification
+import java.lang.reflect.Method
+import java.util.concurrent.ConcurrentHashMap
 
 interface ActiveNotificationFeed {
     fun snapshot(): List<StatusBarNotification>
@@ -32,6 +34,8 @@ class HiddenNotificationFeed(
     private val notificationManagerMethods by lazy(LazyThreadSafetyMode.PUBLICATION) {
         notificationManager.javaClass.methods
     }
+    private val resolvedMethods = ConcurrentHashMap<NotificationQuery, Method?>()
+    private val listMethodCache = ConcurrentHashMap<Class<*>, Method?>()
 
     override fun snapshot(): List<StatusBarNotification> {
         val manager = runCatching { notificationManager }.getOrNull() ?: return emptyList()
@@ -74,12 +78,14 @@ class HiddenNotificationFeed(
         query: NotificationQuery,
     ): Any? {
         val method =
-            notificationManagerMethods.firstOrNull { candidate ->
-                candidate.name == query.methodName &&
-                    candidate.parameterTypes.size == query.args.size &&
-                    candidate.parameterTypes.indices.all { index ->
-                        isCompatible(candidate.parameterTypes[index], query.args[index])
-                    }
+            resolvedMethods.getOrPut(query) {
+                notificationManagerMethods.firstOrNull { candidate ->
+                    candidate.name == query.methodName &&
+                        candidate.parameterTypes.size == query.args.size &&
+                        candidate.parameterTypes.indices.all { index ->
+                            isCompatible(candidate.parameterTypes[index], query.args[index])
+                        }
+                }
             } ?: return null
 
         return method.invoke(receiver, *query.args)
@@ -103,8 +109,10 @@ class HiddenNotificationFeed(
             is Iterable<*> -> result.filterIsInstance<StatusBarNotification>()
             else -> {
                 val getList =
-                    result.javaClass.methods.firstOrNull {
-                        it.name == "getList" && it.parameterCount == 0
+                    listMethodCache.getOrPut(result.javaClass) {
+                        result.javaClass.methods.firstOrNull {
+                            it.name == "getList" && it.parameterCount == 0
+                        }
                     } ?: return emptyList()
 
                 unwrap(runCatching { getList.invoke(result) }.getOrNull())

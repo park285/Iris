@@ -1,6 +1,9 @@
 package party.qwer.iris
 
 import java.io.File
+import java.io.FileOutputStream
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.Base64
 import java.util.UUID
 
@@ -13,10 +16,33 @@ internal fun decodeBase64Image(base64ImageDataString: String): ByteArray = base6
 internal fun saveImage(
     imageBytes: ByteArray,
     outputDir: File,
-): File =
-    File(outputDir, "${UUID.randomUUID()}.${detectImageFileExtension(imageBytes)}").apply {
-        writeBytes(imageBytes)
+): File {
+    val extension = detectImageFileExtension(imageBytes)
+    val tempFile = File(outputDir, "${UUID.randomUUID()}.$extension.tmp")
+    val targetFile = File(outputDir, "${UUID.randomUUID()}.$extension")
+    try {
+        FileOutputStream(tempFile).use { output ->
+            output.write(imageBytes)
+            output.fd.sync()
+        }
+        Files.move(
+            tempFile.toPath(),
+            targetFile.toPath(),
+            StandardCopyOption.ATOMIC_MOVE,
+        )
+        return targetFile
+    } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+        Files.move(
+            tempFile.toPath(),
+            targetFile.toPath(),
+            StandardCopyOption.REPLACE_EXISTING,
+        )
+        return targetFile
+    } catch (error: Exception) {
+        tempFile.delete()
+        throw error
     }
+}
 
 internal fun detectImageFileExtension(imageBytes: ByteArray): String {
     if (isPngSignature(imageBytes)) {

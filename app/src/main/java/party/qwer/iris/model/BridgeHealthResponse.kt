@@ -24,6 +24,7 @@ data class ImageBridgeHealthResult(
     val reachable: Boolean,
     val running: Boolean,
     val specReady: Boolean,
+    val checkedAtEpochMs: Long? = null,
     val restartCount: Int,
     val lastCrashMessage: String? = null,
     val checks: List<ImageBridgeHealthCheck> = emptyList(),

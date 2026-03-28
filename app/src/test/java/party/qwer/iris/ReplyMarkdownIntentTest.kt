@@ -1,6 +1,7 @@
 package party.qwer.iris
 
 import android.content.Intent
+import org.json.JSONObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -23,7 +24,10 @@ class ReplyMarkdownIntentTest {
         assertTrue(spec.markdownParam)
         assertTrue(spec.forceFlag)
         assertEquals("com.kakao.talk", spec.extraPackageName)
-        assertEquals("{\"callingPkg\":\"com.kakao.talk\",\"markdown\":true,\"f\":true}", spec.extraChatAttachment)
+        val attachment = JSONObject(spec.extraChatAttachment)
+        assertEquals("com.kakao.talk", attachment.getString("callingPkg"))
+        assertTrue(attachment.getBoolean("markdown"))
+        assertTrue(attachment.getBoolean("f"))
         assertEquals("com.kakao.talk.action.ACTION_SEND_CHAT_MESSAGE", spec.innerAction)
         assertEquals(1, spec.innerMessageTypeValue)
         assertEquals(18476130232878491L, spec.room)
@@ -61,5 +65,6 @@ class ReplyMarkdownIntentTest {
             )
 
         assertEquals(metadata, spec.threadMetadata)
+        assertTrue(spec.extraChatAttachment.contains("\"irisSessionId\":\"session-1\""))
     }
 }

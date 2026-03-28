@@ -44,7 +44,8 @@ internal class ReplyService(
     private val sharedTextReplySender: (Long, CharSequence, Long?, Int?) -> Unit = { room, preparedMessage, threadId, threadScope ->
         dispatchSharedTextReply(startActivityAs, room, preparedMessage, threadId, threadScope)
     },
-    private val mediaScanner: (Uri) -> Unit = ::broadcastMediaScan,
+    private val mediaScanner: (File) -> Unit = { file -> broadcastMediaScan(android.net.Uri.fromFile(file)) },
+    private val imageDecoder: (String) -> ByteArray = ::decodeBase64Image,
     private val imageDir: File = File(IRIS_IMAGE_DIR_PATH),
 ) : MessageSender {
     private companion object {
@@ -53,6 +54,8 @@ internal class ReplyService(
         private const val WORKER_IDLE_TIMEOUT_MS = 60_000L
         private const val SHUTDOWN_TIMEOUT_MS = 10_000L
         private const val LOG_MESSAGE_PREVIEW_LENGTH = 30
+        private const val MAX_IMAGES_PER_REQUEST = 8
+        private const val MAX_TOTAL_IMAGE_PAYLOAD_BYTES_PER_REQUEST = 30 * 1024 * 1024
         private val zeroWidthCharacters = setOf('\u200B', '\u200C', '\u200D', '\u2060', '\uFEFF')
         private const val zeroWidthNoBreakSpace = "\uFEFF"
     }
@@ -186,7 +189,9 @@ internal class ReplyService(
         threadScope: Int?,
         requestId: String?,
     ): ReplyAdmissionResult {
-        IrisLogger.debugLazy { "[ReplyService] sendMessage called: chatId=$chatId, msg='${msg.take(LOG_MESSAGE_PREVIEW_LENGTH)}...'" }
+        IrisLogger.debugLazy {
+            "[ReplyService] sendMessage called: chatId=$chatId messageLength=${msg.length} messageHash=${msg.stableLogHash()}"
+        }
         return enqueueRequest(
             chatId,
             threadId,
@@ -246,12 +251,7 @@ internal class ReplyService(
     ): ReplyAdmissionResult {
         val validatedPayloads =
             try {
-                require(base64ImageDataStrings.isNotEmpty()) { "no image data provided" }
-                base64ImageDataStrings.map { base64 ->
-                    require(base64.length <= MAX_BASE64_IMAGE_PAYLOAD_LENGTH) { "payload exceeds size limit" }
-                    require(isDecodableBase64Payload(base64)) { "payload is not decodable base64" }
-                    base64
-                }
+                validateImagePayloads(base64ImageDataStrings, imageDecoder)
             } catch (_: IllegalArgumentException) {
                 return ReplyAdmissionResult(
                     ReplyAdmissionStatus.INVALID_PAYLOAD,
@@ -270,20 +270,18 @@ internal class ReplyService(
                 override suspend fun prepare() {
                     IrisLogger.info("[ReplyService] preparing image reply room=$room threadId=$threadId imageCount=${validatedPayloads.size}")
                     ensureImageDir(imageDir)
-                    val uris = ArrayList<Uri>(validatedPayloads.size)
+                    val imagePaths = ArrayList<String>(validatedPayloads.size)
                     val createdFiles = ArrayList<File>(validatedPayloads.size)
                     try {
-                        validatedPayloads.forEach { base64 ->
-                            val imageBytes = decodeBase64Image(base64)
-                            val imageFile = saveImage(imageBytes, imageDir)
+                        validatedPayloads.forEach { payload ->
+                            val imageFile = saveImage(payload.bytes, imageDir)
                             createdFiles.add(imageFile)
-                            val imageUri = Uri.fromFile(imageFile)
                             if (imageMediaScanEnabled) {
-                                mediaScanner(imageUri)
+                                mediaScanner(imageFile)
                             }
-                            uris.add(imageUri)
+                            imagePaths.add(imageFile.absolutePath)
                         }
-                        require(uris.isNotEmpty()) { "no image URIs created" }
+                        require(imagePaths.isNotEmpty()) { "no image paths created" }
                     } catch (e: Exception) {
                         createdFiles.forEach { file ->
                             if (file.exists() && !file.delete()) {
@@ -292,7 +290,7 @@ internal class ReplyService(
                         }
                         throw e
                     }
-                    preparedImages = PreparedImages(room = room, uris = uris, files = createdFiles)
+                    preparedImages = PreparedImages(room = room, imagePaths = imagePaths, files = createdFiles)
                 }
 
                 override suspend fun send() {
@@ -465,10 +463,10 @@ internal class ReplyService(
         requestId: String?,
     ) {
         try {
-            IrisLogger.info("[ReplyService] sendPreparedImagesNative room=${preparedImages.room} threadId=$threadId scope=$threadScope uriCount=${preparedImages.uris.size} requestId=$requestId")
+            IrisLogger.info("[ReplyService] sendPreparedImagesNative room=${preparedImages.room} threadId=$threadId scope=$threadScope imageCount=${preparedImages.imagePaths.size} requestId=$requestId")
             nativeImageReplySender.send(
                 roomId = preparedImages.room,
-                uris = preparedImages.uris,
+                imagePaths = preparedImages.imagePaths,
                 threadId = threadId,
                 threadScope = threadScope,
                 requestId = requestId,
@@ -476,6 +474,8 @@ internal class ReplyService(
         } catch (e: Exception) {
             IrisLogger.error("Error sending native reply-image: $e")
             throw e
+        } finally {
+            cleanupPreparedImages(preparedImages)
         }
     }
 
@@ -489,7 +489,7 @@ internal class ReplyService(
         msg: String,
         threadId: Long?,
         threadScope: Int?,
-    ) = sendTextViaShareInternal(room, msg, threadId, threadScope)
+    ) = sendTextViaShareInternal(room, msg, threadId, threadScope ?: if (threadId != null) 2 else null)
 
     private fun sendTextViaShareInternal(
         room: Long,
@@ -523,16 +523,38 @@ internal class ReplyService(
 
     private fun mutexFor(lane: ReplySendLane): Mutex = laneMutexes.getValue(lane)
 
-    private fun isDecodableBase64Payload(value: String): Boolean = runCatching { decodeBase64Image(value) }.isSuccess
-
     internal fun replyStatusOrNull(requestId: String): ReplyStatusSnapshot? = statusStore.get(requestId)
 }
 
+internal data class DecodedImagePayload(
+    val bytes: ByteArray,
+)
+
 private data class PreparedImages(
     val room: Long,
-    val uris: ArrayList<Uri>,
+    val imagePaths: ArrayList<String>,
     val files: ArrayList<File>,
 )
+
+internal fun validateImagePayloads(
+    base64ImageDataStrings: List<String>,
+    imageDecoder: (String) -> ByteArray = ::decodeBase64Image,
+    maxImagesPerRequest: Int = 8,
+    maxTotalBytes: Int = 30 * 1024 * 1024,
+): List<DecodedImagePayload> {
+    require(base64ImageDataStrings.isNotEmpty()) { "no image data provided" }
+    require(base64ImageDataStrings.size <= maxImagesPerRequest) { "too many images" }
+
+    var totalBytes = 0
+    return base64ImageDataStrings.map { base64 ->
+        require(base64.length <= MAX_BASE64_IMAGE_PAYLOAD_LENGTH) { "payload exceeds size limit" }
+        val decodedBytes = imageDecoder(base64)
+        require(decodedBytes.size <= MAX_IMAGE_PAYLOAD_BYTES) { "payload exceeds size limit" }
+        totalBytes += decodedBytes.size
+        require(totalBytes <= maxTotalBytes) { "payload exceeds total size limit" }
+        DecodedImagePayload(bytes = decodedBytes)
+    }
+}
 
 private fun dispatchNotificationReply(
     startService: (Intent) -> Unit,
@@ -615,9 +637,9 @@ private fun cleanupPreparedImages(preparedImages: PreparedImages) {
     }
 }
 
-// Android Q+ deprecated ACTION_MEDIA_SCANNER_SCAN_FILE
-// Context 없는 환경이므로 MediaScannerConnection 사용 불가
-// shell context에서 broadcast 방식 유지
+// Android Q 이상에서 ACTION_MEDIA_SCANNER_SCAN_FILE은 deprecated됨.
+// Context 없는 환경이므로 MediaScannerConnection 사용 불가.
+// shell context에서 broadcast 방식을 유지한다.
 @Suppress("DEPRECATION")
 private fun broadcastMediaScan(uri: Uri) {
     val mediaScanIntent =
