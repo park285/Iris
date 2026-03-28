@@ -434,39 +434,109 @@ class MemberRepository(
     private fun resolveObservedDisplayName(
         userId: Long,
         chatId: Long?,
-    ): String? {
-        if (chatId != null) {
-            try {
-                executeQuery(
-                    """
-                    SELECT display_name
-                    FROM db3.observed_profile_user_links
-                    WHERE user_id = ? AND chat_id = ?
-                    ORDER BY updated_at DESC
-                    LIMIT 1
-                    """.trimIndent(),
-                    arrayOf(userId.toString(), chatId.toString()),
-                    1,
-                ).firstOrNull()?.get("display_name")?.takeIf { it.isNotBlank() }?.let { return it }
-            } catch (_: Exception) {
-                // 일부 테스트 또는 런타임 구성에서 db3가 attach되지 않을 수 있음
-            }
-        }
+    ): String? = resolveObservedDisplayNamesBatch(listOf(userId), chatId)[userId]
+
+    private fun resolveObservedDisplayNamesBatch(
+        userIds: Collection<Long>,
+        chatId: Long?,
+    ): Map<Long, String> {
+        val orderedIds = userIds.distinct().filter { it > 0L }
+        if (orderedIds.isEmpty()) return emptyMap()
+
         return try {
+            val placeholders = orderedIds.joinToString(",") { "?" }
+            val querySpec =
+                if (chatId != null) {
+                    """
+                    SELECT user_id, display_name
+                    FROM db3.observed_profile_user_links
+                    WHERE chat_id = ? AND user_id IN ($placeholders)
+                    ORDER BY user_id ASC, updated_at DESC
+                    """.trimIndent() to
+                        buildList<String?> {
+                            add(chatId.toString())
+                            addAll(orderedIds.map { it.toString() })
+                        }.toTypedArray<String?>()
+                } else {
+                    """
+                    SELECT user_id, display_name
+                    FROM db3.observed_profile_user_links
+                    WHERE user_id IN ($placeholders)
+                    ORDER BY user_id ASC, updated_at DESC
+                    """.trimIndent() to
+                        orderedIds.map { it.toString() }.toTypedArray<String?>()
+                }
+            val sql = querySpec.first
+            val bindArgs = querySpec.second
+
+            val result = LinkedHashMap<Long, String>()
+            executeQuery(sql, bindArgs, orderedIds.size).forEach { row ->
+                val userId = row["user_id"]?.toLongOrNull() ?: return@forEach
+                val displayName = row["display_name"]?.takeIf { it.isNotBlank() } ?: return@forEach
+                result.putIfAbsent(userId, displayName)
+            }
+            result
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    internal fun resolveNicknamesBatch(
+        userIds: Collection<Long>,
+        linkId: Long? = null,
+        chatId: Long? = null,
+    ): Map<Long, String> {
+        val orderedIds = userIds.distinct().filter { it > 0L }
+        if (orderedIds.isEmpty()) return emptyMap()
+
+        val resolved = LinkedHashMap<Long, String>(orderedIds.size)
+        var unresolved = orderedIds.toSet()
+
+        if (linkId != null && unresolved.isNotEmpty()) {
+            val bindArgs =
+                buildList<String?> {
+                    add(linkId.toString())
+                    addAll(unresolved.map { it.toString() })
+                }.toTypedArray()
+            val placeholders = unresolved.joinToString(",") { "?" }
+
             executeQuery(
                 """
-                SELECT display_name
-                FROM db3.observed_profile_user_links
-                WHERE user_id = ?
-                ORDER BY updated_at DESC
-                LIMIT 1
+                SELECT user_id, nickname, enc
+                FROM db2.open_chat_member
+                WHERE link_id = ? AND user_id IN ($placeholders)
                 """.trimIndent(),
-                arrayOf(userId.toString()),
-                1,
-            ).firstOrNull()?.get("display_name")?.takeIf { it.isNotBlank() }
-        } catch (_: Exception) {
-            null
+                bindArgs,
+                unresolved.size,
+            ).forEach { row ->
+                val userId = row["user_id"]?.toLongOrNull() ?: return@forEach
+                val rawNick = row["nickname"] ?: return@forEach
+                val enc = row["enc"]?.toIntOrNull() ?: 0
+                resolved[userId] = if (enc > 0) decrypt(enc, rawNick, botId) else rawNick
+            }
+            unresolved = unresolved - resolved.keys
         }
+
+        if (unresolved.isNotEmpty()) {
+            val placeholders = unresolved.joinToString(",") { "?" }
+            executeQuery(
+                "SELECT id, name, enc FROM db2.friends WHERE id IN ($placeholders)",
+                unresolved.map { it.toString() }.toTypedArray(),
+                unresolved.size,
+            ).forEach { row ->
+                val userId = row["id"]?.toLongOrNull() ?: return@forEach
+                val rawName = row["name"] ?: return@forEach
+                val enc = row["enc"]?.toIntOrNull() ?: 0
+                resolved[userId] = if (enc > 0) decrypt(enc, rawName, botId) else rawName
+            }
+            unresolved = unresolved - resolved.keys
+        }
+
+        if (unresolved.isNotEmpty()) {
+            resolved.putAll(resolveObservedDisplayNamesBatch(unresolved, chatId))
+        }
+
+        return orderedIds.associateWith { userId -> resolved[userId] ?: userId.toString() }
     }
 
     private fun loadMemberActivityByUser(
@@ -561,7 +631,10 @@ class MemberRepository(
         if (memberIds.isEmpty()) {
             return roomType
         }
-        val names = memberIds.mapNotNull { resolveNickname(it) }.filter { it.isNotBlank() }
+        val names =
+            resolveNicknamesBatch(memberIds.toList(), chatId = chatId)
+                .values
+                .filter { it.isNotBlank() }
         if (names.isEmpty()) {
             return roomType
         }
@@ -669,12 +742,9 @@ class MemberRepository(
             row["profile_image_url"]?.let { profileImages[uid] = it }
         }
 
-        if (linkId == null) {
-            memberIds.forEach { userId ->
-                val resolvedNickname = resolveDisplayName(userId = userId, chatId = chatId, linkId = null)
-                if (resolvedNickname.isNotBlank() && resolvedNickname != userId.toString()) {
-                    nicknames[userId] = resolvedNickname
-                }
+        resolveNicknamesBatch(memberIds, linkId = linkId, chatId = chatId).forEach { (userId, nickname) ->
+            if (nickname.isNotBlank() && nickname != userId.toString()) {
+                nicknames[userId] = nickname
             }
         }
 

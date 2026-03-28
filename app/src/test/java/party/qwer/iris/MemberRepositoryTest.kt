@@ -389,8 +389,8 @@ class MemberRepositoryTest {
                                     "members" to "[267947734]",
                                 ),
                             )
-                        sqlQuery == "SELECT name, enc FROM db2.friends WHERE id = ? LIMIT 1" && bindArgs?.toList() == listOf("267947734") ->
-                            listOf(mapOf("name" to "카푸", "enc" to "0"))
+                        sqlQuery.contains("SELECT id, name, enc FROM db2.friends WHERE id IN (?)") && bindArgs?.toList() == listOf("267947734") ->
+                            listOf(mapOf("id" to "267947734", "name" to "카푸", "enc" to "0"))
                         else -> emptyList()
                     }
                 },
@@ -538,7 +538,7 @@ class MemberRepositoryTest {
                                 ),
                             )
                         sqlQuery.contains("FROM db3.observed_profiles") &&
-                            bindArgs?.toList() == listOf("%|464252100463241|%") ->
+                            bindArgs?.toList() == listOf("464252100463241") ->
                             listOf(
                                 mapOf(
                                     "display_name" to "박준우",
@@ -578,7 +578,7 @@ class MemberRepositoryTest {
                                 mapOf("user_id" to "438562408", "message_count" to "1", "last_active" to "1001"),
                             )
                         sqlQuery.contains("FROM db3.observed_profiles") &&
-                            bindArgs?.toList() == listOf("%|464252100463241|%") ->
+                            bindArgs?.toList() == listOf("464252100463241") ->
                             listOf(
                                 mapOf(
                                     "display_name" to "박준우",
@@ -620,8 +620,8 @@ class MemberRepositoryTest {
                                 mapOf("user_id" to "203887151", "message_count" to "1", "last_active" to "1000"),
                             )
                         sqlQuery.contains("FROM db3.observed_profile_user_links") &&
-                            bindArgs?.toList() == listOf("203887151", "366795577484293") ->
-                            listOf(mapOf("display_name" to "재균"))
+                            bindArgs?.toList() == listOf("366795577484293", "203887151") ->
+                            listOf(mapOf("user_id" to "203887151", "display_name" to "재균"))
                         else -> emptyList()
                     }
                 },
@@ -644,8 +644,8 @@ class MemberRepositoryTest {
                     when {
                         sqlQuery == "SELECT name, enc FROM db2.friends WHERE id = ? LIMIT 1" -> emptyList()
                         sqlQuery.contains("FROM db3.observed_profile_user_links") &&
-                            bindArgs?.toList() == listOf("203887151", "366795577484293") ->
-                            listOf(mapOf("display_name" to "재균"))
+                            bindArgs?.toList() == listOf("366795577484293", "203887151") ->
+                            listOf(mapOf("user_id" to "203887151", "display_name" to "재균"))
                         else -> emptyList()
                     }
                 },
@@ -840,19 +840,12 @@ class MemberRepositoryTest {
                                     "link_id" to null,
                                 ),
                             )
-                        sqlQuery == "SELECT name, enc FROM db2.friends WHERE id = ? LIMIT 1" -> emptyList()
-                        sqlQuery.contains("FROM db3.observed_profile_user_links") &&
-                            bindArgs?.toList() == listOf("203887151", "366795577484293") ->
-                            listOf(mapOf("display_name" to "재균"))
-                        sqlQuery.contains("FROM db3.observed_profile_user_links") &&
-                            bindArgs?.toList() == listOf("243338321", "366795577484293") ->
+                        sqlQuery.contains("SELECT id, name, enc FROM db2.friends WHERE id IN (?,?)") &&
+                            bindArgs?.toList() == listOf("203887151", "243338321") ->
                             emptyList()
                         sqlQuery.contains("FROM db3.observed_profile_user_links") &&
-                            bindArgs?.toList() == listOf("203887151") ->
-                            listOf(mapOf("display_name" to "재균"))
-                        sqlQuery.contains("FROM db3.observed_profile_user_links") &&
-                            bindArgs?.toList() == listOf("243338321") ->
-                            emptyList()
+                            bindArgs?.toList() == listOf("366795577484293", "203887151", "243338321") ->
+                            listOf(mapOf("user_id" to "203887151", "display_name" to "재균"))
                         else -> emptyList()
                     }
                 },

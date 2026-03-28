@@ -257,10 +257,12 @@ class ObserverHelperLogicTest {
             MemberRepository(
                 executeQuery = { sqlQuery, bindArgs, _ ->
                     when {
-                        sqlQuery == "SELECT name, enc FROM db2.friends WHERE id = ? LIMIT 1" -> emptyList()
+                        sqlQuery.contains("SELECT id, name, enc FROM db2.friends WHERE id IN (?)") &&
+                            bindArgs?.toList() == listOf("203887151") ->
+                            emptyList()
                         sqlQuery.contains("FROM db3.observed_profile_user_links") &&
-                            bindArgs?.toList() == listOf("203887151", "366795577484293") ->
-                            listOf(mapOf("display_name" to "재균"))
+                            bindArgs?.toList() == listOf("366795577484293", "203887151") ->
+                            listOf(mapOf("user_id" to "203887151", "display_name" to "재균"))
                         else -> emptyList()
                     }
                 },
