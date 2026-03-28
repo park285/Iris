@@ -1,6 +1,5 @@
 package party.qwer.iris
 
-import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
@@ -9,156 +8,143 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
-import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class ImageBridgeProtocolTest {
     @Test
-    fun `writeFrame then readFrame roundtrips`() {
-        val original =
-            JSONObject().apply {
-                put("action", "send_image")
-                put("roomId", 12345L)
-            }
-        val buffer = ByteArrayOutputStream()
-        ImageBridgeProtocol.writeFrame(buffer, original)
-
-        val restored = ImageBridgeProtocol.readFrame(ByteArrayInputStream(buffer.toByteArray()))
-        assertEquals("send_image", restored.getString("action"))
-        assertEquals(12345L, restored.getLong("roomId"))
-    }
-
-    @Test
-    fun `readFrame rejects frame exceeding max size`() {
-        val buffer = ByteArrayOutputStream()
-        DataOutputStream(buffer).writeInt(ImageBridgeProtocol.MAX_FRAME_SIZE + 1)
-        assertFailsWith<IllegalArgumentException> {
-            ImageBridgeProtocol.readFrame(ByteArrayInputStream(buffer.toByteArray()))
-        }
-    }
-
-    @Test
-    fun `readFrame rejects zero-length frame`() {
-        val buffer = ByteArrayOutputStream()
-        DataOutputStream(buffer).writeInt(0)
-        assertFailsWith<IllegalArgumentException> {
-            ImageBridgeProtocol.readFrame(ByteArrayInputStream(buffer.toByteArray()))
-        }
-    }
-
-    @Test
-    fun `readFrame rejects negative frame size`() {
-        val buffer = ByteArrayOutputStream()
-        DataOutputStream(buffer).writeInt(-1)
-        assertFailsWith<IllegalArgumentException> {
-            ImageBridgeProtocol.readFrame(ByteArrayInputStream(buffer.toByteArray()))
-        }
-    }
-
-    @Test
-    fun `readFrame throws on truncated payload`() {
-        val buffer = ByteArrayOutputStream()
-        val dos = DataOutputStream(buffer)
-        dos.writeInt(100)
-        dos.write(ByteArray(10))
-        assertFailsWith<EOFException> {
-            ImageBridgeProtocol.readFrame(ByteArrayInputStream(buffer.toByteArray()))
-        }
-    }
-
-    @Test
-    fun `buildSendImageRequest includes all fields`() {
+    fun `typed request frame roundtrips`() {
         val request =
             ImageBridgeProtocol.buildSendImageRequest(
                 roomId = 999L,
                 imagePaths = listOf("/a.png", "/b.png"),
                 threadId = 42L,
                 threadScope = 2,
+                requestId = "req-1",
+                token = "bridge-token",
             )
-        assertEquals("send_image", request.getString("action"))
-        assertEquals(999L, request.getLong("roomId"))
-        assertEquals(2, request.getJSONArray("imagePaths").length())
-        assertEquals("/a.png", request.getJSONArray("imagePaths").getString(0))
-        assertEquals(42L, request.getLong("threadId"))
-        assertEquals(2, request.getInt("threadScope"))
+        val buffer = ByteArrayOutputStream()
+
+        ImageBridgeProtocol.writeFrame(buffer, request)
+
+        val restored = ImageBridgeProtocol.readRequestFrame(ByteArrayInputStream(buffer.toByteArray()))
+        assertEquals(ImageBridgeProtocol.ACTION_SEND_IMAGE, restored.action)
+        assertEquals(ImageBridgeProtocol.PROTOCOL_VERSION, restored.protocolVersion)
+        assertEquals(999L, restored.roomId)
+        assertEquals(listOf("/a.png", "/b.png"), restored.imagePaths)
+        assertEquals(42L, restored.threadId)
+        assertEquals(2, restored.threadScope)
+        assertEquals("req-1", restored.requestId)
+        assertEquals("bridge-token", restored.token)
     }
 
     @Test
-    fun `buildSendImageRequest omits null threadId and threadScope`() {
-        val request =
-            ImageBridgeProtocol.buildSendImageRequest(
-                roomId = 1L,
-                imagePaths = listOf("/x.png"),
-                threadId = null,
-                threadScope = null,
+    fun `typed response frame roundtrips`() {
+        val response =
+            ImageBridgeProtocol.ImageBridgeResponse(
+                status = ImageBridgeProtocol.STATUS_OK,
+                running = true,
+                specReady = false,
+                checkedAtEpochMs = 1234L,
+                restartCount = 2,
             )
-        assertTrue(!request.has("threadId"))
-        assertTrue(!request.has("threadScope"))
+        val buffer = ByteArrayOutputStream()
+
+        ImageBridgeProtocol.writeFrame(buffer, response)
+
+        val restored = ImageBridgeProtocol.readResponseFrame(ByteArrayInputStream(buffer.toByteArray()))
+        assertEquals(ImageBridgeProtocol.STATUS_OK, restored.status)
+        assertTrue(restored.running == true)
+        assertFalse(restored.specReady == true)
+        assertEquals(1234L, restored.checkedAtEpochMs)
+        assertEquals(2, restored.restartCount)
+    }
+
+    @Test
+    fun `readResponseFrame rejects frame exceeding max size`() {
+        val buffer = ByteArrayOutputStream()
+        DataOutputStream(buffer).writeInt(ImageBridgeProtocol.MAX_FRAME_SIZE + 1)
+        assertFailsWith<IllegalArgumentException> {
+            ImageBridgeProtocol.readResponseFrame(ByteArrayInputStream(buffer.toByteArray()))
+        }
+    }
+
+    @Test
+    fun `readRequestFrame rejects zero-length frame`() {
+        val buffer = ByteArrayOutputStream()
+        DataOutputStream(buffer).writeInt(0)
+        assertFailsWith<IllegalArgumentException> {
+            ImageBridgeProtocol.readRequestFrame(ByteArrayInputStream(buffer.toByteArray()))
+        }
+    }
+
+    @Test
+    fun `readResponseFrame rejects negative frame size`() {
+        val buffer = ByteArrayOutputStream()
+        DataOutputStream(buffer).writeInt(-1)
+        assertFailsWith<IllegalArgumentException> {
+            ImageBridgeProtocol.readResponseFrame(ByteArrayInputStream(buffer.toByteArray()))
+        }
+    }
+
+    @Test
+    fun `readResponseFrame throws on truncated payload`() {
+        val buffer = ByteArrayOutputStream()
+        val dos = DataOutputStream(buffer)
+        dos.writeInt(100)
+        dos.write(ByteArray(10))
+        assertFailsWith<EOFException> {
+            ImageBridgeProtocol.readResponseFrame(ByteArrayInputStream(buffer.toByteArray()))
+        }
+    }
+
+    @Test
+    fun `buildHealthRequest includes protocol metadata`() {
+        val request = ImageBridgeProtocol.buildHealthRequest(token = "bridge-token")
+
+        assertEquals(ImageBridgeProtocol.ACTION_HEALTH, request.action)
+        assertEquals(ImageBridgeProtocol.PROTOCOL_VERSION, request.protocolVersion)
+        assertEquals("bridge-token", request.token)
     }
 
     @Test
     fun `buildSuccessResponse has sent status`() {
         val response = ImageBridgeProtocol.buildSuccessResponse()
-        assertEquals("sent", response.getString("status"))
-    }
-
-    @Test
-    fun `frame wire format is 4-byte big-endian length plus UTF-8 JSON`() {
-        val json = JSONObject().apply { put("key", "value") }
-        val buffer = ByteArrayOutputStream()
-        ImageBridgeProtocol.writeFrame(buffer, json)
-
-        val raw = buffer.toByteArray()
-        val expectedPayload = json.toString().toByteArray(Charsets.UTF_8)
-        val lengthBytes = raw.copyOfRange(0, 4)
-        val length =
-            java.nio.ByteBuffer
-                .wrap(lengthBytes)
-                .int
-        assertEquals(expectedPayload.size, length)
-        val payload = raw.copyOfRange(4, raw.size)
-        assertEquals(String(expectedPayload, Charsets.UTF_8), String(payload, Charsets.UTF_8))
-        assertEquals(4 + expectedPayload.size, raw.size)
-    }
-
-    @Test
-    fun `success response has no error field`() {
-        val response = ImageBridgeProtocol.buildSuccessResponse()
-        assertEquals("sent", response.getString("status"))
-        assertFalse(response.has("error"))
+        assertEquals(ImageBridgeProtocol.STATUS_SENT, response.status)
+        assertEquals(null, response.error)
     }
 
     @Test
     fun `buildFailureResponse carries error message`() {
         val response = ImageBridgeProtocol.buildFailureResponse("room not found")
-        assertEquals("failed", response.getString("status"))
-        assertEquals("room not found", response.getString("error"))
+        assertEquals(ImageBridgeProtocol.STATUS_FAILED, response.status)
+        assertEquals("room not found", response.error)
     }
 
     @Test
-    fun `failure response with empty error message`() {
-        val response = ImageBridgeProtocol.buildFailureResponse("")
-        assertEquals("failed", response.getString("status"))
-        assertEquals("", response.getString("error"))
+    fun `writeFrame rejects frame exceeding max size`() {
+        val oversized =
+            ImageBridgeProtocol.ImageBridgeResponse(
+                status = ImageBridgeProtocol.STATUS_FAILED,
+                error = "A".repeat(ImageBridgeProtocol.MAX_FRAME_SIZE),
+            )
+
+        assertFailsWith<IllegalArgumentException> {
+            ImageBridgeProtocol.writeFrame(ByteArrayOutputStream(), oversized)
+        }
     }
 
     @Test
-    fun `response without status field defaults gracefully`() {
-        val malformed = JSONObject().apply { put("unexpected", "data") }
-        val status = malformed.optString("status", "")
-        assertNotEquals("sent", status)
-    }
-
-    @Test
-    fun `multiple frames in sequence`() {
+    fun `multiple typed frames in sequence`() {
         val buffer = ByteArrayOutputStream()
-        val msg1 = JSONObject().apply { put("seq", 1) }
-        val msg2 = JSONObject().apply { put("seq", 2) }
+        val msg1 =
+            ImageBridgeProtocol.buildHealthRequest(token = "one")
+        val msg2 =
+            ImageBridgeProtocol.buildHealthRequest(token = "two")
         ImageBridgeProtocol.writeFrame(buffer, msg1)
         ImageBridgeProtocol.writeFrame(buffer, msg2)
 
         val input = ByteArrayInputStream(buffer.toByteArray())
-        assertEquals(1, ImageBridgeProtocol.readFrame(input).getInt("seq"))
-        assertEquals(2, ImageBridgeProtocol.readFrame(input).getInt("seq"))
+        assertEquals("one", ImageBridgeProtocol.readRequestFrame(input).token)
+        assertEquals("two", ImageBridgeProtocol.readRequestFrame(input).token)
     }
 }
