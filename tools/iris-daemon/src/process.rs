@@ -156,6 +156,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cognitive_complexity)]
     fn start_command_includes_runtime_arguments() {
         let mut cfg = DaemonConfig::default();
         cfg.iris.shared_token = "shared-token".to_string();
