@@ -8,7 +8,7 @@ const KAKAOTALK_PACKAGE: &str = "com.kakao.talk";
 const SIGTERM_WAIT_SECS: u64 = 5;
 const STARTUP_RETRY_COUNT: usize = 10;
 const KILL_RETRY_WAIT_SECS: u64 = 1;
-const DEFAULT_IRIS_BIND_HOST: &str = "0.0.0.0";
+const DEFAULT_IRIS_BIND_HOST: &str = "127.0.0.1";
 const DEFAULT_IRIS_LOG_LEVEL: &str = "INFO";
 const DEFAULT_IRIS_LOG_DEST: &str = "/data/local/tmp/iris.log";
 
@@ -165,7 +165,7 @@ mod tests {
         assert!(command.contains("IRIS_CONFIG_PATH='/data/local/tmp/config.json'"));
         assert!(command.contains("IRIS_WEBHOOK_TOKEN='shared-token'"));
         assert!(command.contains("IRIS_BOT_TOKEN='shared-token'"));
-        assert!(command.contains("IRIS_BIND_HOST='0.0.0.0'"));
+        assert!(command.contains("IRIS_BIND_HOST='127.0.0.1'"));
         assert!(command.contains("IRIS_LOG_LEVEL='INFO'"));
         assert!(command.contains("CLASSPATH='/data/local/tmp/Iris.apk'"));
         assert!(command.contains("> '/data/local/tmp/iris.log' 2>&1 &"));
