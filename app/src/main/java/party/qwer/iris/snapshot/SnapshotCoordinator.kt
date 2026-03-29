@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import party.qwer.iris.RoomSnapshotData
+import java.util.concurrent.atomic.AtomicInteger
 
 class SnapshotCoordinator(
     scope: CoroutineScope,
@@ -16,6 +17,7 @@ class SnapshotCoordinator(
     private val previousSnapshots = mutableMapOf<Long, RoomSnapshotData>()
     private val dirtyRoomSet = mutableSetOf<Long>()
     private val dirtyRoomQueue = ArrayDeque<Long>()
+    private val dirtyRoomCountValue = AtomicInteger(0)
 
     init {
         scope.launch {
@@ -29,7 +31,11 @@ class SnapshotCoordinator(
         commands.send(command)
     }
 
-    fun dirtyRoomCount(): Int = dirtyRoomSet.size
+    fun enqueue(command: SnapshotCommand) {
+        commands.trySend(command)
+    }
+
+    fun dirtyRoomCount(): Int = dirtyRoomCountValue.get()
 
     private fun handleInternal(cmd: SnapshotCommand) {
         when (cmd) {
@@ -53,13 +59,16 @@ class SnapshotCoordinator(
         if (chatId <= 0L) return
         if (dirtyRoomSet.add(chatId)) {
             dirtyRoomQueue.addLast(chatId)
+            dirtyRoomCountValue.incrementAndGet()
         }
     }
 
     private fun handleDrain(budget: Int) {
         repeat(budget) {
             val chatId = dirtyRoomQueue.removeFirstOrNull() ?: return
-            dirtyRoomSet.remove(chatId)
+            if (dirtyRoomSet.remove(chatId)) {
+                dirtyRoomCountValue.decrementAndGet()
+            }
 
             val currentSnapshot = roomSnapshotReader.snapshot(chatId)
             val previousSnapshot = previousSnapshots.put(chatId, currentSnapshot) ?: return@repeat
@@ -75,5 +84,6 @@ class SnapshotCoordinator(
         previousSnapshots.keys.forEach { chatId ->
             handleMarkDirty(chatId)
         }
+        dirtyRoomCountValue.set(dirtyRoomSet.size)
     }
 }

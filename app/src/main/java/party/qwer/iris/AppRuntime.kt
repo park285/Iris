@@ -20,6 +20,7 @@ import party.qwer.iris.reply.ReplyStatusTracker
 import party.qwer.iris.reply.ReplyTransport
 import party.qwer.iris.snapshot.RoomSnapshotAssembler
 import party.qwer.iris.snapshot.RoomSnapshotReader
+import party.qwer.iris.snapshot.SnapshotCommand
 import party.qwer.iris.snapshot.SnapshotCoordinator
 import party.qwer.iris.snapshot.SnapshotEventEmitter
 import party.qwer.iris.storage.KakaoDbSqlClient
@@ -176,7 +177,7 @@ internal class AppRuntime(
                 routingGateway = routingGateway,
                 learnFromTimestampCorrelation = kakaoDb::learnFromTimestampCorrelation,
                 onMarkDirty = { chatId ->
-                    observerHelper.markRoomDirty(chatId)
+                    snapshotCoordinator.enqueue(SnapshotCommand.MarkDirty(chatId))
                 },
             )
         observerHelper =

@@ -13,6 +13,7 @@ import party.qwer.iris.snapshot.RoomDiffEngine
 import party.qwer.iris.snapshot.RoomSnapshotReader
 import party.qwer.iris.snapshot.SnapshotCoordinator
 import party.qwer.iris.snapshot.SnapshotEventEmitter
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -305,8 +306,9 @@ data class TestObserverHelperBundle(
 )
 
 class SnapshotTestCountingDiffEngine : RoomDiffEngine {
+    @Volatile
     var diffCalls = 0
-    val diffedChatIds = mutableListOf<Long>()
+    val diffedChatIds = CopyOnWriteArrayList<Long>()
 
     override fun diff(
         prev: RoomSnapshotData,
@@ -330,7 +332,7 @@ class SnapshotTestCountingDiffEngine : RoomDiffEngine {
 }
 
 class SnapshotTestRecordingRoutingGateway : RoutingGateway {
-    val commands = mutableListOf<RoutingCommand>()
+    val commands = CopyOnWriteArrayList<RoutingCommand>()
 
     override fun route(command: RoutingCommand): RoutingResult {
         commands += command
@@ -381,7 +383,7 @@ class SnapshotTestSnapshotReader(
     private val rooms: List<Long>,
     private val snapshots: Map<Long, List<RoomSnapshotData>>,
 ) : RoomSnapshotReader {
-    val snapshotCalls = mutableListOf<Long>()
+    val snapshotCalls = CopyOnWriteArrayList<Long>()
     private val snapshotIndexes = mutableMapOf<Long, Int>()
 
     override fun listRoomChatIds(): List<Long> = rooms

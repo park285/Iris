@@ -229,6 +229,34 @@ class SnapshotCoordinatorTest {
             assertEquals(0, diffEngine.calls)
             scope.cancel()
         }
+
+    @Test
+    fun `enqueue accepts non suspending commands and updates dirty room count`() =
+        runBlocking {
+            val reader =
+                StubSnapshotReader(
+                    rooms = listOf(100L),
+                    snapshots = mapOf(100L to listOf(snapshot(100L, setOf(1L)), snapshot(100L, setOf(1L, 2L)))),
+                )
+            val diffEngine = RecordingDiffEngine()
+            val emitter = RecordingEmitter()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            val coordinator = SnapshotCoordinator(scope, reader, diffEngine, emitter)
+
+            coordinator.enqueue(SnapshotCommand.SeedCache)
+            yield()
+            coordinator.enqueue(SnapshotCommand.MarkDirty(chatId = 100L))
+            yield()
+
+            assertEquals(1, coordinator.dirtyRoomCount())
+
+            coordinator.enqueue(SnapshotCommand.Drain(budget = 10))
+            yield()
+
+            assertEquals(0, coordinator.dirtyRoomCount())
+            assertEquals(1, diffEngine.calls)
+            scope.cancel()
+        }
 }
 
 private class StubSnapshotReader(

@@ -1,6 +1,5 @@
 package party.qwer.iris
 
-import kotlinx.coroutines.runBlocking
 import party.qwer.iris.ingress.CommandIngressService
 import party.qwer.iris.persistence.CheckpointJournal
 import party.qwer.iris.snapshot.SnapshotCommand
@@ -17,29 +16,21 @@ class ObserverHelper(
     }
 
     fun seedSnapshotCache() {
-        runBlocking {
-            snapshotCoordinator.send(SnapshotCommand.SeedCache)
-        }
+        snapshotCoordinator.enqueue(SnapshotCommand.SeedCache)
     }
 
     internal fun markRoomDirty(chatId: Long) {
-        runBlocking {
-            snapshotCoordinator.send(SnapshotCommand.MarkDirty(chatId))
-        }
+        snapshotCoordinator.enqueue(SnapshotCommand.MarkDirty(chatId))
     }
 
     internal fun markAllRoomsDirty() {
-        runBlocking {
-            snapshotCoordinator.send(SnapshotCommand.FullReconcile)
-        }
+        snapshotCoordinator.enqueue(SnapshotCommand.FullReconcile)
     }
 
     internal fun dirtyRoomCount(): Int = snapshotCoordinator.dirtyRoomCount()
 
     internal fun runDirtySnapshotDiff(maxRoomsPerTick: Int = 32) {
-        runBlocking {
-            snapshotCoordinator.send(SnapshotCommand.Drain(maxRoomsPerTick))
-        }
+        snapshotCoordinator.enqueue(SnapshotCommand.Drain(maxRoomsPerTick))
     }
 
     override fun close() {
