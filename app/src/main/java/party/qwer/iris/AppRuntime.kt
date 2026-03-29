@@ -1,10 +1,19 @@
 package party.qwer.iris
 
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.withContext
 import party.qwer.iris.delivery.webhook.FileWebhookOutboxStore
 import party.qwer.iris.delivery.webhook.OutboxRoutingGateway
 import party.qwer.iris.delivery.webhook.WebhookOutboxDispatcher
+import party.qwer.iris.ingress.CommandIngressService
+import party.qwer.iris.persistence.BatchedCheckpointJournal
+import party.qwer.iris.persistence.CheckpointJournal
+import party.qwer.iris.snapshot.RoomSnapshotReader
+import party.qwer.iris.snapshot.SnapshotCoordinator
+import party.qwer.iris.snapshot.SnapshotEventEmitter
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal class AppRuntime(
@@ -22,7 +31,10 @@ internal class AppRuntime(
     private lateinit var webhookOutboxStore: FileWebhookOutboxStore
     private lateinit var webhookOutboxDispatcher: WebhookOutboxDispatcher
     private lateinit var sseEventBus: SseEventBus
-    private lateinit var snapshotManager: RoomSnapshotManager
+    private lateinit var checkpointJournal: CheckpointJournal
+    private lateinit var snapshotCoordinator: SnapshotCoordinator
+    private lateinit var ingressService: CommandIngressService
+    private lateinit var snapshotScope: CoroutineScope
     private lateinit var observerHelper: ObserverHelper
     private lateinit var dbObserver: DBObserver
     private lateinit var snapshotObserver: SnapshotObserver
@@ -54,23 +66,49 @@ internal class AppRuntime(
         webhookOutboxDispatcher = WebhookOutboxDispatcher(configManager, webhookOutboxStore)
         webhookOutboxDispatcher.start()
         sseEventBus = SseEventBus(bufferSize = 100)
-        snapshotManager = RoomSnapshotManager()
+        checkpointJournal = BatchedCheckpointJournal(store = FileCheckpointStore())
+
+        val routingGateway = OutboxRoutingGateway(configManager, webhookOutboxStore)
+        val roomSnapshotReader =
+            object : RoomSnapshotReader {
+                override fun listRoomChatIds(): List<Long> = memberRepo.listRooms().rooms.map { it.chatId }
+
+                override fun snapshot(chatId: Long): RoomSnapshotData = memberRepo.snapshot(chatId)
+            }
+        val snapshotEventEmitter = SnapshotEventEmitter(sseEventBus, routingGateway)
+        snapshotScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        snapshotCoordinator =
+            SnapshotCoordinator(
+                scope = snapshotScope,
+                roomSnapshotReader = roomSnapshotReader,
+                diffEngine = RoomSnapshotManager(),
+                emitter = snapshotEventEmitter,
+            )
+        ingressService =
+            CommandIngressService(
+                db = kakaoDb,
+                config = configManager,
+                checkpointJournal = checkpointJournal,
+                memberRepo = memberRepo,
+                routingGateway = routingGateway,
+                learnFromTimestampCorrelation = kakaoDb::learnFromTimestampCorrelation,
+                onMarkDirty = { chatId ->
+                    observerHelper.markRoomDirty(chatId)
+                },
+            )
         observerHelper =
             ObserverHelper(
-                kakaoDb,
-                configManager,
-                memberRepo = memberRepo,
-                snapshotManager = snapshotManager,
-                sseEventBus = sseEventBus,
-                routingGateway = OutboxRoutingGateway(configManager, webhookOutboxStore),
-                learnFromTimestampCorrelation = kakaoDb::learnFromTimestampCorrelation,
+                ingressService = ingressService,
+                snapshotCoordinator = snapshotCoordinator,
+                checkpointJournal = checkpointJournal,
             )
+        observerHelper.seedSnapshotCache()
 
         dbObserver = DBObserver(observerHelper, configManager)
         dbObserver.startPolling()
         IrisLogger.info("DBObserver started")
 
-        snapshotObserver = SnapshotObserver(observerHelper)
+        snapshotObserver = SnapshotObserver(snapshotCoordinator, checkpointJournal)
         snapshotObserver.start()
         IrisLogger.info("SnapshotObserver started")
 
@@ -136,6 +174,7 @@ internal class AppRuntime(
             imageDeleter.stopDeletion()
             webhookOutboxDispatcher.close()
             observerHelper.close()
+            snapshotScope.cancel()
             replyService.shutdown()
             bridgeHealthCache.stop()
             if (!configManager.saveConfigNow()) {
