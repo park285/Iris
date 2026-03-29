@@ -44,23 +44,37 @@ class ConfigManagerPersistenceTest {
     }
 
     @Test
-    fun `signing secret is empty when config has no webhookToken`() {
+    fun `signingSecret is empty when config has no secrets`() {
         val configDir = Files.createTempDirectory("iris-config-manager-signing-secret").toFile()
         val configPath = configDir.resolve("config.json").absolutePath
         val manager = ConfigManager(configPath = configPath)
 
         assertEquals("", manager.signingSecret())
+        assertEquals("", manager.inboundSigningSecret)
         configDir.deleteRecursively()
     }
 
     @Test
-    fun `signing secret reads from config file webhookToken`() {
-        val configDir = Files.createTempDirectory("iris-config-manager-webhook-secret").toFile()
+    fun `signingSecret reads from inboundSigningSecret field`() {
+        val configDir = Files.createTempDirectory("iris-config-manager-signing").toFile()
         val configPath = configDir.resolve("config.json").absolutePath
-        configDir.resolve("config.json").writeText("""{"webhookToken":"file-secret"}""")
+        configDir.resolve("config.json").writeText("""{"inboundSigningSecret":"direct-secret"}""")
         val manager = ConfigManager(configPath = configPath)
 
-        assertEquals("file-secret", manager.signingSecret())
+        assertEquals("direct-secret", manager.signingSecret())
+        assertEquals("direct-secret", manager.inboundSigningSecret)
+        configDir.deleteRecursively()
+    }
+
+    @Test
+    fun `signingSecret falls back to legacy webhookToken during migration`() {
+        val configDir = Files.createTempDirectory("iris-config-manager-legacy-signing").toFile()
+        val configPath = configDir.resolve("config.json").absolutePath
+        configDir.resolve("config.json").writeText("""{"webhookToken":"legacy-secret"}""")
+        val manager = ConfigManager(configPath = configPath)
+
+        assertEquals("legacy-secret", manager.signingSecret())
+        assertEquals("legacy-secret", manager.inboundSigningSecret)
         configDir.deleteRecursively()
     }
 

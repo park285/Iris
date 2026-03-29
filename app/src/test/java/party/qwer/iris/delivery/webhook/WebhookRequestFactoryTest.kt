@@ -11,7 +11,7 @@ import kotlin.test.assertNull
 class WebhookRequestFactoryTest {
     @Test
     fun `creates json post request with iris headers and token`() {
-        val factory = WebhookRequestFactory(config = TestConfigProvider(webhookToken = "secret-token"))
+        val factory = WebhookRequestFactory(config = TestConfigProvider(outboundWebhookToken = "secret-token"))
         val delivery =
             WebhookDelivery(
                 url = "http://127.0.0.1:18080/webhook/iris",
@@ -33,7 +33,7 @@ class WebhookRequestFactoryTest {
 
     @Test
     fun `omits iris token header when webhook token is blank`() {
-        val factory = WebhookRequestFactory(config = TestConfigProvider(webhookToken = ""))
+        val factory = WebhookRequestFactory(config = TestConfigProvider(outboundWebhookToken = ""))
         val delivery =
             WebhookDelivery(
                 url = "http://127.0.0.1:18080/webhook/iris",
@@ -54,14 +54,14 @@ class WebhookRequestFactoryTest {
     }
 
     private data class TestConfigProvider(
-        override val webhookToken: String,
+        override val outboundWebhookToken: String,
     ) : ConfigProvider {
         override val botId: Long = 0L
         override val botName: String = "iris"
         override val botSocketPort: Int = 0
         override val botToken: String = ""
         override val inboundSigningSecret: String = ""
-        override val outboundWebhookToken: String = ""
+        override val webhookToken: String = ""
         override val botControlToken: String = ""
         override val dbPollingRate: Long = 0L
         override val messageSendRate: Long = 0L
