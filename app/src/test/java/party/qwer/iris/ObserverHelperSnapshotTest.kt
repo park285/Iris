@@ -206,8 +206,18 @@ class ObserverHelperSnapshotTest {
         assertTrue(replay.single().second.contains("\"newNickname\":\"Alice Updated\""))
         assertEquals(1, routingGateway.commands.size)
         assertEquals("100", routingGateway.commands.single().room)
-        assertTrue(routingGateway.commands.single().text.contains("\"oldNickname\":\"Alice\""))
-        assertTrue(routingGateway.commands.single().text.contains("\"newNickname\":\"Alice Updated\""))
+        assertTrue(
+            routingGateway.commands
+                .single()
+                .text
+                .contains("\"oldNickname\":\"Alice\""),
+        )
+        assertTrue(
+            routingGateway.commands
+                .single()
+                .text
+                .contains("\"newNickname\":\"Alice Updated\""),
+        )
     }
 
     @Test
