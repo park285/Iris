@@ -141,7 +141,7 @@ class ReplyTransportTest {
     }
 
     @Test
-    fun `dispatches native image via native sender and cleans up files`() {
+    fun `dispatches native image via native sender without immediate cleanup`() {
         val nativeCalls = AtomicInteger(0)
         val capturedPaths = AtomicReference<List<String>>()
         val cleanupCalled = AtomicInteger(0)
@@ -193,7 +193,7 @@ class ReplyTransportTest {
 
         assertEquals(1, nativeCalls.get())
         assertEquals(listOf(tempFile.absolutePath), capturedPaths.get())
-        assertEquals(1, cleanupCalled.get())
+        assertEquals(0, cleanupCalled.get())
         tempFile.delete()
     }
 

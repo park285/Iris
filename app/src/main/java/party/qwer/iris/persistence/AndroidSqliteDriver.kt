@@ -7,6 +7,12 @@ internal class AndroidSqliteDriver(
     private val database: SQLiteDatabase,
 ) : SqliteDriver {
     override fun execute(sql: String) {
+        if (shouldExecuteViaRawQuery(sql)) {
+            database.rawQuery(sql, emptyArray()).use { cursor ->
+                cursor.moveToFirst()
+            }
+            return
+        }
         database.execSQL(sql)
     }
 
@@ -85,3 +91,7 @@ internal class AndroidSqliteDriver(
         override fun isNull(columnIndex: Int): Boolean = cursor.isNull(columnIndex)
     }
 }
+
+internal fun shouldExecuteViaRawQueryForTest(sql: String): Boolean = shouldExecuteViaRawQuery(sql)
+
+private fun shouldExecuteViaRawQuery(sql: String): Boolean = sql.trimStart().startsWith("PRAGMA", ignoreCase = true)

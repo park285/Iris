@@ -511,7 +511,7 @@ class ReplyServiceTest {
     }
 
     @Test
-    fun `sendNativePhoto cleans up prepared files after successful native send`() {
+    fun `sendNativePhoto keeps prepared files after successful native send`() {
         val latch = CountDownLatch(1)
         val imageDir = Files.createTempDirectory("iris-reply-cleanup").toFile()
         val observedPaths = CopyOnWriteArrayList<String>()
@@ -546,16 +546,8 @@ class ReplyServiceTest {
 
         assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
         assertTrue(latch.await(5, TimeUnit.SECONDS))
-        var cleaned = false
-        repeat(20) {
-            if (observedPaths.isNotEmpty() && observedPaths.all { path -> !File(path).exists() }) {
-                cleaned = true
-                return@repeat
-            }
-            Thread.sleep(50)
-        }
         assertTrue(observedPaths.isNotEmpty(), "native sender should observe prepared image paths")
-        assertTrue(cleaned, "prepared files should be cleaned after native send")
+        assertTrue(observedPaths.all { path -> File(path).exists() }, "prepared files should remain after native send")
         service.shutdown()
         imageDir.deleteRecursively()
     }

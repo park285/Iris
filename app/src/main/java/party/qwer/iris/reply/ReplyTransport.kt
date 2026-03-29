@@ -69,9 +69,8 @@ internal class ReplyTransport(
             )
         } catch (e: Exception) {
             IrisLogger.error("Error sending native reply-image: $e")
-            throw e
-        } finally {
             mediaPreparationService?.cleanup(preparedImages)
+            throw e
         }
     }
 
