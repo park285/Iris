@@ -16,6 +16,9 @@ internal class ReplyStatusTracker(
         if (requestId == null) {
             return
         }
+        if (store.get(requestId) != null) {
+            return
+        }
         store.update(requestId, ReplyLifecycleState.QUEUED)
     }
 
