@@ -17,6 +17,14 @@ class JdbcSqliteHelper private constructor(
             connection.createStatement().use { it.execute("PRAGMA busy_timeout=5000") }
             return JdbcSqliteHelper(connection)
         }
+
+        fun fileBacked(path: String): JdbcSqliteHelper {
+            val connection = DriverManager.getConnection("jdbc:sqlite:$path")
+            connection.autoCommit = true
+            connection.createStatement().use { it.execute("PRAGMA journal_mode=WAL") }
+            connection.createStatement().use { it.execute("PRAGMA busy_timeout=5000") }
+            return JdbcSqliteHelper(connection)
+        }
     }
 
     override fun execute(sql: String) {
