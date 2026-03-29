@@ -99,3 +99,10 @@ internal fun UserConfigState.toLegacyConfigValues(
         imageMessageTypeRoutes = imageMessageTypeRoutes,
         botId = botId,
     )
+
+internal data class ConfigRuntimeState(
+    val snapshotUser: UserConfigState = UserConfigState(),
+    val appliedUser: UserConfigState = UserConfigState(),
+    val discovered: DiscoveredConfigState = DiscoveredConfigState(),
+    val isDirty: Boolean = false,
+)

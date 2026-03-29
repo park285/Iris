@@ -16,13 +16,6 @@ import java.nio.file.StandardCopyOption
 class ConfigManager(
     private val configPath: String = System.getenv("IRIS_CONFIG_PATH") ?: "/data/local/tmp/config.json",
 ) : ConfigProvider {
-    private data class ConfigRuntimeState(
-        val snapshotUser: UserConfigState = UserConfigState(),
-        val appliedUser: UserConfigState = UserConfigState(),
-        val discovered: DiscoveredConfigState = DiscoveredConfigState(),
-        val isDirty: Boolean = false,
-    )
-
     @Volatile
     private var state = ConfigRuntimeState()
 
