@@ -517,7 +517,7 @@ internal class IrisServer(
         body: String = "",
         bodySha256Hex: String = sha256Hex(body.toByteArray()),
     ): Boolean {
-        val expectedToken = configManager.signingSecret()
+        val expectedToken = configManager.inboundSigningSecret
         when (
             requestAuthenticator.authenticate(
                 method = method,

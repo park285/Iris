@@ -24,7 +24,7 @@ internal class WebhookRequestFactory(
             .header(HEADER_IRIS_MESSAGE_ID, delivery.messageId)
             .header(HEADER_IRIS_ROUTE, delivery.route)
             .apply {
-                val webhookToken = config.webhookToken
+                val webhookToken = config.outboundWebhookToken
                 if (webhookToken.isNotBlank()) {
                     header(HEADER_IRIS_TOKEN, webhookToken)
                 }
