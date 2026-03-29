@@ -2,8 +2,8 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
 
-use crate::views::{TabId, View, ViewAction, events, members, rooms, stats};
 use crate::views::reply_modal::{ModalAction, ReplyModal};
+use crate::views::{TabId, View, ViewAction, events, members, rooms, stats};
 use iris_common::models::{ReplyRequest, SseEvent};
 use ratatui::widgets::{Block, Tabs};
 
@@ -102,7 +102,11 @@ impl App {
             }
             ViewAction::OpenReply(chat_id) => {
                 let room = chat_id.and_then(|id| {
-                    self.rooms_view.rooms.iter().find(|r| r.chat_id == id).cloned()
+                    self.rooms_view
+                        .rooms
+                        .iter()
+                        .find(|r| r.chat_id == id)
+                        .cloned()
                 });
                 self.reply_modal = Some(ReplyModal::new(room, self.rooms_view.rooms.clone()));
                 false

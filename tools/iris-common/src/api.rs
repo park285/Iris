@@ -139,12 +139,13 @@ impl IrisApi {
             Ok(resp.json().await?)
         } else {
             let status = resp.status();
-            let error: crate::models::ErrorResponse = resp.json().await.unwrap_or_else(|_| {
-                crate::models::ErrorResponse {
-                    status: false,
-                    message: format!("HTTP {status}"),
-                }
-            });
+            let error: crate::models::ErrorResponse =
+                resp.json()
+                    .await
+                    .unwrap_or_else(|_| crate::models::ErrorResponse {
+                        status: false,
+                        message: format!("HTTP {status}"),
+                    });
             anyhow::bail!("[{status}] {}", error.message)
         }
     }
