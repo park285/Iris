@@ -10,10 +10,11 @@ import kotlin.test.assertTrue
 
 class ConfigPersistenceTest {
     private fun createPersistence(configPath: String): ConfigPersistence {
-        val json = Json {
-            encodeDefaults = true
-            ignoreUnknownKeys = true
-        }
+        val json =
+            Json {
+                encodeDefaults = true
+                ignoreUnknownKeys = true
+            }
         return ConfigPersistence(configPath, json)
     }
 
@@ -92,12 +93,13 @@ class ConfigPersistenceTest {
         val configPath = tmpDir.resolve("config.json").absolutePath
         val persistence = createPersistence(configPath)
 
-        val original = party.qwer.iris.UserConfigState(
-            botName = "RoundTrip",
-            botHttpPort = 5000,
-            messageSendRate = 75,
-            dbPollingRate = 200,
-        )
+        val original =
+            party.qwer.iris.UserConfigState(
+                botName = "RoundTrip",
+                botHttpPort = 5000,
+                messageSendRate = 75,
+                dbPollingRate = 200,
+            )
         persistence.save(original)
         val loaded = persistence.load()
 
@@ -115,10 +117,11 @@ class ConfigPersistenceTest {
         val configPath = tmpDir.resolve("config.json").absolutePath
         val persistence = createPersistence(configPath)
 
-        val original = party.qwer.iris.UserConfigState(
-            commandRoutePrefixes = mapOf("chatbot" to listOf("!", "/")),
-            imageMessageTypeRoutes = mapOf("dalle" to listOf("26")),
-        )
+        val original =
+            party.qwer.iris.UserConfigState(
+                commandRoutePrefixes = mapOf("chatbot" to listOf("!", "/")),
+                imageMessageTypeRoutes = mapOf("dalle" to listOf("26")),
+            )
         persistence.save(original)
         val loaded = persistence.load()
 

@@ -156,8 +156,7 @@ class ConfigManager(
         }
     }
 
-    override fun webhookEndpointFor(route: String): String =
-        configuredWebhookEndpoint(stateStore.current().appliedUser.toLegacyConfigValues(), route)
+    override fun webhookEndpointFor(route: String): String = configuredWebhookEndpoint(stateStore.current().appliedUser.toLegacyConfigValues(), route)
 
     override val inboundSigningSecret: String
         get() = stateStore.current().snapshotUser.inboundSigningSecret
@@ -191,11 +190,9 @@ class ConfigManager(
             IrisLogger.debug("MessageSendJitterMax updated to: $messageSendJitterMax")
         }
 
-    override fun commandRoutePrefixes(): Map<String, List<String>> =
-        stateStore.current().appliedUser.commandRoutePrefixes
+    override fun commandRoutePrefixes(): Map<String, List<String>> = stateStore.current().appliedUser.commandRoutePrefixes
 
-    override fun imageMessageTypeRoutes(): Map<String, List<String>> =
-        stateStore.current().appliedUser.imageMessageTypeRoutes
+    override fun imageMessageTypeRoutes(): Map<String, List<String>> = stateStore.current().appliedUser.imageMessageTypeRoutes
 
     fun configResponse(): ConfigResponse =
         synchronized(this) {

@@ -58,10 +58,11 @@ internal class ConfigPersistence(
 
         val tempFile = File("${configFile.absolutePath}.tmp")
         try {
-            val jsonString = json.encodeToString(
-                UserConfigValues.serializer(),
-                state.toPersistedConfigValues(),
-            )
+            val jsonString =
+                json.encodeToString(
+                    UserConfigValues.serializer(),
+                    state.toPersistedConfigValues(),
+                )
             FileOutputStream(tempFile).use { output ->
                 output.write(jsonString.toByteArray())
                 output.fd.sync()
@@ -96,7 +97,10 @@ internal class ConfigPersistence(
     }
 
     @Throws(IOException::class)
-    private fun moveConfigAtomically(tempFile: File, targetFile: File) {
+    private fun moveConfigAtomically(
+        tempFile: File,
+        targetFile: File,
+    ) {
         try {
             Files.move(
                 tempFile.toPath(),

@@ -116,11 +116,12 @@ class ConfigPolicyTest {
 
     @Test
     fun `validate collects multiple errors`() {
-        val state = UserConfigState(
-            botHttpPort = 0,
-            dbPollingRate = -1,
-            messageSendRate = -5,
-        )
+        val state =
+            UserConfigState(
+                botHttpPort = 0,
+                dbPollingRate = -1,
+                messageSendRate = -5,
+            )
         val errors = ConfigPolicy.validate(state)
         assertEquals(3, errors.size)
         val fields = errors.map { it.field }.toSet()

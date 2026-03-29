@@ -30,18 +30,19 @@ class ConfigStateStoreTest {
     fun `mutate is atomic under concurrent access`() {
         val store = ConfigStateStore()
         val iterations = 1000
-        val threads = (1..4).map {
-            Thread {
-                repeat(iterations) {
-                    store.mutate { current ->
-                        val newPort = current.snapshotUser.botHttpPort + 1
-                        current.copy(
-                            snapshotUser = current.snapshotUser.copy(botHttpPort = newPort),
-                        )
+        val threads =
+            (1..4).map {
+                Thread {
+                    repeat(iterations) {
+                        store.mutate { current ->
+                            val newPort = current.snapshotUser.botHttpPort + 1
+                            current.copy(
+                                snapshotUser = current.snapshotUser.copy(botHttpPort = newPort),
+                            )
+                        }
                     }
                 }
             }
-        }
         threads.forEach { it.start() }
         threads.forEach { it.join() }
 

@@ -23,11 +23,12 @@ internal class ConfigStateStore {
     ): ConfigRuntimeState =
         mutate { current ->
             val updatedSnapshot = transform(current.snapshotUser)
-            val updatedApplied = if (applyImmediately) {
-                transform(current.appliedUser)
-            } else {
-                current.appliedUser
-            }
+            val updatedApplied =
+                if (applyImmediately) {
+                    transform(current.appliedUser)
+                } else {
+                    current.appliedUser
+                }
             if (updatedSnapshot == current.snapshotUser && updatedApplied == current.appliedUser) {
                 current
             } else {

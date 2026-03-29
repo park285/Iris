@@ -7,17 +7,18 @@ import kotlin.test.assertTrue
 class ConfigFieldTest {
     @Test
     fun `enum contains all expected config fields`() {
-        val expected = setOf(
-            "BOT_NAME",
-            "BOT_SOCKET_PORT",
-            "DB_POLLING_RATE",
-            "MESSAGE_SEND_RATE",
-            "MESSAGE_SEND_JITTER_MAX",
-            "ROUTING_POLICY",
-            "INBOUND_SIGNING_SECRET",
-            "OUTBOUND_WEBHOOK_TOKEN",
-            "BOT_CONTROL_TOKEN",
-        )
+        val expected =
+            setOf(
+                "BOT_NAME",
+                "BOT_SOCKET_PORT",
+                "DB_POLLING_RATE",
+                "MESSAGE_SEND_RATE",
+                "MESSAGE_SEND_JITTER_MAX",
+                "ROUTING_POLICY",
+                "INBOUND_SIGNING_SECRET",
+                "OUTBOUND_WEBHOOK_TOKEN",
+                "BOT_CONTROL_TOKEN",
+            )
         val actual = ConfigField.entries.map { it.name }.toSet()
         assertEquals(expected, actual)
     }
