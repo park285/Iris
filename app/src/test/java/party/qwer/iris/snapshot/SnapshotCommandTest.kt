@@ -44,12 +44,13 @@ class SnapshotCommandTest {
 
     @Test
     fun `all variants are SnapshotCommand subtypes`() {
-        val commands: List<SnapshotCommand> = listOf(
-            SnapshotCommand.MarkDirty(chatId = 1L),
-            SnapshotCommand.Drain(budget = 32),
-            SnapshotCommand.FullReconcile,
-            SnapshotCommand.SeedCache,
-        )
+        val commands: List<SnapshotCommand> =
+            listOf(
+                SnapshotCommand.MarkDirty(chatId = 1L),
+                SnapshotCommand.Drain(budget = 32),
+                SnapshotCommand.FullReconcile,
+                SnapshotCommand.SeedCache,
+            )
         assertEquals(4, commands.size)
     }
 }

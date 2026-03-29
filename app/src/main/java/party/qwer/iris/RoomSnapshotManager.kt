@@ -5,9 +5,10 @@ import party.qwer.iris.model.NicknameChangeEvent
 import party.qwer.iris.model.ProfileChangeEvent
 import party.qwer.iris.model.RoleChangeEvent
 import party.qwer.iris.model.roleCodeToName
+import party.qwer.iris.snapshot.RoomDiffEngine
 
-open class RoomSnapshotManager {
-    open fun diff(
+open class RoomSnapshotManager : RoomDiffEngine {
+    override fun diff(
         prev: RoomSnapshotData,
         curr: RoomSnapshotData,
     ): List<Any> {
