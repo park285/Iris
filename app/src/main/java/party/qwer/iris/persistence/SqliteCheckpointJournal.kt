@@ -6,6 +6,7 @@ class SqliteCheckpointJournal(
 ) : CheckpointJournal {
     private val pending = mutableMapOf<String, Long>()
 
+    @Synchronized
     override fun advance(
         stream: String,
         cursor: Long,
@@ -13,34 +14,45 @@ class SqliteCheckpointJournal(
         pending[stream] = cursor
     }
 
+    @Synchronized
     override fun flushIfDirty() {
-        flushNow()
+        if (pending.isEmpty()) return
+        flushInternal()
     }
 
+    @Synchronized
     override fun flushNow() {
-        if (pending.isEmpty()) {
-            return
-        }
-        val snapshot = pending.toMap()
-        db.inImmediateTransaction {
-            snapshot.forEach { (stream, cursor) ->
-                update(
-                    """INSERT INTO ${IrisDatabaseSchema.CHECKPOINT_TABLE} (stream, cursor_value, updated_at)
-                       VALUES (?, ?, ?)
-                       ON CONFLICT(stream) DO UPDATE SET
-                           cursor_value = excluded.cursor_value,
-                           updated_at = excluded.updated_at""",
-                    listOf(stream, cursor, clock()),
-                )
-            }
-        }
-        pending.keys.removeAll(snapshot.keys)
+        flushInternal()
     }
 
+    @Synchronized
     override fun load(stream: String): Long? =
         pending[stream]
             ?: db.queryLong(
                 "SELECT cursor_value FROM ${IrisDatabaseSchema.CHECKPOINT_TABLE} WHERE stream = ?",
                 stream,
             )
+
+    private fun flushInternal() {
+        if (pending.isEmpty()) return
+        val snapshot = HashMap(pending)
+        val now = clock()
+        db.inImmediateTransaction {
+            for ((stream, cursor) in snapshot) {
+                update(
+                    """INSERT INTO ${IrisDatabaseSchema.CHECKPOINT_TABLE} (stream, cursor_value, updated_at)
+                       VALUES (?, ?, ?)
+                       ON CONFLICT(stream) DO UPDATE SET
+                           cursor_value = excluded.cursor_value,
+                           updated_at = excluded.updated_at""",
+                    listOf(stream, cursor, now),
+                )
+            }
+        }
+        for ((stream, flushedCursor) in snapshot) {
+            if (pending[stream] == flushedCursor) {
+                pending.remove(stream)
+            }
+        }
+    }
 }
