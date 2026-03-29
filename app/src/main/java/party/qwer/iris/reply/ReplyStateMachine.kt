@@ -9,7 +9,10 @@ import party.qwer.iris.model.ReplyLifecycleState.QUEUED
 import party.qwer.iris.model.ReplyLifecycleState.SENDING
 
 object ReplyStateMachine {
-    fun next(current: ReplyLifecycleState, event: ReplyTransitionEvent): ReplyLifecycleState =
+    fun next(
+        current: ReplyLifecycleState,
+        event: ReplyTransitionEvent,
+    ): ReplyLifecycleState =
         when (current) {
             QUEUED ->
                 when (event) {
