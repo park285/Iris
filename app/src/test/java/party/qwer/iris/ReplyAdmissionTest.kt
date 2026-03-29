@@ -19,10 +19,11 @@ class ReplyAdmissionTest {
     }
 
     @Test
-    fun `thread replies are supported for text and image messages`() {
+    fun `thread replies are supported for text image and markdown messages`() {
         assertTrue(supportsThreadReply(ReplyType.TEXT))
         assertTrue(supportsThreadReply(ReplyType.IMAGE))
         assertTrue(supportsThreadReply(ReplyType.IMAGE_MULTIPLE))
+        assertTrue(supportsThreadReply(ReplyType.MARKDOWN))
     }
 
     @Test
@@ -62,61 +63,10 @@ class ReplyAdmissionTest {
     }
 
     @Test
-    fun `reply markdown route only allows text replies`() {
-        val error =
-            assertFailsWith<IllegalArgumentException> {
-                validateReplyMarkdownType(ReplyType.IMAGE)
-            }
-
-        assertEquals("reply-markdown replies require type=text", error.message)
-    }
-
-    @Test
     fun `reply markdown route accepts threaded metadata and defaults scope to two`() {
         assertEquals(3, validateReplyMarkdownThreadMetadata(threadId = 123L, threadScope = 3))
         assertEquals(2, validateReplyMarkdownThreadMetadata(threadId = 123L, threadScope = null))
         assertEquals(null, validateReplyMarkdownThreadMetadata(threadId = null, threadScope = null))
-    }
-
-    @Test
-    fun `reply image route only allows image types`() {
-        val error =
-            assertFailsWith<IllegalArgumentException> {
-                validateReplyImageType(ReplyType.TEXT)
-            }
-
-        assertEquals("reply-image replies require type=image or image_multiple", error.message)
-    }
-
-    @Test
-    fun `reply image route accepts room image without thread metadata`() {
-        assertEquals(null, validateReplyImageThreadScope(threadId = null, threadScope = null))
-    }
-
-    @Test
-    fun `reply image route requires explicit thread scope when thread id exists`() {
-        val error =
-            assertFailsWith<IllegalArgumentException> {
-                validateReplyImageThreadScope(threadId = 123L, threadScope = null)
-            }
-
-        assertEquals("reply-image threadId requires threadScope", error.message)
-    }
-
-    @Test
-    fun `reply image route restricts scope to thread detail variants`() {
-        val error =
-            assertFailsWith<IllegalArgumentException> {
-                validateReplyImageThreadScope(threadId = 123L, threadScope = 1)
-            }
-
-        assertEquals("reply-image threadScope must be 2 or 3", error.message)
-    }
-
-    @Test
-    fun `reply image route preserves explicit thread detail scope variants`() {
-        assertEquals(3, validateReplyImageThreadScope(threadId = 123L, threadScope = 3))
-        assertEquals(2, validateReplyImageThreadScope(threadId = 123L, threadScope = 2))
     }
 
     @Test
@@ -170,6 +120,31 @@ class ReplyAdmissionTest {
     }
 
     @Test
+    fun `admit reply routes markdown through reply markdown sender`() {
+        val sender = RecordingMessageSender()
+
+        val result =
+            admitReply(
+                replyRequest =
+                    ReplyRequest(
+                        room = "1",
+                        type = ReplyType.MARKDOWN,
+                        data = JsonPrimitive("# Hello"),
+                    ),
+                roomId = 1L,
+                notificationReferer = "Iris",
+                threadId = 123L,
+                threadScope = 2,
+                messageSender = sender,
+                requestId = "reply-markdown-1",
+            )
+
+        assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
+        assertEquals(1, sender.markdownCalls)
+        assertEquals("reply-markdown-1", sender.lastRequestId)
+    }
+
+    @Test
     fun `admit reply forwards request id to message sender`() {
         val sender = RecordingMessageSender()
 
@@ -197,6 +172,7 @@ class ReplyAdmissionTest {
 private class RecordingMessageSender : MessageSender {
     var nativePhotoCalls = 0
     var nativeMultiPhotoCalls = 0
+    var markdownCalls = 0
     var lastRequestId: String? = null
 
     override fun sendMessage(
@@ -251,6 +227,7 @@ private class RecordingMessageSender : MessageSender {
         threadScope: Int?,
         requestId: String?,
     ): ReplyAdmissionResult {
+        markdownCalls += 1
         lastRequestId = requestId
         return ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
     }

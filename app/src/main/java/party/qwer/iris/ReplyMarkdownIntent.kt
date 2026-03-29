@@ -2,7 +2,6 @@ package party.qwer.iris
 
 import android.content.Intent
 import org.json.JSONObject
-import party.qwer.iris.model.ReplyType
 import java.util.UUID
 
 internal object ReplyMarkdownHookExtras {
@@ -108,12 +107,6 @@ internal fun validateReplyMarkdownThreadMetadata(
     val normalizedScope = threadScope ?: 2
     require(normalizedScope > 0) { "threadScope must be a positive integer" }
     return normalizedScope
-}
-
-internal fun validateReplyMarkdownType(replyType: ReplyType) {
-    require(replyType == ReplyType.TEXT) {
-        "reply-markdown replies require type=text"
-    }
 }
 
 private fun Intent.putReplyMarkdownThreadMetadata(

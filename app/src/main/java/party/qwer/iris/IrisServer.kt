@@ -186,8 +186,6 @@ internal class IrisServer(
             configureHealthRoutes()
             configureConfigRoutes()
             configureReplyRoute()
-            configureReplyImageRoute()
-            configureReplyMarkdownRoute()
             configureReplyStatusRoute()
             configureQueryRoute()
             configureMemberRoutes()
@@ -259,19 +257,6 @@ internal class IrisServer(
         }
     }
 
-    private fun Route.configureReplyMarkdownRoute() {
-        post("/reply-markdown") {
-            val rawBody = readProtectedRequestBody(call, MAX_REPLY_REQUEST_BODY_BYTES)
-            if (!requireBotToken(call, method = "POST", body = rawBody.body, bodySha256Hex = rawBody.sha256Hex)) {
-                return@post
-            }
-
-            val replyRequest = serverJson.decodeFromString<ReplyRequest>(rawBody.body)
-            val response = enqueueReplyMarkdown(replyRequest)
-            call.respond(HttpStatusCode.Accepted, response)
-        }
-    }
-
     private fun Route.configureReplyStatusRoute() {
         get("/reply-status/{requestId}") {
             if (!requireBotToken(call, method = "GET")) {
@@ -280,19 +265,6 @@ internal class IrisServer(
             val requestId = call.parameters["requestId"] ?: invalidRequest("missing requestId")
             val snapshot = replyStatusProvider?.invoke(requestId) ?: throw ApiRequestException("reply status not found", HttpStatusCode.NotFound)
             call.respond(snapshot)
-        }
-    }
-
-    private fun Route.configureReplyImageRoute() {
-        post("/reply-image") {
-            val rawBody = readProtectedRequestBody(call, MAX_REPLY_REQUEST_BODY_BYTES)
-            if (!requireBotToken(call, method = "POST", body = rawBody.body, bodySha256Hex = rawBody.sha256Hex)) {
-                return@post
-            }
-
-            val replyRequest = serverJson.decodeFromString<ReplyRequest>(rawBody.body)
-            val response = enqueueReplyImage(replyRequest)
-            call.respond(HttpStatusCode.Accepted, response)
         }
     }
 
@@ -325,13 +297,21 @@ internal class IrisServer(
                 it.toLongOrNull() ?: invalidRequest("threadId must be a numeric string")
             }
         val threadScope =
-            try {
-                validateReplyThreadScope(replyRequest.type, threadId, replyRequest.threadScope)
-            } catch (e: IllegalArgumentException) {
-                invalidRequest(e.message ?: "invalid threadScope")
+            if (replyRequest.type == ReplyType.MARKDOWN) {
+                try {
+                    validateReplyMarkdownThreadMetadata(threadId, replyRequest.threadScope)
+                } catch (e: IllegalArgumentException) {
+                    invalidRequest(e.message ?: "invalid thread metadata")
+                }
+            } else {
+                try {
+                    validateReplyThreadScope(replyRequest.type, threadId, replyRequest.threadScope)
+                } catch (e: IllegalArgumentException) {
+                    invalidRequest(e.message ?: "invalid threadScope")
+                }
             }
         if (threadId != null && !supportsThreadReply(replyRequest.type)) {
-            invalidRequest("threadId is only supported for text replies")
+            invalidRequest("threadId is not supported for this reply type")
         }
 
         val admission =
@@ -347,87 +327,6 @@ internal class IrisServer(
         if (admission.status != ReplyAdmissionStatus.ACCEPTED) {
             requestRejected(
                 admission.message ?: "reply request rejected",
-                replyAdmissionHttpStatus(admission.status),
-            )
-        }
-
-        return ReplyAcceptedResponse(
-            requestId = requestId,
-            room = replyRequest.room,
-            type = replyRequest.type,
-        )
-    }
-
-    private fun enqueueReplyMarkdown(replyRequest: ReplyRequest): ReplyAcceptedResponse {
-        val requestId = "reply-markdown-${UUID.randomUUID()}"
-        validateReplyMarkdownType(replyRequest.type)
-
-        val roomId = replyRequest.room.toLongOrNull() ?: invalidRequest("room must be a numeric string")
-        val threadId =
-            replyRequest.threadId?.let {
-                it.toLongOrNull() ?: invalidRequest("threadId must be a numeric string")
-            }
-        val threadScope =
-            try {
-                validateReplyMarkdownThreadMetadata(threadId, replyRequest.threadScope)
-            } catch (e: IllegalArgumentException) {
-                invalidRequest(e.message ?: "invalid reply-markdown metadata")
-            }
-
-        val admission = messageSender.sendReplyMarkdown(roomId, extractTextPayload(replyRequest), threadId, threadScope, requestId)
-        if (admission.status != ReplyAdmissionStatus.ACCEPTED) {
-            requestRejected(
-                admission.message ?: "reply-markdown request rejected",
-                replyAdmissionHttpStatus(admission.status),
-            )
-        }
-
-        return ReplyAcceptedResponse(
-            requestId = requestId,
-            room = replyRequest.room,
-            type = replyRequest.type,
-        )
-    }
-
-    private fun enqueueReplyImage(replyRequest: ReplyRequest): ReplyAcceptedResponse {
-        val requestId = "reply-image-${UUID.randomUUID()}"
-        validateReplyImageType(replyRequest.type)
-
-        val roomId = replyRequest.room.toLongOrNull() ?: invalidRequest("room must be a numeric string")
-        val threadId =
-            replyRequest.threadId?.let {
-                it.toLongOrNull() ?: invalidRequest("threadId must be a numeric string")
-            }
-        val threadScope =
-            try {
-                validateReplyImageThreadScope(threadId, replyRequest.threadScope)
-            } catch (e: IllegalArgumentException) {
-                invalidRequest(e.message ?: "invalid reply-image thread metadata")
-            }
-
-        val admission =
-            when (replyRequest.type) {
-                ReplyType.IMAGE ->
-                    messageSender.sendNativePhoto(
-                        roomId,
-                        extractTextPayload(replyRequest),
-                        threadId,
-                        threadScope,
-                        requestId,
-                    )
-                ReplyType.IMAGE_MULTIPLE ->
-                    messageSender.sendNativeMultiplePhotos(
-                        roomId,
-                        extractImagePayloads(replyRequest),
-                        threadId,
-                        threadScope,
-                        requestId,
-                    )
-                else -> invalidRequest("reply-image replies require type=image or image_multiple")
-            }
-        if (admission.status != ReplyAdmissionStatus.ACCEPTED) {
-            requestRejected(
-                admission.message ?: "reply-image request rejected",
                 replyAdmissionHttpStatus(admission.status),
             )
         }
@@ -664,29 +563,3 @@ internal fun validateReplyThreadScope(
     return normalizedScope
 }
 
-internal fun validateReplyImageType(replyType: ReplyType) {
-    require(replyType == ReplyType.IMAGE || replyType == ReplyType.IMAGE_MULTIPLE) {
-        "reply-image replies require type=image or image_multiple"
-    }
-}
-
-internal fun validateReplyImageThreadScope(
-    threadId: Long?,
-    threadScope: Int?,
-): Int? {
-    if (threadId == null && threadScope == null) {
-        return null
-    }
-    require(threadId != null) { "reply-image threadScope requires threadId" }
-    val replyImageScope = threadScope ?: throw IllegalArgumentException("reply-image threadId requires threadScope")
-    require(replyImageScope == 2 || replyImageScope == 3) { "reply-image threadScope must be 2 or 3" }
-    // threadScope는 Kakao 쪽 reply 표시 범위를 고르는 힌트다.
-    // - 1: 채팅방 전체
-    // - 2+: thread detail
-    // image reply 실측 기준:
-    // - 2: thread-only
-    // - 3: thread + room 같이 보내기
-    // 이 라우트는 caller가 의도한 범위를 그대로 bridge로 넘긴다.
-    // thread-only 기본 동작이 필요하면 caller가 2를 명시해야 한다.
-    return replyImageScope
-}
