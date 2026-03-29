@@ -165,6 +165,7 @@ pub struct HealthResponse {
 /// daemon bridge diagnostics 응답 모델
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
+#[allow(clippy::struct_excessive_bools)]
 pub struct BridgeDiagnosticsResponse {
     pub reachable: bool,
     pub running: bool,
