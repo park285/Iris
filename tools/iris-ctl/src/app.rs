@@ -88,8 +88,7 @@ impl App {
                 self.active_tab = TabId::Rooms;
                 false
             }
-            ViewAction::OpenReply(_) => false, // Task 9에서 구현
-            ViewAction::None => false,
+            ViewAction::OpenReply(_) | ViewAction::None => false, // Task 9에서 구현
         }
     }
     fn handle_key_event(&mut self, key: KeyEvent) -> bool {
