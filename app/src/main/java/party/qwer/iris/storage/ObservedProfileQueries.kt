@@ -1,6 +1,8 @@
 package party.qwer.iris.storage
 
-class ObservedProfileQueries(private val db: SqlClient) {
+class ObservedProfileQueries(
+    private val db: SqlClient,
+) {
     fun resolveProfileByChatId(chatId: ChatId): ObservedProfileHintRow? =
         try {
             db.querySingle(
@@ -58,22 +60,23 @@ class ObservedProfileQueries(private val db: SqlClient) {
                 }
 
             val result = LinkedHashMap<Long, String>()
-            db.query(
-                QuerySpec(
-                    sql = sql,
-                    bindArgs = bindArgs,
-                    maxRows = orderedIds.size,
-                    mapper = { row ->
-                        ObservedProfileLinkRow(
-                            userId = row.long("user_id") ?: 0L,
-                            displayName = row.string("display_name"),
-                        )
-                    },
-                ),
-            ).forEach { row ->
-                val displayName = row.displayName?.takeIf { it.isNotBlank() } ?: return@forEach
-                result.putIfAbsent(row.userId, displayName)
-            }
+            db
+                .query(
+                    QuerySpec(
+                        sql = sql,
+                        bindArgs = bindArgs,
+                        maxRows = orderedIds.size,
+                        mapper = { row ->
+                            ObservedProfileLinkRow(
+                                userId = row.long("user_id") ?: 0L,
+                                displayName = row.string("display_name"),
+                            )
+                        },
+                    ),
+                ).forEach { row ->
+                    val displayName = row.displayName?.takeIf { it.isNotBlank() } ?: return@forEach
+                    result.putIfAbsent(row.userId, displayName)
+                }
             result
         } catch (_: Exception) {
             emptyMap()

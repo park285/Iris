@@ -1,17 +1,23 @@
 package party.qwer.iris.storage
 
-class RoomStatsQueries(private val db: SqlClient) {
+class RoomStatsQueries(
+    private val db: SqlClient,
+) {
     companion object {
         private const val STATS_ROW_LIMIT = 50_000
     }
 
-    fun loadMemberActivity(chatId: ChatId, memberIds: List<Long>): List<MemberActivityRow> {
+    fun loadMemberActivity(
+        chatId: ChatId,
+        memberIds: List<Long>,
+    ): List<MemberActivityRow> {
         if (memberIds.isEmpty()) return emptyList()
         val placeholders = memberIds.joinToString(", ") { "?" }
-        val bindArgs = buildList<SqlArg> {
-            add(SqlArg.LongVal(chatId.value))
-            memberIds.forEach { add(SqlArg.LongVal(it)) }
-        }
+        val bindArgs =
+            buildList<SqlArg> {
+                add(SqlArg.LongVal(chatId.value))
+                memberIds.forEach { add(SqlArg.LongVal(it)) }
+            }
         return db.query(
             QuerySpec(
                 sql =
@@ -47,7 +53,10 @@ class RoomStatsQueries(private val db: SqlClient) {
             ),
         )
 
-    fun loadTypeCountStats(chatId: ChatId, from: Long): List<MessageTypeCountRow> =
+    fun loadTypeCountStats(
+        chatId: ChatId,
+        from: Long,
+    ): List<MessageTypeCountRow> =
         db.query(
             QuerySpec(
                 sql =
@@ -56,11 +65,12 @@ class RoomStatsQueries(private val db: SqlClient) {
                     FROM chat_logs WHERE chat_id = ? AND created_at >= ?
                     GROUP BY user_id, type ORDER BY cnt DESC LIMIT ?
                     """.trimIndent(),
-                bindArgs = listOf(
-                    SqlArg.LongVal(chatId.value),
-                    SqlArg.LongVal(from),
-                    SqlArg.IntVal(STATS_ROW_LIMIT),
-                ),
+                bindArgs =
+                    listOf(
+                        SqlArg.LongVal(chatId.value),
+                        SqlArg.LongVal(from),
+                        SqlArg.IntVal(STATS_ROW_LIMIT),
+                    ),
                 maxRows = STATS_ROW_LIMIT,
                 mapper = { row ->
                     MessageTypeCountRow(
@@ -73,7 +83,11 @@ class RoomStatsQueries(private val db: SqlClient) {
             ),
         )
 
-    fun loadMessageLog(chatId: ChatId, userId: UserId, from: Long): List<MessageLogRow> =
+    fun loadMessageLog(
+        chatId: ChatId,
+        userId: UserId,
+        from: Long,
+    ): List<MessageLogRow> =
         db.query(
             QuerySpec(
                 sql =
@@ -82,12 +96,13 @@ class RoomStatsQueries(private val db: SqlClient) {
                     WHERE chat_id = ? AND user_id = ? AND created_at >= ?
                     ORDER BY created_at ASC LIMIT ?
                     """.trimIndent(),
-                bindArgs = listOf(
-                    SqlArg.LongVal(chatId.value),
-                    SqlArg.LongVal(userId.value),
-                    SqlArg.LongVal(from),
-                    SqlArg.IntVal(STATS_ROW_LIMIT),
-                ),
+                bindArgs =
+                    listOf(
+                        SqlArg.LongVal(chatId.value),
+                        SqlArg.LongVal(userId.value),
+                        SqlArg.LongVal(from),
+                        SqlArg.IntVal(STATS_ROW_LIMIT),
+                    ),
                 maxRows = STATS_ROW_LIMIT,
                 mapper = { row ->
                     MessageLogRow(
