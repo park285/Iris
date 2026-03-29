@@ -2,6 +2,11 @@ package party.qwer.iris
 
 import kotlinx.serialization.json.JsonPrimitive
 import party.qwer.iris.model.QueryColumn
+import party.qwer.iris.storage.KakaoDbSqlClient
+import party.qwer.iris.storage.MemberIdentityQueries
+import party.qwer.iris.storage.ObservedProfileQueries
+import party.qwer.iris.storage.RoomDirectoryQueries
+import party.qwer.iris.storage.RoomStatsQueries
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -38,6 +43,24 @@ private fun legacyQuery(block: (String, Array<String?>?, Int) -> List<Map<String
         }
     }
 
+private fun buildRepoFromLegacy(
+    executeQueryTyped: (String, Array<String?>?, Int) -> QueryExecutionResult,
+    decrypt: (Int, String, Long) -> String = { _, s, _ -> s },
+    botId: Long = 1L,
+    learnObservedProfileUserMappings: (Long, Map<Long, String>) -> Unit = { _, _ -> },
+): MemberRepository {
+    val sqlClient = KakaoDbSqlClient(executeQueryTyped)
+    return MemberRepository(
+        roomDirectory = RoomDirectoryQueries(sqlClient),
+        memberIdentity = MemberIdentityQueries(sqlClient, decrypt, botId),
+        observedProfile = ObservedProfileQueries(sqlClient),
+        roomStats = RoomStatsQueries(sqlClient),
+        decrypt = decrypt,
+        botId = botId,
+        learnObservedProfileUserMappings = learnObservedProfileUserMappings,
+    )
+}
+
 class MemberRepositoryTest {
     @Test
     fun `roleCodeToName maps known codes correctly`() {
@@ -71,7 +94,7 @@ class MemberRepositoryTest {
     @Test
     fun `parseJsonLongArray parses member id arrays`() {
         val repo =
-            MemberRepository(
+            buildRepoFromLegacy(
                 executeQueryTyped = legacyQuery { _, _, _ -> emptyList() },
                 decrypt = { _, _, _ -> "" },
                 botId = 1L,
@@ -85,7 +108,7 @@ class MemberRepositoryTest {
     @Test
     fun `parsePeriodSeconds converts period strings`() {
         val repo =
-            MemberRepository(
+            buildRepoFromLegacy(
                 executeQueryTyped = legacyQuery { _, _, _ -> emptyList() },
                 decrypt = { _, _, _ -> "" },
                 botId = 1L,
@@ -100,7 +123,7 @@ class MemberRepositoryTest {
     fun `roomStats keeps totals before top member limit`() {
         val chatId = 100L
         val repo =
-            MemberRepository(
+            buildRepoFromLegacy(
                 executeQueryTyped =
                     legacyQuery { sqlQuery, bindArgs, _ ->
                         when {
@@ -140,7 +163,7 @@ class MemberRepositoryTest {
     @Test
     fun `roomStats applies minMessages filter before totals`() {
         val repo =
-            MemberRepository(
+            buildRepoFromLegacy(
                 executeQueryTyped =
                     legacyQuery { sqlQuery, _, _ ->
                         when {
@@ -173,7 +196,7 @@ class MemberRepositoryTest {
     fun `roomStats resolves open member nicknames in batch`() {
         var batchNicknameQueryCount = 0
         val repo =
-            MemberRepository(
+            buildRepoFromLegacy(
                 executeQueryTyped =
                     legacyQuery { sqlQuery, bindArgs, _ ->
                         when {
@@ -210,7 +233,7 @@ class MemberRepositoryTest {
     @Test
     fun `listMembers includes current member activity metadata without former members`() {
         val repo =
-            MemberRepository(
+            buildRepoFromLegacy(
                 executeQueryTyped =
                     legacyQuery { sqlQuery, bindArgs, _ ->
                         when {
@@ -262,7 +285,7 @@ class MemberRepositoryTest {
     @Test
     fun `listMembers scopes activity aggregation to current member ids`() {
         val repo =
-            MemberRepository(
+            buildRepoFromLegacy(
                 executeQueryTyped =
                     legacyQuery { sqlQuery, bindArgs, _ ->
                         when {
@@ -309,7 +332,7 @@ class MemberRepositoryTest {
     fun `listMembers reuses activity aggregation for immediate repeated reads`() {
         var activityQueryCount = 0
         val repo =
-            MemberRepository(
+            buildRepoFromLegacy(
                 executeQueryTyped =
                     legacyQuery { sqlQuery, bindArgs, _ ->
                         when {
@@ -356,7 +379,7 @@ class MemberRepositoryTest {
     @Test
     fun `listRooms deduplicates same open link and prefers positive chat id`() {
         val repo =
-            MemberRepository(
+            buildRepoFromLegacy(
                 executeQueryTyped =
                     legacyQuery { _, _, _ ->
                         listOf(
@@ -398,7 +421,7 @@ class MemberRepositoryTest {
     @Test
     fun `listRooms includes non open rooms with resolved display names`() {
         val repo =
-            MemberRepository(
+            buildRepoFromLegacy(
                 executeQueryTyped =
                     legacyQuery { sqlQuery, bindArgs, _ ->
                         when {
@@ -449,7 +472,7 @@ class MemberRepositoryTest {
     @Test
     fun `listMembers returns non open members from members and chat logs`() {
         val repo =
-            MemberRepository(
+            buildRepoFromLegacy(
                 executeQueryTyped =
                     legacyQuery { sqlQuery, bindArgs, _ ->
                         when {
@@ -493,7 +516,7 @@ class MemberRepositoryTest {
     @Test
     fun `listMembers falls back to user id string when non open nickname sources are missing`() {
         val repo =
-            MemberRepository(
+            buildRepoFromLegacy(
                 executeQueryTyped =
                     legacyQuery { sqlQuery, _, _ ->
                         when {
@@ -528,7 +551,7 @@ class MemberRepositoryTest {
     @Test
     fun `listRooms falls back to member id when direct chat name sources are missing`() {
         val repo =
-            MemberRepository(
+            buildRepoFromLegacy(
                 executeQueryTyped =
                     legacyQuery { sqlQuery, _, _ ->
                         when {
@@ -563,7 +586,7 @@ class MemberRepositoryTest {
     @Test
     fun `listRooms uses observed profile room name for direct chat fallback`() {
         val repo =
-            MemberRepository(
+            buildRepoFromLegacy(
                 executeQueryTyped =
                     legacyQuery { sqlQuery, bindArgs, _ ->
                         when {
@@ -606,7 +629,7 @@ class MemberRepositoryTest {
     @Test
     fun `listMembers uses observed profile display name for direct chat participant`() {
         val repo =
-            MemberRepository(
+            buildRepoFromLegacy(
                 executeQueryTyped =
                     legacyQuery { sqlQuery, bindArgs, _ ->
                         when {
@@ -650,7 +673,7 @@ class MemberRepositoryTest {
     @Test
     fun `listMembers uses learned observed profile display name fallback`() {
         val repo =
-            MemberRepository(
+            buildRepoFromLegacy(
                 executeQueryTyped =
                     legacyQuery { sqlQuery, bindArgs, _ ->
                         when {
@@ -687,7 +710,7 @@ class MemberRepositoryTest {
     @Test
     fun `resolveDisplayName uses learned observed profile fallback for non open room`() {
         val repo =
-            MemberRepository(
+            buildRepoFromLegacy(
                 executeQueryTyped =
                     legacyQuery { sqlQuery, bindArgs, _ ->
                         when {
@@ -714,7 +737,7 @@ class MemberRepositoryTest {
     @Test
     fun `listMembers scopes non open activity aggregation to current members and bot`() {
         val repo =
-            MemberRepository(
+            buildRepoFromLegacy(
                 executeQueryTyped =
                     legacyQuery { sqlQuery, bindArgs, _ ->
                         when {
@@ -754,7 +777,7 @@ class MemberRepositoryTest {
     fun `listMembers reuses non open activity cache for repeated reads`() {
         var activityQueryCount = 0
         val repo =
-            MemberRepository(
+            buildRepoFromLegacy(
                 executeQueryTyped =
                     legacyQuery { sqlQuery, bindArgs, _ ->
                         when {
@@ -794,7 +817,7 @@ class MemberRepositoryTest {
         var learnedChatId: Long? = null
         var learnedNames: Map<Long, String>? = null
         val repo =
-            MemberRepository(
+            buildRepoFromLegacy(
                 executeQueryTyped =
                     legacyQuery { sqlQuery, _, _ ->
                         when {
@@ -840,19 +863,21 @@ class MemberRepositoryTest {
         var learnedChatId: Long? = null
         var learnedNames: Map<Long, String>? = null
         val repo =
-            MemberRepository(
+            buildRepoFromLegacy(
                 executeQueryTyped =
                     legacyQuery { sqlQuery, _, _ ->
                         when {
-                            sqlQuery == "SELECT members, blinded_member_ids, link_id FROM chat_rooms WHERE id = ?" ->
+                            sqlQuery == "SELECT id, type, members, blinded_member_ids, link_id FROM chat_rooms WHERE id = ?" ->
                                 listOf(
                                     mapOf(
+                                        "id" to "18478615493603057",
+                                        "type" to "OM",
                                         "members" to "[6729110572752592365]",
                                         "blinded_member_ids" to "[]",
                                         "link_id" to "455150406",
                                     ),
                                 )
-                            sqlQuery == "SELECT user_id, nickname, link_member_type, profile_image_url, enc FROM db2.open_chat_member WHERE link_id = ?" ->
+                            sqlQuery.contains("FROM db2.open_chat_member WHERE link_id = ?") ->
                                 listOf(
                                     mapOf(
                                         "user_id" to "6729110572752592365",
@@ -882,13 +907,15 @@ class MemberRepositoryTest {
     @Test
     fun `snapshot uses learned observed profile fallback for non open members`() {
         val repo =
-            MemberRepository(
+            buildRepoFromLegacy(
                 executeQueryTyped =
                     legacyQuery { sqlQuery, bindArgs, _ ->
                         when {
-                            sqlQuery == "SELECT members, blinded_member_ids, link_id FROM chat_rooms WHERE id = ?" ->
+                            sqlQuery == "SELECT id, type, members, blinded_member_ids, link_id FROM chat_rooms WHERE id = ?" ->
                                 listOf(
                                     mapOf(
+                                        "id" to "366795577484293",
+                                        "type" to "MultiChat",
                                         "members" to "[203887151,243338321]",
                                         "blinded_member_ids" to "[]",
                                         "link_id" to null,

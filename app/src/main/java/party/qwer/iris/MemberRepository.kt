@@ -276,7 +276,7 @@ class MemberRepository(
                         userId = userId,
                         nickname = nicknameByUser[userId] ?: resolveNickname(userId, linkId = linkId),
                         messageCount = total,
-                        lastActive = lastActive,
+                        lastActiveAt = lastActive,
                         messageTypes = types,
                     )
                 }.sortedByDescending { it.messageCount }

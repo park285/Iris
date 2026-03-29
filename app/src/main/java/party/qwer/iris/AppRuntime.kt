@@ -11,9 +11,15 @@ import party.qwer.iris.delivery.webhook.WebhookOutboxDispatcher
 import party.qwer.iris.ingress.CommandIngressService
 import party.qwer.iris.persistence.BatchedCheckpointJournal
 import party.qwer.iris.persistence.CheckpointJournal
+import party.qwer.iris.snapshot.RoomSnapshotAssembler
 import party.qwer.iris.snapshot.RoomSnapshotReader
 import party.qwer.iris.snapshot.SnapshotCoordinator
 import party.qwer.iris.snapshot.SnapshotEventEmitter
+import party.qwer.iris.storage.KakaoDbSqlClient
+import party.qwer.iris.storage.MemberIdentityQueries
+import party.qwer.iris.storage.ObservedProfileQueries
+import party.qwer.iris.storage.RoomDirectoryQueries
+import party.qwer.iris.storage.RoomStatsQueries
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal class AppRuntime(
@@ -55,9 +61,24 @@ internal class AppRuntime(
         IrisLogger.info("Message sender thread started")
 
         kakaoDb = KakaoDB(configManager)
+        val sqlClient = KakaoDbSqlClient(kakaoDb::executeQuery)
+        val roomDirectoryQueries = RoomDirectoryQueries(sqlClient)
+        val memberIdentityQueries =
+            MemberIdentityQueries(
+                sqlClient,
+                KakaoDecrypt.Companion::decrypt,
+                configManager.botId,
+            )
+        val observedProfileQueries = ObservedProfileQueries(sqlClient)
+        val roomStatsQueries = RoomStatsQueries(sqlClient)
+        val roomSnapshotAssembler = RoomSnapshotAssembler
         memberRepo =
             MemberRepository(
-                executeQueryTyped = kakaoDb::executeQuery,
+                roomDirectory = roomDirectoryQueries,
+                memberIdentity = memberIdentityQueries,
+                observedProfile = observedProfileQueries,
+                roomStats = roomStatsQueries,
+                snapshotAssembler = roomSnapshotAssembler,
                 decrypt = KakaoDecrypt.Companion::decrypt,
                 botId = configManager.botId,
                 learnObservedProfileUserMappings = kakaoDb::learnObservedProfileUserMappings,

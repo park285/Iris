@@ -2,6 +2,11 @@ package party.qwer.iris
 
 import kotlinx.serialization.json.JsonPrimitive
 import party.qwer.iris.model.QueryColumn
+import party.qwer.iris.storage.KakaoDbSqlClient
+import party.qwer.iris.storage.MemberIdentityQueries
+import party.qwer.iris.storage.ObservedProfileQueries
+import party.qwer.iris.storage.RoomDirectoryQueries
+import party.qwer.iris.storage.RoomStatsQueries
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -39,12 +44,30 @@ private fun legacyQuery(block: (String, Array<String?>?, Int) -> List<Map<String
         }
     }
 
+private fun buildRepoFromLegacy(
+    executeQueryTyped: (String, Array<String?>?, Int) -> QueryExecutionResult,
+    decrypt: (Int, String, Long) -> String = { _, s, _ -> s },
+    botId: Long = 1L,
+    learnObservedProfileUserMappings: (Long, Map<Long, String>) -> Unit = { _, _ -> },
+): MemberRepository {
+    val sqlClient = KakaoDbSqlClient(executeQueryTyped)
+    return MemberRepository(
+        roomDirectory = RoomDirectoryQueries(sqlClient),
+        memberIdentity = MemberIdentityQueries(sqlClient, decrypt, botId),
+        observedProfile = ObservedProfileQueries(sqlClient),
+        roomStats = RoomStatsQueries(sqlClient),
+        decrypt = decrypt,
+        botId = botId,
+        learnObservedProfileUserMappings = learnObservedProfileUserMappings,
+    )
+}
+
 class MemberRepositoryQueryTest {
     @Test
     fun `observed profile query uses chat_id equality not LIKE`() {
         val executedQueries = mutableListOf<Pair<String, List<String?>>>()
         val repo =
-            MemberRepository(
+            buildRepoFromLegacy(
                 executeQueryTyped =
                     legacyQuery { sql, args, _ ->
                         executedQueries.add(sql to (args?.toList() ?: emptyList()))
@@ -89,7 +112,7 @@ class MemberRepositoryQueryTest {
             java.util.concurrent.atomic
                 .AtomicInteger(0)
         val repo =
-            MemberRepository(
+            buildRepoFromLegacy(
                 executeQueryTyped =
                     legacyQuery { sql, args, _ ->
                         queryCount.incrementAndGet()
@@ -128,7 +151,7 @@ class MemberRepositoryQueryTest {
     @Test
     fun `batch nickname falls back through open, friends, observed`() {
         val repo =
-            MemberRepository(
+            buildRepoFromLegacy(
                 executeQueryTyped =
                     legacyQuery { sql, _, _ ->
                         when {
@@ -161,7 +184,7 @@ class MemberRepositoryQueryTest {
     @Test
     fun `MemberRepository accepts QueryExecutionResult directly`() {
         val repo =
-            MemberRepository(
+            buildRepoFromLegacy(
                 executeQueryTyped = { _, _, _ ->
                     QueryExecutionResult(
                         columns =

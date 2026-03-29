@@ -12,6 +12,11 @@ import party.qwer.iris.persistence.CheckpointJournal
 import party.qwer.iris.snapshot.RoomSnapshotReader
 import party.qwer.iris.snapshot.SnapshotCoordinator
 import party.qwer.iris.snapshot.SnapshotEventEmitter
+import party.qwer.iris.storage.KakaoDbSqlClient
+import party.qwer.iris.storage.MemberIdentityQueries
+import party.qwer.iris.storage.ObservedProfileQueries
+import party.qwer.iris.storage.RoomDirectoryQueries
+import party.qwer.iris.storage.RoomStatsQueries
 import java.io.File
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -234,18 +239,17 @@ class ObserverHelperLogicTest {
                 roomMetadata = KakaoDB.RoomMetadata(type = "MultiChat", linkId = ""),
             )
         val memberRepo =
-            MemberRepository(
-                executeQueryTyped =
-                    legacyQuery { sqlQuery, bindArgs, _ ->
-                        when {
-                            sqlQuery.contains("SELECT id, name, enc FROM db2.friends WHERE id IN (?)") &&
-                                bindArgs?.toList() == listOf("203887151") -> emptyList()
-                            sqlQuery.contains("FROM db3.observed_profile_user_links") &&
-                                bindArgs?.toList() == listOf("366795577484293", "203887151") ->
-                                listOf(mapOf("user_id" to "203887151", "display_name" to "재균"))
-                            else -> emptyList()
-                        }
-                    },
+            buildRepoFromLegacy(
+                legacyQuery { sqlQuery, bindArgs, _ ->
+                    when {
+                        sqlQuery.contains("SELECT id, name, enc FROM db2.friends WHERE id IN (?)") &&
+                            bindArgs?.toList() == listOf("203887151") -> emptyList()
+                        sqlQuery.contains("FROM db3.observed_profile_user_links") &&
+                            bindArgs?.toList() == listOf("366795577484293", "203887151") ->
+                            listOf(mapOf("user_id" to "203887151", "display_name" to "재균"))
+                        else -> emptyList()
+                    }
+                },
                 decrypt = { _, raw, _ -> raw },
                 botId = config.botId,
             )
@@ -479,6 +483,24 @@ private fun legacyQuery(block: (String, Array<String?>?, Int) -> List<Map<String
             stubResult(columns, rows)
         }
     }
+
+private fun buildRepoFromLegacy(
+    executeQueryTyped: (String, Array<String?>?, Int) -> QueryExecutionResult,
+    decrypt: (Int, String, Long) -> String = { _, s, _ -> s },
+    botId: Long = 1L,
+    learnObservedProfileUserMappings: (Long, Map<Long, String>) -> Unit = { _, _ -> },
+): MemberRepository {
+    val sqlClient = KakaoDbSqlClient(executeQueryTyped)
+    return MemberRepository(
+        roomDirectory = RoomDirectoryQueries(sqlClient),
+        memberIdentity = MemberIdentityQueries(sqlClient, decrypt, botId),
+        observedProfile = ObservedProfileQueries(sqlClient),
+        roomStats = RoomStatsQueries(sqlClient),
+        decrypt = decrypt,
+        botId = botId,
+        learnObservedProfileUserMappings = learnObservedProfileUserMappings,
+    )
+}
 
 private fun webhookChatLogEntry(
     id: Long,
