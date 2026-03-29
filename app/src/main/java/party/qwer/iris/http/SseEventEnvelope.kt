@@ -1,6 +1,6 @@
 package party.qwer.iris.http
 
-internal data class SseEventEnvelope(
+data class SseEventEnvelope(
     val id: Long,
     val eventType: String,
     val payload: String,

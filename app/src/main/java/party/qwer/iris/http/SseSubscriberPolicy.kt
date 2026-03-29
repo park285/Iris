@@ -1,6 +1,6 @@
 package party.qwer.iris.http
 
-internal data class SseSubscriberPolicy(
+data class SseSubscriberPolicy(
     val bufferCapacity: Int = 256,
     val slowSubscriberTimeoutMs: Long = 30_000,
     val replayWindowSize: Int = 64,

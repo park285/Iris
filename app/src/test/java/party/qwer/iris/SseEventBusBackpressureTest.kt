@@ -91,7 +91,7 @@ class SseEventBusBackpressureTest {
 
             delay(policy.slowSubscriberTimeoutMs + 50)
 
-            assertTrue(subscriberChannel.isClosedForReceive || bus.subscriberCount() == 0)
+            assertTrue(bus.subscriberCount() == 0)
         }
 
     @Test
