@@ -51,27 +51,26 @@ class ConfigManager(
     }
 
     private fun saveConfig(): Boolean {
-        val currentState = stateStore.current()
+        val savedSnapshot = stateStore.current().snapshotUser
         IrisLogger.debug(
             "Saving config to $configPath " +
-                "(inboundSigningSecretConfigured=${currentState.snapshotUser.inboundSigningSecret.isNotBlank()}, " +
-                "outboundWebhookTokenConfigured=${currentState.snapshotUser.outboundWebhookToken.isNotBlank()}, " +
-                "botControlTokenConfigured=${currentState.snapshotUser.botControlToken.isNotBlank()})",
+                "(inboundSigningSecretConfigured=${savedSnapshot.inboundSigningSecret.isNotBlank()}, " +
+                "outboundWebhookTokenConfigured=${savedSnapshot.outboundWebhookToken.isNotBlank()}, " +
+                "botControlTokenConfigured=${savedSnapshot.botControlToken.isNotBlank()})",
         )
-        val success = persistence.save(currentState.snapshotUser)
+        val success = persistence.save(savedSnapshot)
         if (success) {
-            stateStore.clearDirty()
+            stateStore.clearDirtyIf(savedSnapshot)
         }
         return success
     }
 
-    fun saveConfigNow(): Boolean =
-        synchronized(this) {
-            if (!stateStore.current().isDirty) {
-                return true
-            }
-            return saveConfig()
+    fun saveConfigNow(): Boolean {
+        if (!stateStore.current().isDirty) {
+            return true
         }
+        return saveConfig()
+    }
 
     override var botId: Long
         get() = stateStore.current().discovered.botId
@@ -117,14 +116,13 @@ class ConfigManager(
         route: String,
         endpoint: String,
     ) {
-        synchronized(this) {
-            val normalizedRoute = route.trim()
-            val normalizedEndpoint = endpoint.trim()
-            if (normalizedRoute.isEmpty()) {
-                return
-            }
+        val normalizedRoute = route.trim()
+        val normalizedEndpoint = endpoint.trim()
+        if (normalizedRoute.isEmpty()) {
+            return
+        }
 
-            val current = stateStore.current()
+        stateStore.mutate { current ->
             val updatedSnapshot =
                 updateWebhookConfig(
                     current.snapshotUser.toLegacyConfigValues(),
@@ -138,21 +136,19 @@ class ConfigManager(
                     normalizedEndpoint,
                 ).toUserConfigState()
             if (current.snapshotUser == updatedSnapshot && current.appliedUser == updatedEffective) {
-                return
-            }
-
-            stateStore.mutate {
-                it.copy(
+                current
+            } else {
+                current.copy(
                     snapshotUser = updatedSnapshot,
                     appliedUser = updatedEffective,
                     isDirty = true,
                 )
             }
-            if (normalizedRoute == DEFAULT_WEBHOOK_ROUTE) {
-                IrisLogger.debug("Default webhook endpoint updated")
-            } else {
-                IrisLogger.debug("Webhook endpoint updated for route=$normalizedRoute")
-            }
+        }
+        if (normalizedRoute == DEFAULT_WEBHOOK_ROUTE) {
+            IrisLogger.debug("Default webhook endpoint updated")
+        } else {
+            IrisLogger.debug("Webhook endpoint updated for route=$normalizedRoute")
         }
     }
 
@@ -194,40 +190,43 @@ class ConfigManager(
 
     override fun imageMessageTypeRoutes(): Map<String, List<String>> = stateStore.current().appliedUser.imageMessageTypeRoutes
 
-    fun configResponse(): ConfigResponse =
-        synchronized(this) {
-            buildConfigResponse(snapshotConfigValues(), effectiveConfigValues())
-        }
+    fun configResponse(): ConfigResponse {
+        val current = stateStore.current()
+        return buildConfigResponse(
+            snapshotConfigValues(current),
+            effectiveConfigValues(current),
+        )
+    }
 
     fun configUpdateResponse(
         name: String,
         persisted: Boolean,
         applied: Boolean,
         requiresRestart: Boolean,
-    ): ConfigUpdateResponse =
-        synchronized(this) {
-            buildConfigUpdateResponse(
-                status =
-                    ConfigUpdateStatus(
-                        name = name,
-                        persisted = persisted,
-                        applied = applied,
-                        requiresRestart = requiresRestart,
-                    ),
-                snapshot = snapshotConfigValues(),
-                effective = effectiveConfigValues(),
-            )
-        }
+    ): ConfigUpdateResponse {
+        val current = stateStore.current()
+        return buildConfigUpdateResponse(
+            status =
+                ConfigUpdateStatus(
+                    name = name,
+                    persisted = persisted,
+                    applied = applied,
+                    requiresRestart = requiresRestart,
+                ),
+            snapshot = snapshotConfigValues(current),
+            effective = effectiveConfigValues(current),
+        )
+    }
 
-    private fun snapshotConfigValues(): ConfigValues =
+    private fun snapshotConfigValues(state: ConfigRuntimeState = stateStore.current()): ConfigValues =
         AppliedConfigState(
-            user = stateStore.current().snapshotUser,
-            discovered = stateStore.current().discovered,
+            user = state.snapshotUser,
+            discovered = state.discovered,
         ).toLegacyConfigValues()
 
-    private fun effectiveConfigValues(): ConfigValues =
+    private fun effectiveConfigValues(state: ConfigRuntimeState = stateStore.current()): ConfigValues =
         AppliedConfigState(
-            user = stateStore.current().appliedUser,
-            discovered = stateStore.current().discovered,
+            user = state.appliedUser,
+            discovered = state.discovered,
         ).toLegacyConfigValues()
 }

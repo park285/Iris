@@ -89,4 +89,23 @@ class ConfigStateStoreTest {
         store.clearDirty()
         assertFalse(store.current().isDirty)
     }
+
+    @Test
+    fun `clearDirtyIf clears when snapshot matches`() {
+        val store = ConfigStateStore()
+        store.updateUserState(applyImmediately = true) { it.copy(botName = "Saved") }
+        assertTrue(store.current().isDirty)
+        store.clearDirtyIf(store.current().snapshotUser)
+        assertFalse(store.current().isDirty)
+    }
+
+    @Test
+    fun `clearDirtyIf preserves dirty when snapshot changed after save`() {
+        val store = ConfigStateStore()
+        store.updateUserState(applyImmediately = true) { it.copy(botName = "Saved") }
+        val savedSnapshot = store.current().snapshotUser
+        store.updateUserState(applyImmediately = true) { it.copy(botName = "Changed") }
+        store.clearDirtyIf(savedSnapshot)
+        assertTrue(store.current().isDirty)
+    }
 }

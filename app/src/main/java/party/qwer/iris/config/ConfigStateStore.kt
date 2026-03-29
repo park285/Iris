@@ -44,4 +44,11 @@ internal class ConfigStateStore {
     fun clearDirty() {
         state = state.copy(isDirty = false)
     }
+
+    @Synchronized
+    fun clearDirtyIf(savedSnapshot: UserConfigState) {
+        if (state.snapshotUser == savedSnapshot) {
+            state = state.copy(isDirty = false)
+        }
+    }
 }
