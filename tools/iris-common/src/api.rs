@@ -2,7 +2,8 @@ use crate::auth::{canonical_target, signed_headers};
 use crate::config::IrisConnection;
 use crate::models::{
     BridgeDiagnosticsResponse, HealthResponse, MemberActivityResponse, MemberListResponse,
-    RoomInfoResponse, RoomListResponse, StatsResponse,
+    ReplyAcceptedResponse, ReplyRequest, RoomInfoResponse, RoomListResponse, StatsResponse,
+    ThreadListResponse,
 };
 use anyhow::Result;
 use reqwest::Client;
@@ -132,6 +133,32 @@ impl IrisApi {
             .await?)
     }
 
+    pub async fn send_reply(&self, req: &ReplyRequest) -> Result<ReplyAcceptedResponse> {
+        let resp = self.signed_post_json("/reply", req)?.send().await?;
+        if resp.status().is_success() {
+            Ok(resp.json().await?)
+        } else {
+            let status = resp.status();
+            let error: crate::models::ErrorResponse = resp.json().await.unwrap_or_else(|_| {
+                crate::models::ErrorResponse {
+                    status: false,
+                    message: format!("HTTP {status}"),
+                }
+            });
+            anyhow::bail!("[{status}] {}", error.message)
+        }
+    }
+
+    pub async fn list_threads(&self, chat_id: i64) -> Result<ThreadListResponse> {
+        Ok(self
+            .signed_get(&format!("/rooms/{chat_id}/threads"), &[])?
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
+    }
+
     // --- SSE 지원 (iris-ctl용) ---
 
     pub fn sse_url(&self) -> String {
@@ -177,5 +204,20 @@ impl IrisApi {
             .client
             .get(format!("{}{}", self.base_url, target))
             .headers(signed_headers(&self.token, "GET", &target, b"")?))
+    }
+
+    fn signed_post_json<T: serde::Serialize>(
+        &self,
+        path: &str,
+        body: &T,
+    ) -> Result<reqwest::RequestBuilder> {
+        let body_bytes = serde_json::to_vec(body)?;
+        let target = canonical_target(path, &[]);
+        Ok(self
+            .client
+            .post(format!("{}{}", self.base_url, target))
+            .headers(signed_headers(&self.token, "POST", &target, &body_bytes)?)
+            .header("Content-Type", "application/json")
+            .body(body_bytes))
     }
 }
