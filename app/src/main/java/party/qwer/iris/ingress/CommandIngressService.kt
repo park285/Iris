@@ -5,20 +5,20 @@ import party.qwer.iris.ChatLogRepository
 import party.qwer.iris.CommandKind
 import party.qwer.iris.CommandParser
 import party.qwer.iris.ConfigProvider
-import party.qwer.iris.delivery.webhook.H2cRoutingGateway
 import party.qwer.iris.IrisLogger
 import party.qwer.iris.KakaoDB
 import party.qwer.iris.KakaoDecrypt
 import party.qwer.iris.MemberRepository
 import party.qwer.iris.ParsedCommand
-import party.qwer.iris.isOwnBotMessage
-import party.qwer.iris.resolveObservedThreadMetadata
-import party.qwer.iris.shouldSkipOrigin
-import party.qwer.iris.stableLogHash
+import party.qwer.iris.delivery.webhook.H2cRoutingGateway
 import party.qwer.iris.delivery.webhook.RoutingCommand
 import party.qwer.iris.delivery.webhook.RoutingGateway
 import party.qwer.iris.delivery.webhook.RoutingResult
+import party.qwer.iris.isOwnBotMessage
 import party.qwer.iris.persistence.CheckpointJournal
+import party.qwer.iris.resolveObservedThreadMetadata
+import party.qwer.iris.shouldSkipOrigin
+import party.qwer.iris.stableLogHash
 import java.io.Closeable
 
 class CommandIngressService(
@@ -295,8 +295,7 @@ class CommandIngressService(
             ) ?: db.resolveSenderName(key.userId)
         }
 
-    private fun resolveRoomMetadata(chatId: Long): KakaoDB.RoomMetadata =
-        cachedResolve(roomMetadataCache, chatId, KakaoDB.RoomMetadata()) { db.resolveRoomMetadata(it) }
+    private fun resolveRoomMetadata(chatId: Long): KakaoDB.RoomMetadata = cachedResolve(roomMetadataCache, chatId, KakaoDB.RoomMetadata()) { db.resolveRoomMetadata(it) }
 
     private fun isDuplicateCommand(
         logEntry: KakaoDB.ChatLogEntry,

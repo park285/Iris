@@ -9,11 +9,12 @@ class BatchedCheckpointJournalTest {
     @Test
     fun `advance does not flush immediately`() {
         val store = InMemoryCheckpointStore()
-        val journal = BatchedCheckpointJournal(
-            store = store,
-            flushIntervalMs = 5000L,
-            clock = { 0L },
-        )
+        val journal =
+            BatchedCheckpointJournal(
+                store = store,
+                flushIntervalMs = 5000L,
+                clock = { 0L },
+            )
 
         journal.advance("chat_logs", 100L)
 
@@ -23,11 +24,12 @@ class BatchedCheckpointJournalTest {
     @Test
     fun `flushNow persists all pending advances`() {
         val store = InMemoryCheckpointStore()
-        val journal = BatchedCheckpointJournal(
-            store = store,
-            flushIntervalMs = 5000L,
-            clock = { 0L },
-        )
+        val journal =
+            BatchedCheckpointJournal(
+                store = store,
+                flushIntervalMs = 5000L,
+                clock = { 0L },
+            )
 
         journal.advance("chat_logs", 100L)
         journal.advance("chat_logs", 200L)
@@ -42,11 +44,12 @@ class BatchedCheckpointJournalTest {
     fun `flushIfDirty does not flush before interval`() {
         var currentTime = 1000L
         val store = InMemoryCheckpointStore()
-        val journal = BatchedCheckpointJournal(
-            store = store,
-            flushIntervalMs = 5000L,
-            clock = { currentTime },
-        )
+        val journal =
+            BatchedCheckpointJournal(
+                store = store,
+                flushIntervalMs = 5000L,
+                clock = { currentTime },
+            )
 
         journal.advance("chat_logs", 100L)
         journal.flushIfDirty()
@@ -58,11 +61,12 @@ class BatchedCheckpointJournalTest {
     fun `flushIfDirty flushes after interval elapsed`() {
         var currentTime = 1000L
         val store = InMemoryCheckpointStore()
-        val journal = BatchedCheckpointJournal(
-            store = store,
-            flushIntervalMs = 5000L,
-            clock = { currentTime },
-        )
+        val journal =
+            BatchedCheckpointJournal(
+                store = store,
+                flushIntervalMs = 5000L,
+                clock = { currentTime },
+            )
 
         journal.advance("chat_logs", 100L)
         currentTime = 7000L
@@ -75,11 +79,12 @@ class BatchedCheckpointJournalTest {
     fun `load delegates to underlying store`() {
         val store = InMemoryCheckpointStore()
         store.save("chat_logs", 42L)
-        val journal = BatchedCheckpointJournal(
-            store = store,
-            flushIntervalMs = 5000L,
-            clock = { 0L },
-        )
+        val journal =
+            BatchedCheckpointJournal(
+                store = store,
+                flushIntervalMs = 5000L,
+                clock = { 0L },
+            )
 
         assertEquals(42L, journal.load("chat_logs"))
     }
@@ -88,11 +93,12 @@ class BatchedCheckpointJournalTest {
     fun `load returns pending value over store value`() {
         val store = InMemoryCheckpointStore()
         store.save("chat_logs", 42L)
-        val journal = BatchedCheckpointJournal(
-            store = store,
-            flushIntervalMs = 5000L,
-            clock = { 0L },
-        )
+        val journal =
+            BatchedCheckpointJournal(
+                store = store,
+                flushIntervalMs = 5000L,
+                clock = { 0L },
+            )
 
         journal.advance("chat_logs", 100L)
 
@@ -103,11 +109,12 @@ class BatchedCheckpointJournalTest {
     fun `flushNow resets timer so next flushIfDirty waits full interval`() {
         var currentTime = 0L
         val store = InMemoryCheckpointStore()
-        val journal = BatchedCheckpointJournal(
-            store = store,
-            flushIntervalMs = 5000L,
-            clock = { currentTime },
-        )
+        val journal =
+            BatchedCheckpointJournal(
+                store = store,
+                flushIntervalMs = 5000L,
+                clock = { currentTime },
+            )
 
         journal.advance("chat_logs", 100L)
         journal.flushNow()
@@ -128,11 +135,12 @@ class BatchedCheckpointJournalTest {
     @Test
     fun `advance with no pending changes makes flushNow a no-op`() {
         val store = InMemoryCheckpointStore()
-        val journal = BatchedCheckpointJournal(
-            store = store,
-            flushIntervalMs = 5000L,
-            clock = { 0L },
-        )
+        val journal =
+            BatchedCheckpointJournal(
+                store = store,
+                flushIntervalMs = 5000L,
+                clock = { 0L },
+            )
 
         journal.flushNow()
 
@@ -145,7 +153,10 @@ private class InMemoryCheckpointStore : CheckpointStore {
 
     override fun load(streamName: String): Long? = data[streamName]
 
-    override fun save(streamName: String, lastLogId: Long) {
+    override fun save(
+        streamName: String,
+        lastLogId: Long,
+    ) {
         data[streamName] = lastLogId
     }
 }

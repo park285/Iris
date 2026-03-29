@@ -3,7 +3,10 @@ package party.qwer.iris.persistence
 import party.qwer.iris.CheckpointStore
 
 interface CheckpointJournal {
-    fun advance(stream: String, cursor: Long)
+    fun advance(
+        stream: String,
+        cursor: Long,
+    )
 
     fun flushIfDirty()
 
@@ -21,7 +24,10 @@ class BatchedCheckpointJournal(
     private var lastFlushAtMs: Long = clock()
 
     @Synchronized
-    override fun advance(stream: String, cursor: Long) {
+    override fun advance(
+        stream: String,
+        cursor: Long,
+    ) {
         pending[stream] = cursor
     }
 

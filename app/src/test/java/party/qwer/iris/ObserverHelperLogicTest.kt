@@ -6,22 +6,29 @@ import kotlinx.serialization.json.jsonPrimitive
 import party.qwer.iris.delivery.webhook.RoutingCommand
 import party.qwer.iris.delivery.webhook.RoutingGateway
 import party.qwer.iris.delivery.webhook.RoutingResult
-import party.qwer.iris.model.QueryColumn
+import party.qwer.iris.ingress.CommandIngressService
+import party.qwer.iris.persistence.BatchedCheckpointJournal
+import party.qwer.iris.persistence.CheckpointJournal
+import party.qwer.iris.snapshot.RoomSnapshotReader
+import party.qwer.iris.snapshot.SnapshotCoordinator
+import party.qwer.iris.snapshot.SnapshotEventEmitter
+import java.io.File
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class ObserverHelperLogicTest {
-    private val config = ConfigManager(configPath = "/tmp/iris-observer-helper-test-config.json")
+    private val configPath = "/tmp/iris-observer-helper-test-config.json"
+    private val config = ConfigManager(configPath = configPath)
     private val originalBotId = config.botId
     private val json = Json { ignoreUnknownKeys = true }
 
     @AfterTest
     fun tearDown() {
         config.botId = originalBotId
+        File(configPath).delete()
     }
 
     @Test
@@ -36,7 +43,6 @@ class ObserverHelperLogicTest {
 
         cases.forEach { (origin, kind, expected) ->
             val parsedCommand = ParsedCommand(kind = kind, normalizedText = "message")
-
             assertEquals(expected, shouldSkipOrigin(origin, parsedCommand))
         }
     }
@@ -58,76 +64,54 @@ class ObserverHelperLogicTest {
     }
 
     @Test
-    fun `command fingerprint equality depends on all fields`() {
-        val fingerprint =
-            ObserverHelper.CommandFingerprint(
-                chatId = 1L,
-                userId = 2L,
-                createdAt = "2026-03-19T00:00:00Z",
-                message = "!ping",
-            )
-        val sameFingerprint =
-            ObserverHelper.CommandFingerprint(
-                chatId = 1L,
-                userId = 2L,
-                createdAt = "2026-03-19T00:00:00Z",
-                message = "!ping",
-            )
-        val differentFingerprint =
-            ObserverHelper.CommandFingerprint(
-                chatId = 1L,
-                userId = 2L,
-                createdAt = "2026-03-19T00:00:01Z",
-                message = "!ping",
-            )
+    fun `stableLogHash is stable for same input and differs for different input`() {
+        val first = "!ping".stableLogHash()
+        val second = "!ping".stableLogHash()
+        val different = "!pong".stableLogHash()
 
-        assertEquals(fingerprint, sameFingerprint)
-        assertNotEquals(fingerprint, differentFingerprint)
+        assertEquals(first, second)
+        assertTrue(first != different)
     }
 
     @Test
     fun `snapshot diff primes on first run and waits for dirty snapshot processing`() {
-        val roomList =
-            party.qwer.iris.model.RoomListResponse(
-                rooms =
-                    listOf(
-                        party.qwer.iris.model
-                            .RoomSummary(chatId = 100L, type = "OM", linkId = 200L, activeMembersCount = 2),
+        val chatLogRepo = FakeChatLogRepository()
+        val snapshotReader =
+            FakeRoomSnapshotReader(
+                rooms = listOf(100L),
+                snapshots =
+                    mapOf(
+                        100L to
+                            listOf(
+                                RoomSnapshotData(
+                                    chatId = 100L,
+                                    linkId = 200L,
+                                    memberIds = setOf(1L),
+                                    blindedIds = emptySet(),
+                                    nicknames = mapOf(1L to "Alice"),
+                                    roles = mapOf(1L to 2),
+                                    profileImages = emptyMap(),
+                                ),
+                                RoomSnapshotData(
+                                    chatId = 100L,
+                                    linkId = 200L,
+                                    memberIds = setOf(1L, 2L),
+                                    blindedIds = emptySet(),
+                                    nicknames = mapOf(1L to "Alice", 2L to "Bob"),
+                                    roles = mapOf(1L to 2, 2L to 2),
+                                    profileImages = emptyMap(),
+                                ),
+                            ),
                     ),
             )
-        val initialSnapshot =
-            RoomSnapshotData(
-                chatId = 100L,
-                linkId = 200L,
-                memberIds = setOf(1L),
-                blindedIds = emptySet(),
-                nicknames = mapOf(1L to "Alice"),
-                roles = mapOf(1L to 2),
-                profileImages = emptyMap(),
-            )
-        val changedSnapshot =
-            RoomSnapshotData(
-                chatId = 100L,
-                linkId = 200L,
-                memberIds = setOf(1L, 2L),
-                blindedIds = emptySet(),
-                nicknames = mapOf(1L to "Alice", 2L to "Bob"),
-                roles = mapOf(1L to 2, 2L to 2),
-                profileImages = emptyMap(),
-            )
-        val chatLogRepo = FakeChatLogRepository()
-        val memberRepo = snapshotSequenceMemberRepository(roomList, listOf(initialSnapshot, changedSnapshot))
-        val snapshotManager = RoomSnapshotManager()
         val bus = SseEventBus(bufferSize = 10)
         val helper =
-            ObserverHelper(
-                chatLogRepo,
-                config,
-                memberRepo,
-                snapshotManager,
-                bus,
+            buildObserverHelper(
+                db = chatLogRepo,
+                bus = bus,
                 checkpointStore = FakeCheckpointStore(),
                 routingGateway = FakeRoutingGateway(),
+                snapshotReader = snapshotReader,
             )
 
         helper.checkChange()
@@ -135,8 +119,10 @@ class ObserverHelperLogicTest {
         helper.checkChange()
         assertTrue(bus.replayFrom(0).isEmpty())
 
+        helper.seedSnapshotCache()
         helper.markRoomDirty(100L)
         helper.runDirtySnapshotDiff()
+        waitUntil { bus.replayFrom(0).isNotEmpty() }
         val replay = bus.replayFrom(0)
 
         assertEquals(1, replay.size)
@@ -149,40 +135,39 @@ class ObserverHelperLogicTest {
 
     @Test
     fun `initial check uses persisted checkpoint when available`() {
-        val checkpointStore = FakeCheckpointStore(initial = mapOf("chat_logs" to 5L))
         val chatLogRepo = FakeChatLogRepository(latestLogId = 100L)
-        val helper =
-            ObserverHelper(
+        val checkpointStore = FakeCheckpointStore(initial = mapOf("chat_logs" to 5L))
+        val bundle =
+            buildIngressService(
                 db = chatLogRepo,
-                config = config,
                 checkpointStore = checkpointStore,
                 routingGateway = FakeRoutingGateway(),
             )
 
-        helper.checkChange()
-        helper.checkChange()
+        bundle.ingress.checkChange()
+        bundle.ingress.checkChange()
 
         assertEquals(5L, chatLogRepo.lastPolledAfterLogId)
-        helper.close()
+        bundle.ingress.close()
     }
 
     @Test
     fun `initial check seeds checkpoint from latest log id when absent`() {
         val checkpointStore = FakeCheckpointStore()
         val chatLogRepo = FakeChatLogRepository(latestLogId = 42L)
-        val helper =
-            ObserverHelper(
+        val bundle =
+            buildIngressService(
                 db = chatLogRepo,
-                config = config,
                 checkpointStore = checkpointStore,
                 routingGateway = FakeRoutingGateway(),
             )
 
-        helper.checkChange()
+        bundle.ingress.checkChange()
+        bundle.journal.flushNow()
 
         assertEquals(42L, checkpointStore.saved["chat_logs"])
         assertEquals(null, chatLogRepo.lastPolledAfterLogId)
-        helper.close()
+        bundle.ingress.close()
     }
 
     @Test
@@ -191,24 +176,21 @@ class ObserverHelperLogicTest {
         val chatLogRepo =
             FakeChatLogRepository(
                 latestLogId = 10L,
-                polledLogs =
-                    listOf(
-                        webhookChatLogEntry(id = 11L, message = "!ping"),
-                    ),
+                polledLogs = listOf(webhookChatLogEntry(id = 11L, message = "!ping")),
             )
-        val helper =
-            ObserverHelper(
+        val bundle =
+            buildIngressService(
                 db = chatLogRepo,
-                config = config,
                 checkpointStore = checkpointStore,
                 routingGateway = FakeRoutingGateway(result = RoutingResult.ACCEPTED),
             )
 
-        helper.checkChange()
-        helper.checkChange()
+        bundle.ingress.checkChange()
+        bundle.ingress.checkChange()
+        bundle.journal.flushNow()
 
         assertEquals(11L, checkpointStore.saved["chat_logs"])
-        helper.close()
+        bundle.ingress.close()
     }
 
     @Test
@@ -217,24 +199,21 @@ class ObserverHelperLogicTest {
         val chatLogRepo =
             FakeChatLogRepository(
                 latestLogId = 10L,
-                polledLogs =
-                    listOf(
-                        webhookChatLogEntry(id = 11L, message = "!ping"),
-                    ),
+                polledLogs = listOf(webhookChatLogEntry(id = 11L, message = "!ping")),
             )
-        val helper =
-            ObserverHelper(
+        val bundle =
+            buildIngressService(
                 db = chatLogRepo,
-                config = config,
                 checkpointStore = checkpointStore,
                 routingGateway = FakeRoutingGateway(result = RoutingResult.RETRY_LATER),
             )
 
-        helper.checkChange()
-        helper.checkChange()
+        bundle.ingress.checkChange()
+        bundle.ingress.checkChange()
+        bundle.journal.flushNow()
 
         assertEquals(10L, checkpointStore.saved["chat_logs"])
-        helper.close()
+        bundle.ingress.close()
     }
 
     @Test
@@ -260,8 +239,7 @@ class ObserverHelperLogicTest {
                     legacyQuery { sqlQuery, bindArgs, _ ->
                         when {
                             sqlQuery.contains("SELECT id, name, enc FROM db2.friends WHERE id IN (?)") &&
-                                bindArgs?.toList() == listOf("203887151") ->
-                                emptyList()
+                                bindArgs?.toList() == listOf("203887151") -> emptyList()
                             sqlQuery.contains("FROM db3.observed_profile_user_links") &&
                                 bindArgs?.toList() == listOf("366795577484293", "203887151") ->
                                 listOf(mapOf("user_id" to "203887151", "display_name" to "재균"))
@@ -272,20 +250,19 @@ class ObserverHelperLogicTest {
                 botId = config.botId,
             )
         val routingGateway = FakeRoutingGateway(result = RoutingResult.ACCEPTED)
-        val helper =
-            ObserverHelper(
+        val bundle =
+            buildIngressService(
                 db = chatLogRepo,
-                config = config,
-                memberRepo = memberRepo,
                 checkpointStore = checkpointStore,
                 routingGateway = routingGateway,
+                memberRepository = memberRepo,
             )
 
-        helper.checkChange()
-        helper.checkChange()
+        bundle.ingress.checkChange()
+        bundle.ingress.checkChange()
 
         assertEquals("재균", routingGateway.commands.single().sender)
-        helper.close()
+        bundle.ingress.close()
     }
 
     @Test
@@ -306,10 +283,9 @@ class ObserverHelperLogicTest {
                     ),
             )
         val calls = mutableListOf<Triple<Long, Long, Long>>()
-        val helper =
-            ObserverHelper(
+        val bundle =
+            buildIngressService(
                 db = chatLogRepo,
-                config = config,
                 checkpointStore = checkpointStore,
                 routingGateway = FakeRoutingGateway(result = RoutingResult.ACCEPTED),
                 learnFromTimestampCorrelation = { chatId, userId, messageCreatedAtMs ->
@@ -317,11 +293,98 @@ class ObserverHelperLogicTest {
                 },
             )
 
-        helper.checkChange()
-        helper.checkChange()
+        bundle.ingress.checkChange()
+        bundle.ingress.checkChange()
 
         assertEquals(listOf(Triple(123L, 456L, 1_711_111_111_000L)), calls)
-        helper.close()
+        bundle.ingress.close()
+    }
+
+    private fun buildObserverHelper(
+        db: FakeChatLogRepository,
+        bus: SseEventBus,
+        checkpointStore: FakeCheckpointStore,
+        routingGateway: FakeRoutingGateway,
+        snapshotReader: RoomSnapshotReader,
+    ): ObserverHelper {
+        val journal = BatchedCheckpointJournal(store = checkpointStore, flushIntervalMs = Long.MAX_VALUE, clock = { 0L })
+        val coordinator =
+            SnapshotCoordinator(
+                scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default),
+                roomSnapshotReader = snapshotReader,
+                diffEngine = RoomSnapshotManager(),
+                emitter = SnapshotEventEmitter(bus, routingGateway),
+            )
+        val ingress =
+            CommandIngressService(
+                db = db,
+                config = config,
+                checkpointJournal = journal,
+                routingGateway = routingGateway,
+                onMarkDirty = { chatId ->
+                    kotlinx.coroutines.runBlocking {
+                        coordinator.send(
+                            party.qwer.iris.snapshot.SnapshotCommand
+                                .MarkDirty(chatId),
+                        )
+                    }
+                },
+            )
+        return ObserverHelper(ingress, coordinator, journal)
+    }
+
+    private fun buildIngressService(
+        db: FakeChatLogRepository,
+        checkpointStore: FakeCheckpointStore,
+        routingGateway: FakeRoutingGateway,
+        memberRepository: MemberRepository? = null,
+        learnFromTimestampCorrelation: ((Long, Long, Long) -> Unit)? = null,
+    ): IngressBundle {
+        val journal = BatchedCheckpointJournal(store = checkpointStore, flushIntervalMs = Long.MAX_VALUE, clock = { 0L })
+        val ingress =
+            CommandIngressService(
+                db = db,
+                config = config,
+                checkpointJournal = journal,
+                memberRepo = memberRepository,
+                routingGateway = routingGateway,
+                learnFromTimestampCorrelation = learnFromTimestampCorrelation,
+                onMarkDirty = {},
+            )
+        return IngressBundle(ingress = ingress, journal = journal)
+    }
+
+    private fun waitUntil(
+        timeoutMs: Long = 1_000L,
+        condition: () -> Boolean,
+    ) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (!condition() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(10L)
+        }
+        assertTrue(condition(), "condition not met within ${timeoutMs}ms")
+    }
+}
+
+private data class IngressBundle(
+    val ingress: CommandIngressService,
+    val journal: CheckpointJournal,
+)
+
+private class FakeRoomSnapshotReader(
+    private val rooms: List<Long>,
+    private val snapshots: Map<Long, List<RoomSnapshotData>>,
+) : RoomSnapshotReader {
+    private val indexes = mutableMapOf<Long, Int>()
+
+    override fun listRoomChatIds(): List<Long> = rooms
+
+    override fun snapshot(chatId: Long): RoomSnapshotData {
+        val roomSnapshots = snapshots.getValue(chatId)
+        val currentIndex = indexes[chatId] ?: 0
+        val safeIndex = minOf(currentIndex, roomSnapshots.lastIndex)
+        indexes[chatId] = safeIndex + 1
+        return roomSnapshots[safeIndex]
     }
 }
 
@@ -385,7 +448,11 @@ private fun stubResult(
     columns: List<String>,
     rows: List<Map<String, String?>>,
 ): QueryExecutionResult {
-    val cols = columns.map { QueryColumn(name = it, sqliteType = "TEXT") }
+    val cols =
+        columns.map {
+            party.qwer.iris.model
+                .QueryColumn(name = it, sqliteType = "TEXT")
+        }
     val jsonRows =
         rows.map { row ->
             columns.map { col ->
@@ -425,65 +492,6 @@ private fun webhookChatLogEntry(
         chatId = chatId,
         userId = userId,
         message = message,
-        metadata = """{"enc":0,"origin":"CHATLOG"}""",
+        metadata = "{\"enc\":0,\"origin\":\"CHATLOG\"}",
         createdAt = createdAt,
     )
-
-private fun snapshotSequenceMemberRepository(
-    roomList: party.qwer.iris.model.RoomListResponse,
-    snapshots: List<RoomSnapshotData>,
-): MemberRepository {
-    val snapshotQueue = ArrayDeque(snapshots)
-    var currentSnapshot: RoomSnapshotData? = null
-    return MemberRepository(
-        executeQueryTyped =
-            legacyQuery { sqlQuery, _, _ ->
-                when {
-                    sqlQuery.contains("FROM chat_rooms cr") ->
-                        roomList.rooms.map { room ->
-                            mapOf(
-                                "id" to room.chatId.toString(),
-                                "type" to room.type,
-                                "active_members_count" to room.activeMembersCount?.toString(),
-                                "link_id" to room.linkId?.toString(),
-                                "link_name" to room.linkName,
-                                "link_url" to room.linkUrl,
-                                "member_limit" to room.memberLimit?.toString(),
-                                "searchable" to room.searchable?.toString(),
-                                "bot_role" to room.botRole?.toString(),
-                            )
-                        }
-                    sqlQuery == "SELECT members, blinded_member_ids, link_id FROM chat_rooms WHERE id = ?" -> {
-                        val snapshot = snapshotQueue.removeFirst()
-                        currentSnapshot = snapshot
-                        listOf(
-                            mapOf(
-                                "members" to snapshot.memberIds.joinToString(prefix = "[", postfix = "]"),
-                                "blinded_member_ids" to snapshot.blindedIds.joinToString(prefix = "[", postfix = "]"),
-                                "link_id" to snapshot.linkId?.toString(),
-                            ),
-                        )
-                    }
-                    sqlQuery == "SELECT user_id, nickname, link_member_type, profile_image_url, enc FROM db2.open_chat_member WHERE link_id = ?" -> {
-                        val snapshot = currentSnapshot
-                        if (snapshot == null) {
-                            emptyList()
-                        } else {
-                            snapshot.memberIds.map { userId ->
-                                mapOf(
-                                    "user_id" to userId.toString(),
-                                    "nickname" to snapshot.nicknames[userId],
-                                    "link_member_type" to snapshot.roles[userId]?.toString(),
-                                    "profile_image_url" to snapshot.profileImages[userId],
-                                    "enc" to "0",
-                                )
-                            }
-                        }
-                    }
-                    else -> emptyList()
-                }
-            },
-        decrypt = { _, raw, _ -> raw },
-        botId = 0L,
-    )
-}

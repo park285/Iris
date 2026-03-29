@@ -9,7 +9,7 @@ import party.qwer.iris.model.NicknameChangeEvent
 import party.qwer.iris.model.ProfileChangeEvent
 import party.qwer.iris.model.RoleChangeEvent
 
-class SnapshotEventEmitter(
+open class SnapshotEventEmitter(
     private val bus: SseEventBus,
     private val routingGateway: RoutingGateway?,
 ) {
@@ -19,7 +19,7 @@ class SnapshotEventEmitter(
             explicitNulls = false
         }
 
-    fun emit(events: List<Any>) {
+    open fun emit(events: List<Any>) {
         for (event in events) {
             val (jsonStr, eventChatId) =
                 when (event) {
