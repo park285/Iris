@@ -1,5 +1,6 @@
 package party.qwer.iris
 
+import android.net.Uri
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -11,6 +12,12 @@ import party.qwer.iris.delivery.webhook.WebhookOutboxDispatcher
 import party.qwer.iris.ingress.CommandIngressService
 import party.qwer.iris.persistence.BatchedCheckpointJournal
 import party.qwer.iris.persistence.CheckpointJournal
+import party.qwer.iris.reply.DispatchScheduler
+import party.qwer.iris.reply.MediaPreparationService
+import party.qwer.iris.reply.ReplyAdmissionService
+import party.qwer.iris.reply.ReplyCommandFactory
+import party.qwer.iris.reply.ReplyStatusTracker
+import party.qwer.iris.reply.ReplyTransport
 import party.qwer.iris.snapshot.RoomSnapshotAssembler
 import party.qwer.iris.snapshot.RoomSnapshotReader
 import party.qwer.iris.snapshot.SnapshotCoordinator
@@ -20,6 +27,7 @@ import party.qwer.iris.storage.MemberIdentityQueries
 import party.qwer.iris.storage.ObservedProfileQueries
 import party.qwer.iris.storage.RoomDirectoryQueries
 import party.qwer.iris.storage.RoomStatsQueries
+import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal class AppRuntime(
@@ -56,7 +64,61 @@ internal class AppRuntime(
         configManager = ConfigManager()
         bridgeClient = UdsImageBridgeClient()
 
-        replyService = ReplyService(configManager, UdsImageReplySender(bridgeClient))
+        val replyCommandFactory = ReplyCommandFactory()
+        val replyStatusStore = ReplyStatusStore()
+        val replyStatusTracker = ReplyStatusTracker(replyStatusStore)
+        val mediaPreparationService =
+            MediaPreparationService(
+                imageDecoder = ::decodeBase64Image,
+                mediaScanner = { file -> broadcastMediaScan(Uri.fromFile(file)) },
+                imageDir = File(IRIS_IMAGE_DIR_PATH),
+                imageMediaScanEnabled =
+                    System
+                        .getenv("IRIS_IMAGE_MEDIA_SCAN")
+                        ?.trim()
+                        ?.lowercase()
+                        ?.let { raw -> raw != "0" && raw != "false" && raw != "off" }
+                        ?: true,
+            )
+        val replyTransport =
+            ReplyTransport(
+                notificationReplySender = { referer, chatId, preparedMessage, threadId, threadScope ->
+                    dispatchNotificationReply(
+                        startService = { intent -> AndroidHiddenApi.startService(intent) },
+                        referer = referer,
+                        chatId = chatId,
+                        preparedMessage = preparedMessage,
+                        threadId = threadId,
+                        threadScope = threadScope,
+                    )
+                },
+                sharedTextReplySender = { room, preparedMessage, threadId, threadScope ->
+                    dispatchSharedTextReply(
+                        startActivityAs = { callerPackage, intent -> AndroidHiddenApi.startActivityAs(callerPackage, intent) },
+                        room = room,
+                        preparedMessage = preparedMessage,
+                        threadId = threadId,
+                        threadScope = threadScope,
+                    )
+                },
+                nativeImageReplySender = UdsImageReplySender(bridgeClient),
+                mediaPreparationService = mediaPreparationService,
+            )
+        val dispatchScheduler =
+            DispatchScheduler(
+                baseIntervalMs = { configManager.messageSendRate },
+                jitterMaxMs = { configManager.messageSendJitterMax },
+            )
+        val replyAdmissionService = ReplyAdmissionService()
+        replyService =
+            ReplyService(
+                admissionService = replyAdmissionService,
+                commandFactory = replyCommandFactory,
+                mediaPreparationService = mediaPreparationService,
+                transport = replyTransport,
+                dispatchScheduler = dispatchScheduler,
+                statusTracker = replyStatusTracker,
+            )
         replyService.start()
         IrisLogger.info("Message sender thread started")
 
