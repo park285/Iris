@@ -8,6 +8,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 internal object ThreadedImageXposedInjector {
     private const val TAG = "IrisBridge"
+    private const val REQUEST_COMPANION_CLASS = "com.kakao.talk.manager.send.ChatSendingLogRequest\$a"
     private val installed = AtomicBoolean(false)
     private val pendingContext = ThreadLocal<PendingContext?>()
 
@@ -17,25 +18,76 @@ internal object ThreadedImageXposedInjector {
         val threadScope: Int,
     )
 
+    internal data class InjectHookBinding(
+        val method: Method,
+        val sendingLogArgIndex: Int,
+        val source: String,
+    )
+
     fun install(registry: KakaoClassRegistry) {
         if (!installed.compareAndSet(false, true)) return
-        val injectMethod =
-            selectInjectMethod(registry.chatMediaSenderClass, registry.writeTypeClass, registry.listenerClass)
-                ?: return
-        XposedBridge.hookMethod(
-            injectMethod,
-            object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    val context = pendingContext.get() ?: return
-                    val sendingLog = param.args.getOrNull(0) ?: return
-                    runCatching {
-                        injectThreadMetadata(sendingLog, context)
-                    }.onFailure { error ->
-                        Log.e(TAG, "thread metadata injection failed room=${context.roomId}", error)
-                    }
-                }
-            },
-        )
+        val bindings =
+            runCatching {
+                selectThreadedImageInjectBindings(
+                    requestCompanionClass =
+                        runCatching {
+                            Class.forName(
+                                REQUEST_COMPANION_CLASS,
+                                false,
+                                registry.chatMediaSenderClass.classLoader,
+                            )
+                        }.getOrNull(),
+                    chatMediaSenderClass = registry.chatMediaSenderClass,
+                    chatRoomClass = registry.chatRoomClass,
+                    writeTypeClass = registry.writeTypeClass,
+                    listenerClass = registry.listenerClass,
+                )
+            }.onFailure { error ->
+                BridgeDiscovery.markInstallError(HOOK_SEND_THREADED_INJECT, error.message ?: error.javaClass.name)
+                runCatching { Log.e(TAG, "threaded image inject method resolution failed", error) }
+            }.getOrNull().orEmpty()
+
+        if (bindings.isEmpty()) {
+            BridgeDiscovery.markInstallError(HOOK_SEND_THREADED_INJECT, "no threaded inject hook candidate found")
+            return
+        }
+
+        var anyInstalled = false
+        bindings.forEach { binding ->
+            runCatching {
+                XposedBridge.hookMethod(
+                    binding.method,
+                    object : XC_MethodHook() {
+                        override fun beforeHookedMethod(param: MethodHookParam) {
+                            val context = pendingContext.get() ?: return
+                            val sendingLog = param.args.getOrNull(binding.sendingLogArgIndex) ?: return
+                            runCatching {
+                                ReplyMarkdownSendingLogAccess.writeThreadMetadata(
+                                    sendingLog = sendingLog,
+                                    threadId = context.threadId,
+                                    threadScope = context.threadScope,
+                                )
+                                BridgeDiscovery.recordHook(
+                                    HOOK_SEND_THREADED_INJECT,
+                                    "source=${binding.source} room=${context.roomId} threadId=${context.threadId} scope=${context.threadScope}",
+                                )
+                            }.onFailure { error ->
+                                Log.e(TAG, "thread metadata injection failed room=${context.roomId} source=${binding.source}", error)
+                            }
+                        }
+                    },
+                )
+                anyInstalled = true
+            }.onFailure { error ->
+                runCatching { Log.e(TAG, "threaded image inject hook install failed source=${binding.source}", error) }
+            }
+        }
+
+        if (anyInstalled) {
+            BridgeDiscovery.markInstalled(HOOK_SEND_THREADED_INJECT)
+        } else {
+            BridgeDiscovery.markInstallError(HOOK_SEND_THREADED_INJECT, "threaded inject hook install failed")
+        }
     }
 
     fun <T> withThreadContext(
@@ -52,41 +104,97 @@ internal object ThreadedImageXposedInjector {
         }
     }
 
-    private fun selectInjectMethod(
-        chatMediaSenderClass: Class<*>,
-        writeTypeClass: Class<*>,
-        listenerClass: Class<*>,
-    ): Method? =
-        chatMediaSenderClass.methods.firstOrNull { method ->
-            method.name == "A" &&
-                !java.lang.reflect
-                    .Modifier
-                    .isStatic(method.modifiers) &&
-                method.parameterCount == 3 &&
-                method.parameterTypes[1] == writeTypeClass &&
-                method.parameterTypes[2] == listenerClass
-        }
+}
 
-    private fun injectThreadMetadata(
-        sendingLog: Any,
-        context: PendingContext,
-    ) {
-        val sendingLogClass = sendingLog.javaClass
-        val scopeValue = context.threadScope
-        val threadIdValue = java.lang.Long.valueOf(context.threadId)
+internal fun selectThreadedImageInjectBindingsForTest(
+    requestCompanionClass: Class<*>?,
+    chatMediaSenderClass: Class<*>,
+    chatRoomClass: Class<*>,
+    writeTypeClass: Class<*>,
+    listenerClass: Class<*>,
+): List<ThreadedImageXposedInjector.InjectHookBinding> =
+    selectThreadedImageInjectBindings(
+        requestCompanionClass = requestCompanionClass,
+        chatMediaSenderClass = chatMediaSenderClass,
+        chatRoomClass = chatRoomClass,
+        writeTypeClass = writeTypeClass,
+        listenerClass = listenerClass,
+    )
 
-        runCatching {
-            sendingLogClass.getMethod("H1", Int::class.javaPrimitiveType).invoke(sendingLog, scopeValue)
-        }.getOrElse {
-            val scopeField = sendingLogClass.getDeclaredField("Z").apply { isAccessible = true }
-            scopeField.setInt(sendingLog, scopeValue)
-        }
+internal fun selectThreadedImageInjectMethodForTest(
+    chatMediaSenderClass: Class<*>,
+    writeTypeClass: Class<*>,
+    listenerClass: Class<*>,
+): Method =
+    selectLegacyThreadedImageInjectMethod(
+        chatMediaSenderClass = chatMediaSenderClass,
+        writeTypeClass = writeTypeClass,
+        listenerClass = listenerClass,
+    )
 
-        runCatching {
-            sendingLogClass.getMethod("J1", Long::class.javaObjectType).invoke(sendingLog, threadIdValue)
-        }.getOrElse {
-            val threadField = sendingLogClass.getDeclaredField("V0").apply { isAccessible = true }
-            threadField.set(sendingLog, threadIdValue)
+private fun selectThreadedImageInjectBindings(
+    requestCompanionClass: Class<*>?,
+    chatMediaSenderClass: Class<*>,
+    chatRoomClass: Class<*>,
+    writeTypeClass: Class<*>,
+    listenerClass: Class<*>,
+): List<ThreadedImageXposedInjector.InjectHookBinding> {
+    val bindings = mutableListOf<ThreadedImageXposedInjector.InjectHookBinding>()
+    requestCompanionClass?.let { companionClass ->
+        selectReplyMarkdownRequestHookMethodForTest(
+            companionClass = companionClass,
+            chatRoomClass = chatRoomClass,
+            writeTypeClass = writeTypeClass,
+            listenerClass = listenerClass,
+        )?.let { method ->
+            bindings +=
+                ThreadedImageXposedInjector.InjectHookBinding(
+                    method = method,
+                    sendingLogArgIndex = 1,
+                    source = "request",
+                )
         }
     }
+    bindings +=
+        ThreadedImageXposedInjector.InjectHookBinding(
+            method =
+                selectLegacyThreadedImageInjectMethod(
+                    chatMediaSenderClass = chatMediaSenderClass,
+                    writeTypeClass = writeTypeClass,
+                    listenerClass = listenerClass,
+                ),
+            sendingLogArgIndex = 0,
+            source = "legacy",
+        )
+    return bindings
+}
+
+private fun selectLegacyThreadedImageInjectMethod(
+    chatMediaSenderClass: Class<*>,
+    writeTypeClass: Class<*>,
+    listenerClass: Class<*>,
+): Method =
+    KakaoClassRegistry.selectMethodCandidateForTest(
+        label = "ChatMediaSender threaded inject on ${chatMediaSenderClass.name}",
+        candidates =
+            collectMethodsInHierarchy(chatMediaSenderClass).filter { method ->
+                !java.lang.reflect.Modifier.isStatic(method.modifiers) &&
+                    method.parameterCount == 3 &&
+                    method.parameterTypes[1] == writeTypeClass &&
+                    method.parameterTypes[2] == listenerClass
+            },
+        preferredNames = setOf("A"),
+    )
+
+private fun collectMethodsInHierarchy(clazz: Class<*>): List<Method> {
+    val methods = mutableListOf<Method>()
+    var current: Class<*>? = clazz
+    while (current != null && current != Any::class.java) {
+        current.declaredMethods.forEach { method ->
+            runCatching { method.isAccessible = true }
+            methods += method
+        }
+        current = current.superclass
+    }
+    return methods
 }

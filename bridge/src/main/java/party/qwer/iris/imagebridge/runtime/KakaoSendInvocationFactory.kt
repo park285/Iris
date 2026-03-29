@@ -38,6 +38,7 @@ internal class KakaoSendInvocationFactory(
 
     init {
         ThreadedImageXposedInjector.install(registry)
+        threadedEntryInvoker.warmUp()
     }
 
     override fun sendSingle(

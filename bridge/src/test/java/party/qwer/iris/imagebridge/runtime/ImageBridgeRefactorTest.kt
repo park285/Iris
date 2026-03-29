@@ -208,6 +208,49 @@ class ImageBridgeRequestHandlerTest {
     }
 
     @Test
+    fun `threaded send image request fails closed when threaded discovery hook is not installed`() {
+        val file = Files.createTempFile("iris-bridge", ".png").toFile().apply { writeText("x") }
+        val rootDir = file.parentFile ?: error("temp file parent missing")
+        val handler =
+            ImageBridgeRequestHandler(
+                imageSender = { error("should not be called") },
+                healthProvider = {
+                    ImageBridgeHealthSnapshot(
+                        running = true,
+                        specStatus = BridgeSpecStatus(ready = true, checkedAtEpochMs = 1L, checks = emptyList()),
+                        discoverySnapshot =
+                            BridgeDiscoverySnapshot(
+                                installAttempted = true,
+                                hooks =
+                                    listOf(
+                                        DiscoveryHookStatus(name = HOOK_SEND_SINGLE, installed = true, invocationCount = 0),
+                                        DiscoveryHookStatus(name = HOOK_SEND_THREADED_ENTRY, installed = false, invocationCount = 0),
+                                    ),
+                            ),
+                        restartCount = 0,
+                        lastCrashMessage = null,
+                    )
+                },
+                pathValidator = BridgeImagePathValidator(rootDir.absolutePath),
+                logError = { _, _, _ -> },
+            )
+
+        val response =
+            handler.handle(
+                sendImageRequest(
+                    roomId = 1L,
+                    imagePaths = listOf(file.absolutePath),
+                    threadId = 55L,
+                    threadScope = 2,
+                ),
+            )
+
+        assertEquals("failed", response.status)
+        assertEquals("bridge discovery hook not ready: ChatMediaSender#threadedEntry", response.error)
+        file.delete()
+    }
+
+    @Test
     fun `request fails when protocol version is missing`() {
         val handler =
             ImageBridgeRequestHandler(
@@ -367,6 +410,63 @@ class KakaoSendInvocationFactoryTest {
 
         assertEquals(1, ExactPreferredMediaSender.exactCalls)
         assertEquals(0, ExactPreferredMediaSender.baseCalls)
+    }
+}
+
+class ThreadedChatMediaEntryInvokerTest {
+    @Test
+    fun `threaded entry invoker resolves method by signature when obfuscated name changes`() {
+        RenamedThreadedEntryMediaSender.reset()
+        val invoker =
+            ThreadedChatMediaEntryInvoker(
+                registry = buildRenamedThreadedRegistry(),
+                pathArgumentFactory = { path -> "uri:$path" },
+            )
+
+        invoker.invoke(
+            sender =
+                RenamedThreadedEntryMediaSender(
+                    chatRoom = FakeChatRoom(),
+                    threadId = 3805486995143352321L,
+                    sendWithThread = { false },
+                    attachmentDecorator = { payload -> payload },
+                ),
+            imagePaths = listOf("/tmp/thread-a.png", "/tmp/thread-b.png"),
+        )
+
+        assertEquals(listOf("/tmp/thread-a.png", "/tmp/thread-b.png"), RenamedThreadedEntryMediaSender.sentUris)
+        assertEquals(FakeMessageType.MultiPhoto, RenamedThreadedEntryMediaSender.lastType)
+        assertEquals(FakeWriteType.Connect, RenamedThreadedEntryMediaSender.lastWriteType)
+    }
+}
+
+class ThreadedImageXposedInjectorSelectorTest {
+    @Test
+    fun `threaded image injector selector resolves method by signature when obfuscated name changes`() {
+        val method =
+            selectThreadedImageInjectMethodForTest(
+                chatMediaSenderClass = RenamedThreadedInjectMediaSender::class.java,
+                writeTypeClass = FakeWriteType::class.java,
+                listenerClass = FakeListener::class.java,
+            )
+
+        assertEquals("z", method.name)
+    }
+
+    @Test
+    fun `threaded image injector prefers request dispatch hook when available`() {
+        val bindings =
+            selectThreadedImageInjectBindingsForTest(
+                requestCompanionClass = FakeThreadedRequestCompanion::class.java,
+                chatMediaSenderClass = RenamedThreadedInjectMediaSender::class.java,
+                chatRoomClass = FakeChatRoomModel::class.java,
+                writeTypeClass = FakeWriteType::class.java,
+                listenerClass = FakeListener::class.java,
+            )
+
+        assertEquals(listOf("request", "legacy"), bindings.map { it.source })
+        assertEquals(listOf("u", "z"), bindings.map { it.method.name })
+        assertEquals(listOf(1, 0), bindings.map { it.sendingLogArgIndex })
     }
 }
 
@@ -677,6 +777,8 @@ private fun readyHealthSnapshot(): ImageBridgeHealthSnapshot =
                     listOf(
                         DiscoveryHookStatus(name = HOOK_SEND_SINGLE, installed = true, invocationCount = 0),
                         DiscoveryHookStatus(name = HOOK_SEND_MULTIPLE, installed = true, invocationCount = 0),
+                        DiscoveryHookStatus(name = HOOK_SEND_THREADED_ENTRY, installed = true, invocationCount = 0),
+                        DiscoveryHookStatus(name = HOOK_SEND_THREADED_INJECT, installed = true, invocationCount = 0),
                     ),
             ),
         restartCount = 0,
@@ -757,9 +859,134 @@ private enum class FakeMessageType {
 
 private enum class FakeWriteType {
     None,
+    Connect,
 }
 
 private interface FakeListener
+
+private class RenamedThreadedEntryMediaSender(
+    chatRoom: FakeChatRoom,
+    private val threadId: Long?,
+    private val sendWithThread: () -> Boolean,
+    private val attachmentDecorator: (JSONObject) -> JSONObject?,
+) {
+    companion object {
+        val sentUris = mutableListOf<String>()
+        var lastType: FakeMessageType? = null
+        var lastWriteType: FakeWriteType? = null
+
+        fun reset() {
+            sentUris.clear()
+            lastType = null
+            lastWriteType = null
+        }
+    }
+
+    init {
+        check(chatRoom.hashCode() != 0 || chatRoom.hashCode() == 0)
+        check(threadId != null)
+        check(!sendWithThread())
+        check(attachmentDecorator(JSONObject()) != null)
+    }
+
+    fun n(
+        mediaItem: FakeMediaItem,
+        suppressAnimation: Boolean,
+    ) {
+        check(mediaItem.path.isNotBlank())
+        check(!suppressAnimation)
+    }
+
+    @Suppress("UNUSED_PARAMETER")
+    fun p(
+        uris: List<Any>,
+        type: FakeMessageType,
+        message: String?,
+        attachment: JSONObject?,
+        forwardExtra: JSONObject?,
+        writeType: FakeWriteType,
+        shareOriginal: Boolean,
+        highQuality: Boolean,
+        listener: FakeListener?,
+    ) {
+        check(uris.isNotEmpty() || message == null)
+        check(type.name.isNotBlank())
+        check(attachment == null)
+        check(forwardExtra == null)
+        check(writeType.name.isNotBlank())
+        check(!shareOriginal)
+        check(!highQuality)
+        check(listener == null)
+    }
+
+    @Suppress("UNUSED_PARAMETER")
+    fun q(
+        uris: List<Any>,
+        type: FakeMessageType,
+        message: String,
+        attachment: JSONObject,
+        forwardExtra: JSONObject?,
+        writeType: FakeWriteType,
+        shareOriginal: Boolean,
+        highQuality: Boolean,
+        onSuccess: kotlin.jvm.functions.Function1<Any?, Any?>,
+        onFailure: kotlin.jvm.functions.Function1<Any?, Any?>,
+    ) {
+        sentUris += uris.map { uri -> uri.toString().removePrefix("uri:") }
+        lastType = type
+        lastWriteType = writeType
+        check(message.isEmpty())
+        check(attachment.optString("callingPkg") == "com.kakao.talk")
+        check(forwardExtra == null)
+        check(writeType == FakeWriteType.Connect)
+        check(!shareOriginal)
+        check(!highQuality)
+        assertEquals("ok", onSuccess.invoke("ok"))
+        assertEquals(null, onFailure.invoke("ignored"))
+    }
+}
+
+private class RenamedThreadedInjectMediaSender(
+    chatRoom: FakeChatRoom,
+    threadId: Long?,
+    sendWithThread: () -> Boolean,
+    attachmentDecorator: (JSONObject) -> JSONObject?,
+) {
+    init {
+        check(chatRoom.hashCode() != 0 || chatRoom.hashCode() == 0)
+        check(threadId == null || threadId >= 0L)
+        check(!sendWithThread())
+        check(attachmentDecorator(JSONObject()) != null)
+    }
+
+    @Suppress("UNUSED_PARAMETER")
+    fun z(
+        sendingLog: Any,
+        writeType: FakeWriteType,
+        listener: FakeListener?,
+    ) {
+        check(sendingLog.hashCode() != Int.MIN_VALUE)
+        check(writeType.name.isNotBlank())
+        check(listener == null || listener.hashCode() != Int.MIN_VALUE)
+    }
+}
+
+private class FakeThreadedRequestCompanion {
+    @Suppress("UNUSED_PARAMETER")
+    fun u(
+        chatRoom: FakeChatRoomModel,
+        sendingLog: Any,
+        writeType: FakeWriteType,
+        listener: FakeListener?,
+        shouldRetry: Boolean,
+    ) {
+        check(chatRoom.roomId >= 0L)
+        check(sendingLog.hashCode() != Int.MIN_VALUE)
+        check(writeType.name.isNotBlank())
+        check(listener == null || listener.hashCode() != Int.MIN_VALUE)
+        check(!shouldRetry || shouldRetry)
+    }
+}
 
 private object FakeChatRuntime {
     val resolvedRoomIds = mutableListOf<Long>()
@@ -1486,6 +1713,75 @@ private fun buildLegacyNameSensitiveRegistry(): KakaoClassRegistry {
         messageTypeClass = FakeMessageType::class.java,
         chatRoomManagerClass = FakeChatRoomManager::class.java,
         chatRoomClass = LegacyNameSensitiveChatRoom::class.java,
+        singleSendMethod = singleSend,
+        multiSendMethod = multiSend,
+        mediaItemConstructor = mediaItemCtor,
+        masterDbSingletonField = masterDbField,
+        roomDaoMethod = roomDaoMethod,
+        entityLookupMethod = entityLookupMethod,
+        broadRoomResolverMethod = broadResolver,
+        directRoomResolverMethod = directResolver,
+        photoType = FakeMessageType.Photo,
+        multiPhotoType = FakeMessageType.MultiPhoto,
+        writeTypeNone = FakeWriteType.None,
+    )
+}
+
+private fun buildRenamedThreadedRegistry(): KakaoClassRegistry {
+    val singleSend =
+        RenamedThreadedEntryMediaSender::class.java.getMethod(
+            "n",
+            FakeMediaItem::class.java,
+            Boolean::class.javaPrimitiveType,
+        )
+    val multiSend =
+        RenamedThreadedEntryMediaSender::class.java.getMethod(
+            "p",
+            List::class.java,
+            FakeMessageType::class.java,
+            String::class.java,
+            JSONObject::class.java,
+            JSONObject::class.java,
+            FakeWriteType::class.java,
+            Boolean::class.javaPrimitiveType,
+            Boolean::class.javaPrimitiveType,
+            FakeListener::class.java,
+        )
+    val mediaItemCtor =
+        FakeMediaItem::class.java.getConstructor(
+            String::class.java,
+            Long::class.javaPrimitiveType,
+        )
+    val masterDbField = FakeMasterDatabase::class.java.getDeclaredField("INSTANCE")
+    val roomDaoMethod = FakeMasterDatabase::class.java.getMethod("O")
+    val entityLookupMethod =
+        FakeRoomDao::class.java.getMethod(
+            "h",
+            Long::class.javaPrimitiveType,
+        )
+    val broadResolver =
+        FakeChatRoomManager::class.java.getMethod(
+            "e0",
+            Long::class.javaPrimitiveType,
+            Boolean::class.javaPrimitiveType,
+            Boolean::class.javaPrimitiveType,
+        )
+    val directResolver =
+        FakeChatRoomManager::class.java.getMethod(
+            "d0",
+            Long::class.javaPrimitiveType,
+        )
+    return KakaoClassRegistry(
+        mediaItemClass = FakeMediaItem::class.java,
+        function0Class = kotlin.jvm.functions.Function0::class.java,
+        function1Class = kotlin.jvm.functions.Function1::class.java,
+        masterDatabaseClass = FakeMasterDatabase::class.java,
+        writeTypeClass = FakeWriteType::class.java,
+        listenerClass = FakeListener::class.java,
+        chatMediaSenderClass = RenamedThreadedEntryMediaSender::class.java,
+        messageTypeClass = FakeMessageType::class.java,
+        chatRoomManagerClass = FakeChatRoomManager::class.java,
+        chatRoomClass = FakeChatRoomModel::class.java,
         singleSendMethod = singleSend,
         multiSendMethod = multiSend,
         mediaItemConstructor = mediaItemCtor,

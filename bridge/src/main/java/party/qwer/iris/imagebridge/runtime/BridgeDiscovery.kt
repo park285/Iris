@@ -27,12 +27,29 @@ internal data class BridgeDiscoverySnapshot(
 internal fun BridgeDiscoverySnapshot.requiredSendHookName(imageCount: Int): String = if (imageCount == 1) HOOK_SEND_SINGLE else HOOK_SEND_MULTIPLE
 
 internal fun BridgeDiscoverySnapshot.sendBlockReason(imageCount: Int): String? {
+    return sendBlockReason(imageCount, threadId = null, threadScope = null)
+}
+
+internal fun BridgeDiscoverySnapshot.sendBlockReason(
+    imageCount: Int,
+    threadId: Long?,
+    threadScope: Int?,
+): String? {
     if (!installAttempted) return "bridge discovery hooks not installed"
-    val requiredHookName = requiredSendHookName(imageCount)
-    val hook =
-        hooks.firstOrNull { it.name == requiredHookName }
-            ?: return "bridge discovery hook missing from snapshot: $requiredHookName"
-    if (!hook.installed) return "bridge discovery hook not ready: $requiredHookName"
+    val requiredHookNames =
+        buildList {
+            add(requiredSendHookName(imageCount))
+            if (threadId != null && (threadScope ?: 0) >= 2) {
+                add(HOOK_SEND_THREADED_ENTRY)
+                add(HOOK_SEND_THREADED_INJECT)
+            }
+        }
+    requiredHookNames.forEach { requiredHookName ->
+        val hook =
+            hooks.firstOrNull { it.name == requiredHookName }
+                ?: return "bridge discovery hook missing from snapshot: $requiredHookName"
+        if (!hook.installed) return "bridge discovery hook not ready: $requiredHookName"
+    }
     return null
 }
 
@@ -44,6 +61,8 @@ internal const val HOOK_REPLY_MARKDOWN_REUSE = "ReplyMarkdown#reuseIntent"
 internal const val HOOK_REPLY_MARKDOWN_REQUEST = "ReplyMarkdown#requestDispatch"
 internal const val HOOK_SEND_SINGLE = "ChatMediaSender#sendSingle"
 internal const val HOOK_SEND_MULTIPLE = "ChatMediaSender#sendMultiple"
+internal const val HOOK_SEND_THREADED_ENTRY = "ChatMediaSender#threadedEntry"
+internal const val HOOK_SEND_THREADED_INJECT = "ChatMediaSender#threadedInject"
 
 internal object BridgeDiscovery {
     private const val TAG = "IrisBridge"
@@ -60,6 +79,8 @@ internal object BridgeDiscovery {
             HOOK_REPLY_MARKDOWN_REQUEST,
             HOOK_SEND_SINGLE,
             HOOK_SEND_MULTIPLE,
+            HOOK_SEND_THREADED_ENTRY,
+            HOOK_SEND_THREADED_INJECT,
         ).associateWith { DiscoveryHookState() }.toMutableMap()
 
     fun install(registry: KakaoClassRegistry) {

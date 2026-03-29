@@ -45,7 +45,11 @@ internal class ImageBridgeRequestHandler(
                 threadScope = request.threadScope,
                 requestId = request.requestId,
             )
-        health.discoverySnapshot.sendBlockReason(imageRequest.imagePaths.size)?.let { reason ->
+        health.discoverySnapshot.sendBlockReason(
+            imageCount = imageRequest.imagePaths.size,
+            threadId = imageRequest.threadId,
+            threadScope = imageRequest.threadScope,
+        )?.let { reason ->
             error(reason)
         }
         serialExecutor.execute(imageRequest.roomId, imageRequest.threadId) {
