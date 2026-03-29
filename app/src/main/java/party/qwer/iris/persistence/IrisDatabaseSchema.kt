@@ -3,6 +3,8 @@ package party.qwer.iris.persistence
 object IrisDatabaseSchema {
     const val WEBHOOK_OUTBOX_TABLE = "webhook_outbox"
     const val CHECKPOINT_TABLE = "checkpoints"
+    private const val SQLITE_JOURNAL_MODE_WAL = "PRAGMA journal_mode=WAL"
+    private const val SQLITE_BUSY_TIMEOUT_MS = "PRAGMA busy_timeout=5000"
 
     private val CREATE_WEBHOOK_OUTBOX =
         """
@@ -38,6 +40,11 @@ object IrisDatabaseSchema {
         )
         """.trimIndent()
 
+    fun initializeConnection(driver: SqliteDriver) {
+        driver.execute(SQLITE_JOURNAL_MODE_WAL)
+        driver.execute(SQLITE_BUSY_TIMEOUT_MS)
+    }
+
     fun createWebhookOutboxTable(driver: SqliteDriver) {
         driver.execute(CREATE_WEBHOOK_OUTBOX)
         driver.execute(CREATE_WEBHOOK_OUTBOX_INDEX)
@@ -48,6 +55,7 @@ object IrisDatabaseSchema {
     }
 
     fun createAll(driver: SqliteDriver) {
+        initializeConnection(driver)
         createWebhookOutboxTable(driver)
         createCheckpointTable(driver)
     }
