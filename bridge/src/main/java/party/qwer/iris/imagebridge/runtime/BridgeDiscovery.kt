@@ -26,9 +26,7 @@ internal data class BridgeDiscoverySnapshot(
 
 internal fun BridgeDiscoverySnapshot.requiredSendHookName(imageCount: Int): String = if (imageCount == 1) HOOK_SEND_SINGLE else HOOK_SEND_MULTIPLE
 
-internal fun BridgeDiscoverySnapshot.sendBlockReason(imageCount: Int): String? {
-    return sendBlockReason(imageCount, threadId = null, threadScope = null)
-}
+internal fun BridgeDiscoverySnapshot.sendBlockReason(imageCount: Int): String? = sendBlockReason(imageCount, threadId = null, threadScope = null)
 
 internal fun BridgeDiscoverySnapshot.sendBlockReason(
     imageCount: Int,

@@ -45,7 +45,8 @@ internal object ThreadedImageXposedInjector {
             }.onFailure { error ->
                 BridgeDiscovery.markInstallError(HOOK_SEND_THREADED_INJECT, error.message ?: error.javaClass.name)
                 runCatching { Log.e(TAG, "threaded image inject method resolution failed", error) }
-            }.getOrNull().orEmpty()
+            }.getOrNull()
+                .orEmpty()
 
         if (bindings.isEmpty()) {
             BridgeDiscovery.markInstallError(HOOK_SEND_THREADED_INJECT, "no threaded inject hook candidate found")
@@ -103,7 +104,6 @@ internal object ThreadedImageXposedInjector {
             pendingContext.remove()
         }
     }
-
 }
 
 internal fun selectThreadedImageInjectBindingsForTest(
@@ -178,7 +178,8 @@ private fun selectLegacyThreadedImageInjectMethod(
         label = "ChatMediaSender threaded inject on ${chatMediaSenderClass.name}",
         candidates =
             collectMethodsInHierarchy(chatMediaSenderClass).filter { method ->
-                !java.lang.reflect.Modifier.isStatic(method.modifiers) &&
+                !java.lang.reflect.Modifier
+                    .isStatic(method.modifiers) &&
                     method.parameterCount == 3 &&
                     method.parameterTypes[1] == writeTypeClass &&
                     method.parameterTypes[2] == listenerClass

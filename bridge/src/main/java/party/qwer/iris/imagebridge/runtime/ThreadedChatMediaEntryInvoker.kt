@@ -110,7 +110,8 @@ private fun selectThreadedChatMediaEntryMethod(
         label = "ChatMediaSender threaded entry on ${chatMediaSenderClass.name}",
         candidates =
             methodsInHierarchy(chatMediaSenderClass).filter { method ->
-                !java.lang.reflect.Modifier.isStatic(method.modifiers) &&
+                !java.lang.reflect.Modifier
+                    .isStatic(method.modifiers) &&
                     method.parameterCount == 10 &&
                     method.parameterTypes[0] == List::class.java &&
                     method.parameterTypes[1] == messageTypeClass &&
