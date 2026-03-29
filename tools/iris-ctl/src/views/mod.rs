@@ -1,5 +1,7 @@
 pub mod events;
 pub mod members;
+pub mod path_input;
+pub mod reply_modal;
 pub mod rooms;
 pub mod stats;
 
@@ -23,6 +25,7 @@ pub enum ViewAction {
     SelectMember(i64, i64),
     Quit,
     Back,
+    OpenReply(Option<i64>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

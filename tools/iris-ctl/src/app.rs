@@ -88,6 +88,7 @@ impl App {
                 self.active_tab = TabId::Rooms;
                 false
             }
+            ViewAction::OpenReply(_) => false, // Task 9에서 구현
             ViewAction::None => false,
         }
     }

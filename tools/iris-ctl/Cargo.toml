@@ -16,6 +16,8 @@ toml = { workspace = true }
 dirs = { workspace = true }
 anyhow = { workspace = true }
 futures-util = "0.3"
+tui-textarea = "0.7"
+base64 = "0.22"
 hmac = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
