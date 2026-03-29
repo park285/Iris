@@ -234,8 +234,10 @@ pub struct ReplyRequest {
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplyAcceptedResponse {
+    #[serde(default)]
     pub success: bool,
-    pub delivery: String,
+    #[serde(default)]
+    pub delivery: Option<String>,
     pub request_id: String,
     pub room: String,
     #[serde(rename = "type")]
@@ -335,11 +337,21 @@ mod tests {
     }
 
     #[test]
-    fn reply_accepted_response_parses() {
+    fn reply_accepted_response_parses_full() {
         let payload = r#"{"success":true,"delivery":"queued","requestId":"reply-abc","room":"123","type":"text"}"#;
         let parsed: ReplyAcceptedResponse = serde_json::from_str(payload).unwrap();
         assert_eq!(parsed.request_id, "reply-abc");
         assert!(parsed.success);
+    }
+
+    #[test]
+    fn reply_accepted_response_parses_minimal() {
+        // 서버 실제 응답: success/delivery 기본값 생략
+        let payload = r#"{"requestId":"reply-abc","room":"123","type":"text"}"#;
+        let parsed: ReplyAcceptedResponse = serde_json::from_str(payload).unwrap();
+        assert_eq!(parsed.request_id, "reply-abc");
+        assert!(!parsed.success); // default false
+        assert!(parsed.delivery.is_none());
     }
 
     #[test]
