@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct RoomListResponse {
@@ -207,6 +207,66 @@ pub struct BridgeDiagnosticsHook {
     pub last_summary: Option<String>,
 }
 
+// --- Reply models ---
+
+#[derive(Serialize, Debug, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplyType {
+    Text,
+    Image,
+    ImageMultiple,
+    Markdown,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplyRequest {
+    #[serde(rename = "type")]
+    pub reply_type: ReplyType,
+    pub room: String,
+    pub data: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_scope: Option<u8>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplyAcceptedResponse {
+    pub success: bool,
+    pub delivery: String,
+    pub request_id: String,
+    pub room: String,
+    #[serde(rename = "type")]
+    pub reply_type: String,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ErrorResponse {
+    pub status: bool,
+    pub message: String,
+}
+
+// --- Thread models ---
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadListResponse {
+    pub chat_id: i64,
+    pub threads: Vec<ThreadSummary>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSummary {
+    pub thread_id: String,
+    pub origin_message: Option<String>,
+    pub message_count: i32,
+    pub last_active_at: Option<i64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,5 +300,61 @@ mod tests {
             parsed.is_ok(),
             "bridge diagnostics should parse runtime payload: {parsed:?}"
         );
+    }
+
+    #[test]
+    fn reply_request_serializes_correctly() {
+        let req = ReplyRequest {
+            reply_type: ReplyType::Text,
+            room: "12345".to_string(),
+            data: serde_json::Value::String("hello".to_string()),
+            thread_id: Some("999".to_string()),
+            thread_scope: Some(2),
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["type"], "text");
+        assert_eq!(json["room"], "12345");
+        assert_eq!(json["data"], "hello");
+        assert_eq!(json["threadId"], "999");
+        assert_eq!(json["threadScope"], 2);
+    }
+
+    #[test]
+    fn reply_request_omits_none_thread_fields() {
+        let req = ReplyRequest {
+            reply_type: ReplyType::Markdown,
+            room: "12345".to_string(),
+            data: serde_json::Value::String("# title".to_string()),
+            thread_id: None,
+            thread_scope: None,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["type"], "markdown");
+        assert!(json.get("threadId").is_none());
+        assert!(json.get("threadScope").is_none());
+    }
+
+    #[test]
+    fn reply_accepted_response_parses() {
+        let payload = r#"{"success":true,"delivery":"queued","requestId":"reply-abc","room":"123","type":"text"}"#;
+        let parsed: ReplyAcceptedResponse = serde_json::from_str(payload).unwrap();
+        assert_eq!(parsed.request_id, "reply-abc");
+        assert!(parsed.success);
+    }
+
+    #[test]
+    fn thread_list_response_parses() {
+        let payload = r#"{"chatId":123,"threads":[{"threadId":"456","originMessage":"원본","messageCount":5,"lastActiveAt":1774787702}]}"#;
+        let parsed: ThreadListResponse = serde_json::from_str(payload).unwrap();
+        assert_eq!(parsed.threads.len(), 1);
+        assert_eq!(parsed.threads[0].origin_message.as_deref(), Some("원본"));
+    }
+
+    #[test]
+    fn thread_list_response_parses_null_last_active() {
+        let payload =
+            r#"{"chatId":123,"threads":[{"threadId":"456","messageCount":5,"lastActiveAt":null}]}"#;
+        let parsed: ThreadListResponse = serde_json::from_str(payload).unwrap();
+        assert_eq!(parsed.threads[0].last_active_at, None);
     }
 }
