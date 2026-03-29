@@ -153,11 +153,14 @@ class SqliteWebhookDeliveryStoreTest {
                 assertEquals(1, store.recoverExpiredClaims(olderThanMs = 30000L))
 
                 val secondClaim = store.claimReady(limit = 1).single()
+
+                // stale token으로 markSent → 무시됨
                 store.markSent(firstClaim.id, firstClaim.claimToken)
 
-                val afterStaleMark = store.claimReady(limit = 10)
-                assertEquals(listOf(secondClaim), afterStaleMark)
+                // entry는 여전히 CLAIMED(secondClaim token) 상태 → claimReady에서 제외
+                assertTrue(store.claimReady(limit = 10).isEmpty())
 
+                // 유효한 token으로 markSent 성공
                 store.markSent(secondClaim.id, secondClaim.claimToken)
                 assertTrue(store.claimReady(limit = 10).isEmpty())
             }
