@@ -64,6 +64,7 @@ markdown reply는 `/reply-markdown` route가 Kakao share intent를 열고, LSPos
 - in-thread markdown은 Iris extras로 전달된 `roomId/threadId/threadScope`를 bridge가 캡처한 뒤 request dispatch 직전에 `sendingLog`에 주입한다.
 - `/reply`의 in-thread text도 현재는 같은 share/graft lane을 사용한다.
 - `/reply-markdown`은 markdown attachment를 강제로 켜는 호환 alias로 유지된다.
+- 실측 렌더링 지원 범위와 재현된 파서 예외는 `docs/markdown-rendering-notes.md`를 본다.
 
 ### Directory Layout
 
