@@ -11,9 +11,9 @@ import party.qwer.iris.delivery.webhook.OutboxRoutingGateway
 import party.qwer.iris.delivery.webhook.WebhookOutboxDispatcher
 import party.qwer.iris.ingress.CommandIngressService
 import party.qwer.iris.persistence.AndroidSqliteDriver
-import party.qwer.iris.persistence.BatchedCheckpointJournal
 import party.qwer.iris.persistence.CheckpointJournal
 import party.qwer.iris.persistence.IrisDatabaseSchema
+import party.qwer.iris.persistence.SqliteCheckpointJournal
 import party.qwer.iris.persistence.SqliteWebhookDeliveryStore
 import party.qwer.iris.persistence.WebhookDeliveryStore
 import party.qwer.iris.reply.DispatchScheduler
@@ -162,12 +162,12 @@ internal class AppRuntime(
                     SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.CREATE_IF_NECESSARY,
                 ),
             )
-        IrisDatabaseSchema.createWebhookOutboxTable(persistenceDriver)
+        IrisDatabaseSchema.createAll(persistenceDriver)
         webhookOutboxStore = SqliteWebhookDeliveryStore(persistenceDriver)
         webhookOutboxDispatcher = WebhookOutboxDispatcher(configManager, webhookOutboxStore)
         webhookOutboxDispatcher.start()
         sseEventBus = SseEventBus(bufferSize = 100)
-        checkpointJournal = BatchedCheckpointJournal(store = FileCheckpointStore())
+        checkpointJournal = SqliteCheckpointJournal(persistenceDriver)
 
         val routingGateway = OutboxRoutingGateway(configManager, webhookOutboxStore)
         val roomSnapshotReader =
@@ -281,6 +281,8 @@ internal class AppRuntime(
             if (!configManager.saveConfigNow()) {
                 IrisLogger.error("[AppRuntime] Failed to save config during shutdown")
             }
+            checkpointJournal.flushNow()
+            persistenceDriver.close()
             kakaoDb.closeConnection()
             IrisLogger.info("[AppRuntime] Cleanup completed")
         }
