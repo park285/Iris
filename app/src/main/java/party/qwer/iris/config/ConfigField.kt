@@ -1,0 +1,13 @@
+package party.qwer.iris.config
+
+enum class ConfigField {
+    BOT_NAME,
+    BOT_SOCKET_PORT,
+    DB_POLLING_RATE,
+    MESSAGE_SEND_RATE,
+    MESSAGE_SEND_JITTER_MAX,
+    ROUTING_POLICY,
+    INBOUND_SIGNING_SECRET,
+    OUTBOUND_WEBHOOK_TOKEN,
+    BOT_CONTROL_TOKEN,
+}
