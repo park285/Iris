@@ -9,9 +9,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import party.qwer.iris.persistence.CheckpointJournal
+import party.qwer.iris.snapshot.SnapshotCommand
+import party.qwer.iris.snapshot.SnapshotCoordinator
 
 internal class SnapshotObserver(
-    private val observerHelper: ObserverHelper,
+    private val snapshotCoordinator: SnapshotCoordinator,
+    private val checkpointJournal: CheckpointJournal,
     private val intervalMs: Long = 5_000L,
     private val maxRoomsPerTick: Int = 32,
     private val fullReconcileIntervalMs: Long = 60_000L,
@@ -34,17 +38,18 @@ internal class SnapshotObserver(
                 while (isActive) {
                     try {
                         if (clock() >= nextFullReconcileAtMs) {
-                            observerHelper.markAllRoomsDirty()
+                            snapshotCoordinator.send(SnapshotCommand.FullReconcile)
                             nextFullReconcileAtMs = clock() + fullReconcileIntervalMs
                         }
-                        val backlog = observerHelper.dirtyRoomCount()
+                        val backlog = snapshotCoordinator.dirtyRoomCount()
                         val drainBudget =
                             when {
                                 backlog >= maxRoomsPerTick * 8 -> maxRoomsPerTick * 4
                                 backlog >= maxRoomsPerTick * 4 -> maxRoomsPerTick * 2
                                 else -> maxRoomsPerTick
                             }
-                        observerHelper.runDirtySnapshotDiff(drainBudget)
+                        snapshotCoordinator.send(SnapshotCommand.Drain(drainBudget))
+                        checkpointJournal.flushIfDirty()
                     } catch (e: Exception) {
                         IrisLogger.error("[SnapshotObserver] error: ${e.message}", e)
                     }
@@ -52,7 +57,8 @@ internal class SnapshotObserver(
                 }
             }
         IrisLogger.info(
-            "[SnapshotObserver] started (intervalMs=$intervalMs, maxRoomsPerTick=$maxRoomsPerTick, fullReconcileIntervalMs=$fullReconcileIntervalMs)",
+            "[SnapshotObserver] started (intervalMs=$intervalMs, maxRoomsPerTick=$maxRoomsPerTick, " +
+                "fullReconcileIntervalMs=$fullReconcileIntervalMs)",
         )
     }
 
