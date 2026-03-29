@@ -1,5 +1,7 @@
 package party.qwer.iris
 
+import party.qwer.iris.http.SseEventEnvelope
+import party.qwer.iris.http.initialSseFrames
 import party.qwer.iris.model.ImageBridgeDiscoveryHook
 import party.qwer.iris.model.ImageBridgeHealthResult
 import kotlin.test.Test
@@ -168,7 +170,17 @@ class IrisServerNettyTransportTest {
 
     @Test
     fun `initial sse frames include keepalive comment before replay`() {
-        val frames = IrisServer.initialSseFramesForTest(listOf(2L to "{\"type\":\"member_event\"}"))
+        val frames =
+            initialSseFrames(
+                listOf(
+                    SseEventEnvelope(
+                        id = 2L,
+                        eventType = "member_event",
+                        payload = "{\"type\":\"member_event\"}",
+                        createdAtMs = 0L,
+                    ),
+                ),
+            )
 
         assertTrue(frames.startsWith(": connected\n\n"))
         assertTrue(frames.contains("id: 2\ndata: {\"type\":\"member_event\"}\n\n"))
