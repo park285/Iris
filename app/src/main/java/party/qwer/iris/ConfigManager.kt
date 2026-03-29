@@ -90,8 +90,9 @@ class ConfigManager(
             }
             IrisLogger.debug(
                 "Loaded config from $configPath " +
-                    "(webhookTokenConfigured=${state.snapshotUser.webhookToken.isNotBlank()}, " +
-                    "botTokenConfigured=${state.snapshotUser.botToken.isNotBlank()})",
+                    "(inboundSigningSecretConfigured=${state.snapshotUser.inboundSigningSecret.isNotBlank()}, " +
+                    "outboundWebhookTokenConfigured=${state.snapshotUser.outboundWebhookToken.isNotBlank()}, " +
+                    "botControlTokenConfigured=${state.snapshotUser.botControlToken.isNotBlank()})",
             )
             if (decodedConfig.migratedLegacyEndpoint) {
                 IrisLogger.info("Migrated legacy webhook config to route-aware model")
@@ -119,8 +120,9 @@ class ConfigManager(
             val jsonString = json.encodeToString(UserConfigValues.serializer(), currentState.snapshotUser.toPersistedConfigValues())
             IrisLogger.debug(
                 "Saving config to $configPath " +
-                    "(webhookTokenConfigured=${currentState.snapshotUser.webhookToken.isNotBlank()}, " +
-                    "botTokenConfigured=${currentState.snapshotUser.botToken.isNotBlank()})",
+                    "(inboundSigningSecretConfigured=${currentState.snapshotUser.inboundSigningSecret.isNotBlank()}, " +
+                    "outboundWebhookTokenConfigured=${currentState.snapshotUser.outboundWebhookToken.isNotBlank()}, " +
+                    "botControlTokenConfigured=${currentState.snapshotUser.botControlToken.isNotBlank()})",
             )
 
             FileOutputStream(tempFile).use { output ->
@@ -237,7 +239,16 @@ class ConfigManager(
     override val botToken: String
         get() = state.snapshotUser.botToken
 
-    internal fun signingSecret(): String = state.snapshotUser.webhookToken
+    override val inboundSigningSecret: String
+        get() = state.snapshotUser.inboundSigningSecret
+
+    override val outboundWebhookToken: String
+        get() = state.snapshotUser.outboundWebhookToken
+
+    override val botControlToken: String
+        get() = state.snapshotUser.botControlToken
+
+    internal fun signingSecret(): String = state.snapshotUser.inboundSigningSecret
 
     override var dbPollingRate: Long
         get() = state.appliedUser.dbPollingRate

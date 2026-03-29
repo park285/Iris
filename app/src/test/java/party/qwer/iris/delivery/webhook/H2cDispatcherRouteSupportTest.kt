@@ -95,6 +95,9 @@ class H2cDispatcherRouteSupportTest {
         override val botSocketPort: Int = 0
         override val botToken: String = ""
         override val webhookToken: String = ""
+        override val inboundSigningSecret: String = ""
+        override val outboundWebhookToken: String = ""
+        override val botControlToken: String = ""
         override val dbPollingRate: Long = 0L
         override val messageSendRate: Long = 0L
         override val messageSendJitterMax: Long = 0L

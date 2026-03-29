@@ -29,6 +29,9 @@ class ReplyServiceTest {
             override val botSocketPort = 0
             override val botToken = ""
             override val webhookToken = ""
+            override val inboundSigningSecret = ""
+            override val outboundWebhookToken = ""
+            override val botControlToken = ""
             override val dbPollingRate = 1000L
             override val messageSendRate = 0L
             override val messageSendJitterMax = 0L
@@ -84,6 +87,9 @@ class ReplyServiceTest {
                 override val botSocketPort = 0
                 override val botToken = ""
                 override val webhookToken = ""
+                override val inboundSigningSecret = ""
+                override val outboundWebhookToken = ""
+                override val botControlToken = ""
                 override val dbPollingRate = 1000L
                 override val messageSendRate = 60_000L
                 override val messageSendJitterMax = 0L
@@ -189,6 +195,9 @@ class ReplyServiceTest {
                 override val botSocketPort = 0
                 override val botToken = ""
                 override val webhookToken = ""
+                override val inboundSigningSecret = ""
+                override val outboundWebhookToken = ""
+                override val botControlToken = ""
                 override val dbPollingRate = 1000L
                 override val messageSendRate = 100L
                 override val messageSendJitterMax = 0L
@@ -229,6 +238,9 @@ class ReplyServiceTest {
                 override val botSocketPort = 0
                 override val botToken = ""
                 override val webhookToken = ""
+                override val inboundSigningSecret = ""
+                override val outboundWebhookToken = ""
+                override val botControlToken = ""
                 override val dbPollingRate = 1000L
                 override val messageSendRate = 100L
                 override val messageSendJitterMax = 0L
@@ -285,6 +297,9 @@ class ReplyServiceTest {
                 override val botSocketPort = 0
                 override val botToken = ""
                 override val webhookToken = ""
+                override val inboundSigningSecret = ""
+                override val outboundWebhookToken = ""
+                override val botControlToken = ""
                 override val dbPollingRate = 1000L
                 override val messageSendRate = 100L
                 override val messageSendJitterMax = 0L
@@ -322,6 +337,9 @@ class ReplyServiceTest {
                 override val botSocketPort = 0
                 override val botToken = ""
                 override val webhookToken = ""
+                override val inboundSigningSecret = ""
+                override val outboundWebhookToken = ""
+                override val botControlToken = ""
                 override val dbPollingRate = 1000L
                 override val messageSendRate = 5_000L
                 override val messageSendJitterMax = 0L

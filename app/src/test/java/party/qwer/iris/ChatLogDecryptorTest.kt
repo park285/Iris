@@ -11,6 +11,9 @@ class ChatLogDecryptorTest {
             override val botSocketPort = 0
             override val botToken = ""
             override val webhookToken = ""
+            override val inboundSigningSecret = ""
+            override val outboundWebhookToken = ""
+            override val botControlToken = ""
             override val dbPollingRate = 1000L
             override val messageSendRate = 0L
             override val messageSendJitterMax = 0L
