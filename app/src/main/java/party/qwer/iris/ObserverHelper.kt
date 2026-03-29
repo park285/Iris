@@ -28,7 +28,7 @@ class ObserverHelper(
     private val senderNameCache = lruMap<SenderNameCacheKey, String>(256)
     private val roomMetadataCache = lruMap<Long, KakaoDB.RoomMetadata>(256)
     private val recentCommandFingerprints = lruMap<CommandFingerprint, Long>(MAX_COMMAND_FINGERPRINTS)
-    private val previousSnapshots = mutableMapOf<Long, RoomSnapshotData>()
+    private val previousSnapshots = ConcurrentHashMap<Long, RoomSnapshotData>()
     private val dirtyRoomSet = ConcurrentHashMap.newKeySet<Long>()
     private val dirtyRoomQueue = ConcurrentLinkedQueue<Long>()
     private val serverJson =
@@ -74,6 +74,12 @@ class ObserverHelper(
             dirtyRoomQueue.offer(chatId)
         }
     }
+
+    internal fun markAllRoomsDirty() {
+        previousSnapshots.keys.forEach(::markRoomDirty)
+    }
+
+    internal fun dirtyRoomCount(): Int = dirtyRoomSet.size
 
     fun seedSnapshotCache() {
         val repo = memberRepo ?: return

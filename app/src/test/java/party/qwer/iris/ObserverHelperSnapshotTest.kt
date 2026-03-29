@@ -138,6 +138,113 @@ class ObserverHelperSnapshotTest {
         assertTrue(bus.replayFrom(0).all { (_, payload) -> payload.contains("\"event\":\"join\"") })
     }
 
+    @Test
+    fun `markAllRoomsDirty marks all seeded rooms as dirty`() {
+        val helper =
+            ObserverHelper(
+                db = SnapshotTestChatLogRepository(latestLogId = 10L),
+                config = config,
+                memberRepo =
+                    snapshotMemberRepository(
+                        mapOf(
+                            100L to listOf(snapshot(chatId = 100L, members = setOf(1L))),
+                            200L to listOf(snapshot(chatId = 200L, members = setOf(2L))),
+                            300L to listOf(snapshot(chatId = 300L, members = setOf(3L))),
+                        ),
+                    ).build(),
+                snapshotManager = CountingSnapshotManager(),
+                sseEventBus = SseEventBus(bufferSize = 10),
+                checkpointStore = SnapshotTestCheckpointStore(initial = mapOf("chat_logs" to 10L)),
+                routingGateway = RecordingRoutingGateway(),
+            )
+
+        helper.seedSnapshotCache()
+        helper.markAllRoomsDirty()
+
+        assertEquals(3, helper.dirtyRoomCount())
+
+        helper.runDirtySnapshotDiff(maxRoomsPerTick = 10)
+
+        assertEquals(0, helper.dirtyRoomCount())
+    }
+
+    @Test
+    fun `markAllRoomsDirty emits nickname change event during reconcile`() {
+        val memberRepoFixture =
+            snapshotMemberRepository(
+                mapOf(
+                    100L to
+                        listOf(
+                            snapshot(chatId = 100L, members = setOf(1L), nicknames = mapOf(1L to "Alice")),
+                            snapshot(chatId = 100L, members = setOf(1L), nicknames = mapOf(1L to "Alice Updated")),
+                        ),
+                ),
+            )
+        val bus = SseEventBus(bufferSize = 10)
+        val routingGateway = RecordingRoutingGateway()
+        val helper =
+            ObserverHelper(
+                db = SnapshotTestChatLogRepository(latestLogId = 10L),
+                config = config,
+                memberRepo = memberRepoFixture.build(),
+                snapshotManager = RoomSnapshotManager(),
+                sseEventBus = bus,
+                checkpointStore = SnapshotTestCheckpointStore(initial = mapOf("chat_logs" to 10L)),
+                routingGateway = routingGateway,
+            )
+
+        helper.seedSnapshotCache()
+        helper.markAllRoomsDirty()
+        helper.runDirtySnapshotDiff(maxRoomsPerTick = 10)
+
+        val replay = bus.replayFrom(0)
+        assertEquals(1, replay.size)
+        assertTrue(replay.single().second.contains("\"oldNickname\":\"Alice\""))
+        assertTrue(replay.single().second.contains("\"newNickname\":\"Alice Updated\""))
+        assertEquals(1, routingGateway.commands.size)
+        assertEquals("100", routingGateway.commands.single().room)
+        assertTrue(routingGateway.commands.single().text.contains("\"oldNickname\":\"Alice\""))
+        assertTrue(routingGateway.commands.single().text.contains("\"newNickname\":\"Alice Updated\""))
+    }
+
+    @Test
+    fun `dirtyRoomCount reflects pending dirty rooms accurately`() {
+        val helper =
+            ObserverHelper(
+                db = SnapshotTestChatLogRepository(latestLogId = 10L),
+                config = config,
+                memberRepo =
+                    snapshotMemberRepository(
+                        mapOf(
+                            100L to
+                                listOf(
+                                    snapshot(chatId = 100L, members = setOf(1L)),
+                                    snapshot(chatId = 100L, members = setOf(1L, 10L)),
+                                ),
+                            200L to
+                                listOf(
+                                    snapshot(chatId = 200L, members = setOf(2L)),
+                                    snapshot(chatId = 200L, members = setOf(2L, 20L)),
+                                ),
+                        ),
+                    ).build(),
+                snapshotManager = CountingSnapshotManager(),
+                sseEventBus = SseEventBus(bufferSize = 10),
+                checkpointStore = SnapshotTestCheckpointStore(initial = mapOf("chat_logs" to 10L)),
+                routingGateway = RecordingRoutingGateway(),
+            )
+
+        helper.seedSnapshotCache()
+        helper.markRoomDirty(100L)
+        helper.markRoomDirty(200L)
+
+        assertEquals(2, helper.dirtyRoomCount())
+
+        helper.runDirtySnapshotDiff(maxRoomsPerTick = 1)
+
+        assertEquals(1, helper.dirtyRoomCount())
+    }
+
     private fun snapshot(
         chatId: Long,
         members: Set<Long>,
