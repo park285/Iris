@@ -558,7 +558,7 @@ internal fun validateReplyThreadScope(
         }
             ?: return null
 
-    require(supportsThreadReply(replyType)) { "threadId is only supported for text replies" }
+    require(supportsThreadReply(replyType)) { "threadScope is not supported for this reply type" }
     require(threadId != null || normalizedScope == 1) { "threadScope requires threadId unless scope is 1" }
     return normalizedScope
 }
