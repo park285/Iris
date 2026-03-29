@@ -117,5 +117,5 @@ dependencies {
     testImplementation(kotlin("test-junit"))
     testImplementation(libs.org.json)
     testImplementation(libs.robolectric)
-    testImplementation("org.xerial:sqlite-jdbc:3.47.2.0")
+    testImplementation(libs.sqlite.jdbc)
 }
