@@ -6,7 +6,7 @@ import kotlin.test.assertEquals
 
 class ConfigManagerStateTest {
     @Test
-    fun `immediate apply field changes getter immediately`() {
+    fun `immediate-apply field changes getter immediately via facade`() {
         val tmpDir = Files.createTempDirectory("iris-cfg-state").toFile()
         val configPath = tmpDir.resolve("config.json").absolutePath
         val manager = ConfigManager(configPath)
@@ -21,7 +21,7 @@ class ConfigManagerStateTest {
     }
 
     @Test
-    fun `restart-required field updates snapshot but not applied`() {
+    fun `restart-required field updates snapshot but not applied via facade`() {
         val tmpDir = Files.createTempDirectory("iris-cfg-state").toFile()
         val configPath = tmpDir.resolve("config.json").absolutePath
         val manager = ConfigManager(configPath)
@@ -37,7 +37,7 @@ class ConfigManagerStateTest {
     }
 
     @Test
-    fun `botId change does not mark config dirty`() {
+    fun `discovered botId is not persisted through facade`() {
         val tmpDir = Files.createTempDirectory("iris-cfg-state").toFile()
         val configPath = tmpDir.resolve("config.json").absolutePath
         val manager = ConfigManager(configPath)

@@ -9,7 +9,7 @@ import kotlin.test.assertTrue
 
 class ConfigManagerPersistenceTest {
     @Test
-    fun `saveConfigNow persists config and removes temp file`() {
+    fun `saveConfigNow persists config and removes temp file via facade`() {
         val configDir = Files.createTempDirectory("iris-config-manager").toFile()
         val configPath = configDir.resolve("config.json").absolutePath
         val manager = ConfigManager(configPath = configPath)
@@ -28,7 +28,7 @@ class ConfigManagerPersistenceTest {
     }
 
     @Test
-    fun `bot id is not persisted in user config file`() {
+    fun `bot id is not persisted in user config file via facade`() {
         val configDir = Files.createTempDirectory("iris-config-manager-botid").toFile()
         val configPath = configDir.resolve("config.json").absolutePath
         val manager = ConfigManager(configPath = configPath)
@@ -44,7 +44,7 @@ class ConfigManagerPersistenceTest {
     }
 
     @Test
-    fun `signingSecret is empty when config has no secrets`() {
+    fun `inbound signing secret is empty when config has no migrated or explicit secret fields`() {
         val configDir = Files.createTempDirectory("iris-config-manager-signing-secret").toFile()
         val configPath = configDir.resolve("config.json").absolutePath
         val manager = ConfigManager(configPath = configPath)
@@ -55,7 +55,7 @@ class ConfigManagerPersistenceTest {
     }
 
     @Test
-    fun `signingSecret reads from inboundSigningSecret field`() {
+    fun `inbound signing secret reads from explicit PR-0 field`() {
         val configDir = Files.createTempDirectory("iris-config-manager-signing").toFile()
         val configPath = configDir.resolve("config.json").absolutePath
         configDir.resolve("config.json").writeText("""{"inboundSigningSecret":"direct-secret"}""")
@@ -67,7 +67,7 @@ class ConfigManagerPersistenceTest {
     }
 
     @Test
-    fun `missing config keeps routing maps empty after reload`() {
+    fun `missing config keeps routing maps empty after reload via facade`() {
         val configDir = Files.createTempDirectory("iris-config-manager-routing-defaults").toFile()
         val configPath = configDir.resolve("config.json").absolutePath
         val manager = ConfigManager(configPath = configPath)
@@ -83,7 +83,7 @@ class ConfigManagerPersistenceTest {
     }
 
     @Test
-    fun `legacy empty routing maps remain empty on save`() {
+    fun `legacy empty routing maps remain empty on save via facade`() {
         val configDir = Files.createTempDirectory("iris-config-manager-routing-migration").toFile()
         val configPath = configDir.resolve("config.json").absolutePath
         configDir.resolve("config.json").writeText(
