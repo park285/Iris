@@ -2,6 +2,7 @@ package party.qwer.iris
 
 import party.qwer.iris.http.SseEventEnvelope
 import party.qwer.iris.http.initialSseFrames
+import party.qwer.iris.http.isBridgeReady
 import party.qwer.iris.model.ImageBridgeDiscoveryHook
 import party.qwer.iris.model.ImageBridgeHealthResult
 import kotlin.test.Test
@@ -85,7 +86,7 @@ class IrisServerNettyTransportTest {
                     ),
             )
 
-        assertTrue(IrisServer.isBridgeReadyForTest(health))
+        assertTrue(isBridgeReady(health))
     }
 
     @Test
@@ -122,7 +123,7 @@ class IrisServerNettyTransportTest {
                     ),
             )
 
-        assertFalse(IrisServer.isBridgeReadyForTest(health))
+        assertFalse(isBridgeReady(health))
     }
 
     @Test
@@ -159,7 +160,7 @@ class IrisServerNettyTransportTest {
                     ),
             )
 
-        assertFalse(IrisServer.isBridgeReadyForTest(health))
+        assertFalse(isBridgeReady(health))
     }
 
     @Test

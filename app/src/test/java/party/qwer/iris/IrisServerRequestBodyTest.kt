@@ -3,6 +3,7 @@ package party.qwer.iris
 import io.ktor.http.HttpStatusCode
 import io.ktor.utils.io.ByteReadChannel
 import kotlinx.coroutines.runBlocking
+import party.qwer.iris.http.readBodyWithStreamingDigest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -13,7 +14,7 @@ class IrisServerRequestBodyTest {
         runBlocking {
             val error =
                 assertFailsWith<ApiRequestException> {
-                    readRequestBodyWithinLimit(
+                    readBodyWithStreamingDigest(
                         bodyChannel = ByteReadChannel("too-large"),
                         declaredContentLength = null,
                         maxBodyBytes = 4,
@@ -27,7 +28,7 @@ class IrisServerRequestBodyTest {
     fun `read request body accepts payload within limit`() =
         runBlocking {
             val result =
-                readRequestBodyWithinLimit(
+                readBodyWithStreamingDigest(
                     bodyChannel = ByteReadChannel("""{"ok":true}"""),
                     declaredContentLength = 11,
                     maxBodyBytes = 64,

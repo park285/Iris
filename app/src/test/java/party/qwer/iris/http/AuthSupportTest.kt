@@ -102,4 +102,39 @@ class AuthSupportTest {
 
         assertEquals(AuthResult.SERVICE_UNAVAILABLE, result)
     }
+
+    @Test
+    fun `authenticateRequest authorizes canonical query target`() {
+        val authSupport =
+            AuthSupport(
+                authenticator = RequestAuthenticator(nowEpochMs = { 1_000L }),
+                config = config(secret = "secret"),
+            )
+        val body = ""
+        val timestamp = "1000"
+        val nonce = "nonce-query"
+        val canonicalPath = "/rooms/1/stats?limit=20&period=7d"
+        val signature =
+            signIrisRequest(
+                secret = "secret",
+                method = "GET",
+                path = canonicalPath,
+                timestamp = timestamp,
+                nonce = nonce,
+                body = body,
+            )
+
+        val result =
+            authSupport.authenticateRequest(
+                method = "GET",
+                path = canonicalPath,
+                body = body,
+                bodySha256Hex = sha256Hex(body.toByteArray()),
+                timestampHeader = timestamp,
+                nonceHeader = nonce,
+                signatureHeader = signature,
+            )
+
+        assertEquals(AuthResult.AUTHORIZED, result)
+    }
 }

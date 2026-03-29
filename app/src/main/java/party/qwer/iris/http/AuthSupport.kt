@@ -7,6 +7,7 @@ import io.ktor.server.response.respond
 import party.qwer.iris.AuthResult
 import party.qwer.iris.ConfigProvider
 import party.qwer.iris.RequestAuthenticator
+import party.qwer.iris.canonicalRequestTarget
 import party.qwer.iris.model.CommonErrorResponse
 import party.qwer.iris.sha256Hex
 
@@ -23,7 +24,7 @@ internal class AuthSupport(
         val result =
             authenticateRequest(
                 method = method,
-                path = call.request.path(),
+                path = canonicalRequestTarget(call.request.path(), call.request.queryParameters),
                 body = body,
                 bodySha256Hex = bodySha256Hex,
                 timestampHeader = call.request.headers["X-Iris-Timestamp"],
