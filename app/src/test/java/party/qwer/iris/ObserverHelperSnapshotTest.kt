@@ -8,7 +8,7 @@ import party.qwer.iris.delivery.webhook.RoutingGateway
 import party.qwer.iris.delivery.webhook.RoutingResult
 import party.qwer.iris.ingress.CommandIngressService
 import party.qwer.iris.model.MemberEvent
-import party.qwer.iris.persistence.BatchedCheckpointJournal
+import party.qwer.iris.persistence.CheckpointJournal
 import party.qwer.iris.snapshot.RoomDiffEngine
 import party.qwer.iris.snapshot.RoomSnapshotReader
 import party.qwer.iris.snapshot.SnapshotCoordinator
@@ -38,7 +38,7 @@ class ObserverHelperSnapshotTest {
     fun `checkChange does not run snapshot diff during quiet polling`() {
         val bundle =
             buildHelper(
-                checkpointStore = SnapshotTestCheckpointStore(initial = mapOf("chat_logs" to 10L)),
+                checkpointJournal = InMemoryCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
                 chatLogRepository = SnapshotTestChatLogRepository(latestLogId = 10L, polledLogs = emptyList()),
                 snapshotReader =
                     SnapshotTestSnapshotReader(
@@ -67,7 +67,7 @@ class ObserverHelperSnapshotTest {
     fun `dirty snapshot diff processes only marked rooms`() {
         val bundle =
             buildHelper(
-                checkpointStore = SnapshotTestCheckpointStore(initial = mapOf("chat_logs" to 10L)),
+                checkpointJournal = InMemoryCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
                 chatLogRepository = SnapshotTestChatLogRepository(latestLogId = 10L),
                 snapshotReader =
                     SnapshotTestSnapshotReader(
@@ -121,7 +121,7 @@ class ObserverHelperSnapshotTest {
     fun `markAllRoomsDirty marks all seeded rooms as dirty`() {
         val bundle =
             buildHelper(
-                checkpointStore = SnapshotTestCheckpointStore(initial = mapOf("chat_logs" to 10L)),
+                checkpointJournal = InMemoryCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
                 chatLogRepository = SnapshotTestChatLogRepository(latestLogId = 10L),
                 snapshotReader =
                     SnapshotTestSnapshotReader(
@@ -152,7 +152,7 @@ class ObserverHelperSnapshotTest {
     fun `profile changes stay quiet during quiet polling`() {
         val bundle =
             buildHelper(
-                checkpointStore = SnapshotTestCheckpointStore(initial = mapOf("chat_logs" to 10L)),
+                checkpointJournal = InMemoryCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
                 chatLogRepository = SnapshotTestChatLogRepository(latestLogId = 10L, polledLogs = emptyList()),
                 snapshotReader =
                     SnapshotTestSnapshotReader(
@@ -191,7 +191,7 @@ class ObserverHelperSnapshotTest {
     fun `dirtyRoomCount reflects pending dirty rooms accurately`() {
         val bundle =
             buildHelper(
-                checkpointStore = SnapshotTestCheckpointStore(initial = mapOf("chat_logs" to 10L)),
+                checkpointJournal = InMemoryCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
                 chatLogRepository = SnapshotTestChatLogRepository(latestLogId = 10L),
                 snapshotReader =
                     SnapshotTestSnapshotReader(
@@ -219,7 +219,7 @@ class ObserverHelperSnapshotTest {
     }
 
     private fun buildHelper(
-        checkpointStore: SnapshotTestCheckpointStore,
+        checkpointJournal: CheckpointJournal,
         chatLogRepository: SnapshotTestChatLogRepository,
         snapshotReader: SnapshotTestSnapshotReader,
         diffEngine: RoomDiffEngine,
@@ -227,12 +227,6 @@ class ObserverHelperSnapshotTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val bus = SseEventBus(bufferSize = 16)
         val routingGateway = SnapshotTestRecordingRoutingGateway()
-        val checkpointJournal =
-            BatchedCheckpointJournal(
-                store = checkpointStore,
-                flushIntervalMs = Long.MAX_VALUE,
-                clock = { 0L },
-            )
         val emitter = SnapshotEventEmitter(bus = bus, routingGateway = routingGateway)
         val coordinator = SnapshotCoordinator(scope, snapshotReader, diffEngine, emitter)
         val ingressService =
@@ -342,19 +336,23 @@ class SnapshotTestRecordingRoutingGateway : RoutingGateway {
     override fun close() {}
 }
 
-class SnapshotTestCheckpointStore(
+private class InMemoryCheckpointJournal(
     initial: Map<String, Long> = emptyMap(),
-) : CheckpointStore {
-    private val saved = initial.toMutableMap()
+) : CheckpointJournal {
+    private val cursors = initial.toMutableMap()
 
-    override fun load(streamName: String): Long? = saved[streamName]
-
-    override fun save(
-        streamName: String,
-        lastLogId: Long,
+    override fun advance(
+        stream: String,
+        cursor: Long,
     ) {
-        saved[streamName] = lastLogId
+        cursors[stream] = cursor
     }
+
+    override fun flushIfDirty() {}
+
+    override fun flushNow() {}
+
+    override fun load(stream: String): Long? = cursors[stream]
 }
 
 class SnapshotTestChatLogRepository(
