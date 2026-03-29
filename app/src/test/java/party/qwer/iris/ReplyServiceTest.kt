@@ -27,8 +27,6 @@ class ReplyServiceTest {
             override val botId = 0L
             override val botName = ""
             override val botSocketPort = 0
-            override val botToken = ""
-            override val webhookToken = ""
             override val inboundSigningSecret = ""
             override val outboundWebhookToken = ""
             override val botControlToken = ""
@@ -85,8 +83,6 @@ class ReplyServiceTest {
                 override val botId = 0L
                 override val botName = ""
                 override val botSocketPort = 0
-                override val botToken = ""
-                override val webhookToken = ""
                 override val inboundSigningSecret = ""
                 override val outboundWebhookToken = ""
                 override val botControlToken = ""
@@ -193,8 +189,6 @@ class ReplyServiceTest {
                 override val botId = 0L
                 override val botName = ""
                 override val botSocketPort = 0
-                override val botToken = ""
-                override val webhookToken = ""
                 override val inboundSigningSecret = ""
                 override val outboundWebhookToken = ""
                 override val botControlToken = ""
@@ -236,8 +230,6 @@ class ReplyServiceTest {
                 override val botId = 0L
                 override val botName = ""
                 override val botSocketPort = 0
-                override val botToken = ""
-                override val webhookToken = ""
                 override val inboundSigningSecret = ""
                 override val outboundWebhookToken = ""
                 override val botControlToken = ""
@@ -295,8 +287,6 @@ class ReplyServiceTest {
                 override val botId = 0L
                 override val botName = ""
                 override val botSocketPort = 0
-                override val botToken = ""
-                override val webhookToken = ""
                 override val inboundSigningSecret = ""
                 override val outboundWebhookToken = ""
                 override val botControlToken = ""
@@ -335,8 +325,6 @@ class ReplyServiceTest {
                 override val botId = 0L
                 override val botName = ""
                 override val botSocketPort = 0
-                override val botToken = ""
-                override val webhookToken = ""
                 override val inboundSigningSecret = ""
                 override val outboundWebhookToken = ""
                 override val botControlToken = ""

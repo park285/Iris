@@ -59,9 +59,7 @@ class WebhookRequestFactoryTest {
         override val botId: Long = 0L
         override val botName: String = "iris"
         override val botSocketPort: Int = 0
-        override val botToken: String = ""
         override val inboundSigningSecret: String = ""
-        override val webhookToken: String = ""
         override val botControlToken: String = ""
         override val dbPollingRate: Long = 0L
         override val messageSendRate: Long = 0L

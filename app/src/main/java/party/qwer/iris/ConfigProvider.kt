@@ -4,8 +4,6 @@ interface ConfigProvider {
     val botId: Long
     val botName: String
     val botSocketPort: Int
-    val botToken: String
-    val webhookToken: String
     val inboundSigningSecret: String
     val outboundWebhookToken: String
     val botControlToken: String

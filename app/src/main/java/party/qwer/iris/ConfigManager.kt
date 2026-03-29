@@ -233,12 +233,6 @@ class ConfigManager(
 
     override fun webhookEndpointFor(route: String): String = configuredWebhookEndpoint(state.appliedUser.toLegacyConfigValues(), route)
 
-    override val webhookToken: String
-        get() = state.snapshotUser.webhookToken
-
-    override val botToken: String
-        get() = state.snapshotUser.botToken
-
     override val inboundSigningSecret: String
         get() = state.snapshotUser.inboundSigningSecret
 

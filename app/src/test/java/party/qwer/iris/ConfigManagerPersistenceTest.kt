@@ -67,18 +67,6 @@ class ConfigManagerPersistenceTest {
     }
 
     @Test
-    fun `signingSecret falls back to legacy webhookToken during migration`() {
-        val configDir = Files.createTempDirectory("iris-config-manager-legacy-signing").toFile()
-        val configPath = configDir.resolve("config.json").absolutePath
-        configDir.resolve("config.json").writeText("""{"webhookToken":"legacy-secret"}""")
-        val manager = ConfigManager(configPath = configPath)
-
-        assertEquals("legacy-secret", manager.signingSecret())
-        assertEquals("legacy-secret", manager.inboundSigningSecret)
-        configDir.deleteRecursively()
-    }
-
-    @Test
     fun `missing config keeps routing maps empty after reload`() {
         val configDir = Files.createTempDirectory("iris-config-manager-routing-defaults").toFile()
         val configPath = configDir.resolve("config.json").absolutePath

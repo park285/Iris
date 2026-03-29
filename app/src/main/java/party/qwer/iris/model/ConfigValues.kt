@@ -11,10 +11,6 @@ data class ConfigValues(
     val endpoint: String = "",
     @SerialName("webhooks")
     val webhooks: Map<String, String> = emptyMap(),
-    @SerialName("webhookToken")
-    val webhookToken: String = "",
-    @SerialName("botToken")
-    val botToken: String = "",
     val inboundSigningSecret: String = "",
     val outboundWebhookToken: String = "",
     val botControlToken: String = "",
