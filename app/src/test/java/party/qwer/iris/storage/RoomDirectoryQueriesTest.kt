@@ -23,27 +23,30 @@ class RoomDirectoryQueriesTest {
 
     @Test
     fun `listAllRooms returns RoomRow list`() {
-        val queries = RoomDirectoryQueries(client { sql, _ ->
-            if (sql.contains("chat_rooms")) {
-                listOf(
-                    row(
-                        "id" to "42",
-                        "type" to "OM",
-                        "link_id" to "10",
-                        "active_members_count" to "5",
-                        "meta" to null,
-                        "members" to "[1,2]",
-                        "link_name" to "TestRoom",
-                        "link_url" to "https://open.kakao.com/o/test",
-                        "member_limit" to "100",
-                        "searchable" to "1",
-                        "bot_role" to "8",
-                    ),
-                )
-            } else {
-                emptyList()
-            }
-        })
+        val queries =
+            RoomDirectoryQueries(
+                client { sql, _ ->
+                    if (sql.contains("chat_rooms")) {
+                        listOf(
+                            row(
+                                "id" to "42",
+                                "type" to "OM",
+                                "link_id" to "10",
+                                "active_members_count" to "5",
+                                "meta" to null,
+                                "members" to "[1,2]",
+                                "link_name" to "TestRoom",
+                                "link_url" to "https://open.kakao.com/o/test",
+                                "member_limit" to "100",
+                                "searchable" to "1",
+                                "bot_role" to "8",
+                            ),
+                        )
+                    } else {
+                        emptyList()
+                    }
+                },
+            )
 
         val rooms = queries.listAllRooms()
 
@@ -59,28 +62,31 @@ class RoomDirectoryQueriesTest {
 
     @Test
     fun `findRoomById returns single room`() {
-        val queries = RoomDirectoryQueries(client { sql, args ->
-            if (sql.contains("chat_rooms") && sql.contains("id = ?")) {
-                val chatId = (args.firstOrNull() as? SqlArg.LongVal)?.value
-                if (chatId == 42L) {
-                    listOf(
-                        row(
-                            "id" to "42",
-                            "type" to "MultiChat",
-                            "link_id" to null,
-                            "active_members_count" to "3",
-                            "meta" to null,
-                            "members" to "[1,2,3]",
-                            "blinded_member_ids" to "[]",
-                        ),
-                    )
-                } else {
-                    emptyList()
-                }
-            } else {
-                emptyList()
-            }
-        })
+        val queries =
+            RoomDirectoryQueries(
+                client { sql, args ->
+                    if (sql.contains("chat_rooms") && sql.contains("id = ?")) {
+                        val chatId = (args.firstOrNull() as? SqlArg.LongVal)?.value
+                        if (chatId == 42L) {
+                            listOf(
+                                row(
+                                    "id" to "42",
+                                    "type" to "MultiChat",
+                                    "link_id" to null,
+                                    "active_members_count" to "3",
+                                    "meta" to null,
+                                    "members" to "[1,2,3]",
+                                    "blinded_member_ids" to "[]",
+                                ),
+                            )
+                        } else {
+                            emptyList()
+                        }
+                    } else {
+                        emptyList()
+                    }
+                },
+            )
 
         val room = queries.findRoomById(ChatId(42L))
         assertNotNull(room)
@@ -98,47 +104,56 @@ class RoomDirectoryQueriesTest {
 
     @Test
     fun `resolveLinkId returns link_id from room`() {
-        val queries = RoomDirectoryQueries(client { sql, _ ->
-            if (sql.contains("link_id") && sql.contains("chat_rooms")) {
-                listOf(row("link_id" to "10"))
-            } else {
-                emptyList()
-            }
-        })
+        val queries =
+            RoomDirectoryQueries(
+                client { sql, _ ->
+                    if (sql.contains("link_id") && sql.contains("chat_rooms")) {
+                        listOf(row("link_id" to "10"))
+                    } else {
+                        emptyList()
+                    }
+                },
+            )
 
         assertEquals(LinkId(10L), queries.resolveLinkId(ChatId(42L)))
     }
 
     @Test
     fun `resolveLinkId returns null when no link`() {
-        val queries = RoomDirectoryQueries(client { sql, _ ->
-            if (sql.contains("link_id") && sql.contains("chat_rooms")) {
-                listOf(row("link_id" to null))
-            } else {
-                emptyList()
-            }
-        })
+        val queries =
+            RoomDirectoryQueries(
+                client { sql, _ ->
+                    if (sql.contains("link_id") && sql.contains("chat_rooms")) {
+                        listOf(row("link_id" to null))
+                    } else {
+                        emptyList()
+                    }
+                },
+            )
 
         assertNull(queries.resolveLinkId(ChatId(42L)))
     }
 
     @Test
     fun `loadOpenLink returns OpenLinkRow`() {
-        val queries = RoomDirectoryQueries(client { sql, _ ->
-            if (sql.contains("open_link")) {
-                listOf(
-                    row(
-                        "name" to "MyLink",
-                        "url" to "https://link.kakao.com/x",
-                        "member_limit" to "300",
-                        "description" to "desc",
-                        "searchable" to "1",
-                    ),
-                )
-            } else {
-                emptyList()
-            }
-        })
+        val queries =
+            RoomDirectoryQueries(
+                client { sql, _ ->
+                    if (sql.contains("open_link")) {
+                        listOf(
+                            row(
+                                "name" to "MyLink",
+                                "url" to "https://link.kakao.com/x",
+                                "member_limit" to "300",
+                                "description" to "desc",
+                                "searchable" to "1",
+                            ),
+                        )
+                    } else {
+                        emptyList()
+                    }
+                },
+            )
 
         val link = queries.loadOpenLink(LinkId(10L))
         assertNotNull(link)
@@ -149,16 +164,19 @@ class RoomDirectoryQueriesTest {
 
     @Test
     fun `loadBotCommands returns command list`() {
-        val queries = RoomDirectoryQueries(client { sql, _ ->
-            if (sql.contains("openchat_bot_command")) {
-                listOf(
-                    row("name" to "/help", "bot_id" to "100"),
-                    row("name" to "/info", "bot_id" to "100"),
-                )
-            } else {
-                emptyList()
-            }
-        })
+        val queries =
+            RoomDirectoryQueries(
+                client { sql, _ ->
+                    if (sql.contains("openchat_bot_command")) {
+                        listOf(
+                            row("name" to "/help", "bot_id" to "100"),
+                            row("name" to "/info", "bot_id" to "100"),
+                        )
+                    } else {
+                        emptyList()
+                    }
+                },
+            )
 
         val commands = queries.loadBotCommands(LinkId(10L))
         assertEquals(2, commands.size)

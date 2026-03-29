@@ -23,7 +23,10 @@ class MemberIdentityQueries(
             ),
         )
 
-    fun resolveOpenNickname(userId: UserId, linkId: LinkId): String? =
+    fun resolveOpenNickname(
+        userId: UserId,
+        linkId: LinkId,
+    ): String? =
         db.querySingle(
             QuerySpec(
                 sql = "SELECT nickname, enc FROM db2.open_chat_member WHERE user_id = ? AND link_id = ? LIMIT 1",
@@ -51,53 +54,63 @@ class MemberIdentityQueries(
             ),
         )
 
-    fun loadOpenNicknamesBatch(linkId: LinkId, userIds: List<UserId>): Map<UserId, String?> {
+    fun loadOpenNicknamesBatch(
+        linkId: LinkId,
+        userIds: List<UserId>,
+    ): Map<UserId, String?> {
         if (userIds.isEmpty()) return emptyMap()
         val sorted = userIds.sortedBy { it.value }
         val placeholders = sorted.joinToString(", ") { "?" }
-        val bindArgs = buildList<SqlArg> {
-            add(SqlArg.LongVal(linkId.value))
-            sorted.forEach { add(SqlArg.LongVal(it.value)) }
-        }
-        return db.query(
-            QuerySpec(
-                sql =
-                    """
-                    SELECT user_id, nickname, enc
-                    FROM db2.open_chat_member
-                    WHERE link_id = ? AND user_id IN ($placeholders)
-                    """.trimIndent(),
-                bindArgs = bindArgs,
-                maxRows = sorted.size,
-                mapper = { row ->
-                    val userId = UserId(row.long("user_id") ?: 0L)
-                    val enc = row.int("enc") ?: 0
-                    val rawNick = row.string("nickname")
-                    userId to if (rawNick != null && enc > 0) decrypt(enc, rawNick, botId) else rawNick
-                },
-            ),
-        ).toMap()
+        val bindArgs =
+            buildList<SqlArg> {
+                add(SqlArg.LongVal(linkId.value))
+                sorted.forEach { add(SqlArg.LongVal(it.value)) }
+            }
+        return db
+            .query(
+                QuerySpec(
+                    sql =
+                        """
+                        SELECT user_id, nickname, enc
+                        FROM db2.open_chat_member
+                        WHERE link_id = ? AND user_id IN ($placeholders)
+                        """.trimIndent(),
+                    bindArgs = bindArgs,
+                    maxRows = sorted.size,
+                    mapper = { row ->
+                        val userId = UserId(row.long("user_id") ?: 0L)
+                        val enc = row.int("enc") ?: 0
+                        val rawNick = row.string("nickname")
+                        userId to if (rawNick != null && enc > 0) decrypt(enc, rawNick, botId) else rawNick
+                    },
+                ),
+            ).toMap()
     }
 
     fun loadFriendsBatch(userIds: List<UserId>): Map<UserId, String> {
         if (userIds.isEmpty()) return emptyMap()
         val placeholders = userIds.joinToString(",") { "?" }
-        return db.query(
-            QuerySpec(
-                sql = "SELECT id, name, enc FROM db2.friends WHERE id IN ($placeholders)",
-                bindArgs = userIds.map { SqlArg.LongVal(it.value) },
-                maxRows = userIds.size,
-                mapper = { row ->
-                    val userId = UserId(row.long("id") ?: 0L)
-                    val enc = row.int("enc") ?: 0
-                    val rawName = row.string("name") ?: return@QuerySpec null
-                    userId to if (enc > 0) decrypt(enc, rawName, botId) else rawName
-                },
-            ),
-        ).filterNotNull().toMap()
+        return db
+            .query(
+                QuerySpec(
+                    sql = "SELECT id, name, enc FROM db2.friends WHERE id IN ($placeholders)",
+                    bindArgs = userIds.map { SqlArg.LongVal(it.value) },
+                    maxRows = userIds.size,
+                    mapper = { row ->
+                        val userId = UserId(row.long("id") ?: 0L)
+                        val enc = row.int("enc") ?: 0
+                        val rawName = row.string("name") ?: return@QuerySpec null
+                        userId to if (enc > 0) decrypt(enc, rawName, botId) else rawName
+                    },
+                ),
+            ).filterNotNull()
+            .toMap()
     }
 
-    fun resolveSenderRole(userId: UserId, linkId: LinkId): Int? =
+    fun resolveSenderRole(
+        userId: UserId,
+        linkId: LinkId,
+    ): Int? =
         db.querySingle(
             QuerySpec(
                 sql = "SELECT link_member_type FROM db2.open_chat_member WHERE user_id = ? AND link_id = ? LIMIT 1",
@@ -107,8 +120,10 @@ class MemberIdentityQueries(
             ),
         )
 
-    fun decryptNickname(enc: Int, raw: String): String =
-        if (enc > 0) decrypt(enc, raw, botId) else raw
+    fun decryptNickname(
+        enc: Int,
+        raw: String,
+    ): String = if (enc > 0) decrypt(enc, raw, botId) else raw
 
     private fun mapOpenMemberRow(row: SqlRow): OpenMemberRow =
         OpenMemberRow(

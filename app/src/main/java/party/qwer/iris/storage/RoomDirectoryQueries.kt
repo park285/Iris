@@ -139,14 +139,15 @@ class RoomDirectoryQueries(
         )
 
     fun resolveLinkId(chatId: ChatId): LinkId? =
-        db.querySingle(
-            QuerySpec(
-                sql = "SELECT link_id FROM chat_rooms WHERE id = ?",
-                bindArgs = listOf(SqlArg.LongVal(chatId.value)),
-                maxRows = 1,
-                mapper = { row -> row.long("link_id") },
-            ),
-        )?.let(::LinkId)
+        db
+            .querySingle(
+                QuerySpec(
+                    sql = "SELECT link_id FROM chat_rooms WHERE id = ?",
+                    bindArgs = listOf(SqlArg.LongVal(chatId.value)),
+                    maxRows = 1,
+                    mapper = { row -> row.long("link_id") },
+                ),
+            )?.let(::LinkId)
 
     fun loadOpenLink(linkId: LinkId): OpenLinkRow? =
         db.querySingle(
