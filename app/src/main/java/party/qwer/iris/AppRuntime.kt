@@ -32,6 +32,7 @@ import party.qwer.iris.storage.MemberIdentityQueries
 import party.qwer.iris.storage.ObservedProfileQueries
 import party.qwer.iris.storage.RoomDirectoryQueries
 import party.qwer.iris.storage.RoomStatsQueries
+import party.qwer.iris.storage.ThreadQueries
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -139,6 +140,7 @@ internal class AppRuntime(
             )
         val observedProfileQueries = ObservedProfileQueries(sqlClient)
         val roomStatsQueries = RoomStatsQueries(sqlClient)
+        val threadQueries = ThreadQueries(sqlClient)
         val roomSnapshotAssembler = RoomSnapshotAssembler
         memberRepo =
             MemberRepository(
@@ -146,6 +148,7 @@ internal class AppRuntime(
                 memberIdentity = memberIdentityQueries,
                 observedProfile = observedProfileQueries,
                 roomStats = roomStatsQueries,
+                threadQueries = threadQueries,
                 snapshotAssembler = roomSnapshotAssembler,
                 decrypt = KakaoDecrypt.Companion::decrypt,
                 botId = configManager.botId,

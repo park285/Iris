@@ -5,8 +5,11 @@ import party.qwer.iris.model.QueryColumn
 import party.qwer.iris.storage.KakaoDbSqlClient
 import party.qwer.iris.storage.MemberIdentityQueries
 import party.qwer.iris.storage.ObservedProfileQueries
+import party.qwer.iris.storage.QuerySpec
 import party.qwer.iris.storage.RoomDirectoryQueries
 import party.qwer.iris.storage.RoomStatsQueries
+import party.qwer.iris.storage.SqlClient
+import party.qwer.iris.storage.ThreadQueries
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -44,6 +47,14 @@ private fun legacyQuery(block: (String, Array<String?>?, Int) -> List<Map<String
         }
     }
 
+// 빈 결과를 반환하는 ThreadQueries 스텁
+private val stubThreadQueries =
+    ThreadQueries(
+        object : SqlClient {
+            override fun <T> query(spec: QuerySpec<T>): List<T> = emptyList()
+        },
+    )
+
 private fun buildRepoFromLegacy(
     executeQueryTyped: (String, Array<String?>?, Int) -> QueryExecutionResult,
     decrypt: (Int, String, Long) -> String = { _, s, _ -> s },
@@ -56,6 +67,7 @@ private fun buildRepoFromLegacy(
         memberIdentity = MemberIdentityQueries(sqlClient, decrypt, botId),
         observedProfile = ObservedProfileQueries(sqlClient),
         roomStats = RoomStatsQueries(sqlClient),
+        threadQueries = stubThreadQueries,
         decrypt = decrypt,
         botId = botId,
         learnObservedProfileUserMappings = learnObservedProfileUserMappings,

@@ -48,6 +48,11 @@ internal fun Route.installMemberRoutes(
         val period = call.request.queryParameters["period"]
         call.respond(repo.memberActivity(chatId, userId, period))
     }
+    get("/rooms/{chatId}/threads") {
+        if (!authSupport.requireBotToken(call, method = "GET")) return@get
+        val chatId = call.parameters["chatId"]?.toLongOrNull() ?: invalidRequest("chatId must be a number")
+        call.respond(repo.listThreads(chatId))
+    }
 
     if (bus != null) {
         get("/events/stream") {

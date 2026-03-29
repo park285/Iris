@@ -114,3 +114,19 @@ fun roleCodeToName(code: Int): String =
         8 -> "bot"
         else -> "member"
     }
+
+@Serializable
+data class ThreadListResponse(
+    val chatId: Long,
+    val threads: List<ThreadSummary>,
+)
+
+@Serializable
+data class ThreadSummary(
+    // 스레드 ID (문자열: Long을 그대로 직렬화)
+    val threadId: String,
+    // 스레드 시작 메시지(복호화 후) — nullable
+    val originMessage: String?,
+    val messageCount: Int,
+    val lastActiveAt: Long?,
+)

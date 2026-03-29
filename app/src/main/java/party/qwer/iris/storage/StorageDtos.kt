@@ -56,3 +56,15 @@ data class MessageLogRow(
     val type: String?,
     val createdAt: Long,
 )
+
+data class ThreadRow(
+    val threadId: Long,
+    val messageCount: Int,
+    val lastActiveAt: Long?,
+    // 스레드의 원본(첫) 메시지 — 암호화된 원문
+    val originMessage: String?,
+    // 원본 메시지 작성자 userId (복호화에 사용)
+    val originUserId: Long?,
+    // 원본 메시지의 v 필드 JSON (enc 값 추출용)
+    val originV: String?,
+)

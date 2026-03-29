@@ -5,6 +5,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
+import org.json.JSONObject
 import party.qwer.iris.model.BotCommandInfo
 import party.qwer.iris.model.MemberActivityResponse
 import party.qwer.iris.model.MemberInfo
@@ -17,6 +18,8 @@ import party.qwer.iris.model.RoomInfoResponse
 import party.qwer.iris.model.RoomListResponse
 import party.qwer.iris.model.RoomSummary
 import party.qwer.iris.model.StatsResponse
+import party.qwer.iris.model.ThreadListResponse
+import party.qwer.iris.model.ThreadSummary
 import party.qwer.iris.model.roleCodeToName
 import party.qwer.iris.snapshot.RoomSnapshotAssembler
 import party.qwer.iris.storage.ChatId
@@ -26,6 +29,7 @@ import party.qwer.iris.storage.MemberIdentityQueries
 import party.qwer.iris.storage.ObservedProfileQueries
 import party.qwer.iris.storage.RoomDirectoryQueries
 import party.qwer.iris.storage.RoomStatsQueries
+import party.qwer.iris.storage.ThreadQueries
 import party.qwer.iris.storage.UserId
 
 class MemberRepository(
@@ -33,6 +37,7 @@ class MemberRepository(
     private val memberIdentity: MemberIdentityQueries,
     private val observedProfile: ObservedProfileQueries,
     private val roomStats: RoomStatsQueries,
+    private val threadQueries: ThreadQueries,
     private val snapshotAssembler: RoomSnapshotAssembler = RoomSnapshotAssembler,
     private val decrypt: (Int, String, Long) -> String,
     private val botId: Long,
@@ -327,6 +332,39 @@ class MemberRepository(
             activeHours = hours.toList(),
             messageTypes = types,
         )
+    }
+
+    fun listThreads(chatId: Long): ThreadListResponse {
+        // 오픈채팅방(type이 'O'로 시작)에서만 thread가 의미 있음
+        val room = roomDirectory.findRoomById(ChatId(chatId))
+        val isOpenChat = room?.type?.startsWith("O") == true
+        if (!isOpenChat) {
+            return ThreadListResponse(chatId = chatId, threads = emptyList())
+        }
+
+        val rows = threadQueries.listThreads(ChatId(chatId))
+        val threads =
+            rows.map { row ->
+                val decryptedOrigin =
+                    if (row.originMessage != null && row.originV != null) {
+                        try {
+                            val enc = JSONObject(row.originV).optInt("enc", 0)
+                            val userId = row.originUserId ?: botId
+                            decrypt(enc, row.originMessage, userId)
+                        } catch (_: Exception) {
+                            row.originMessage
+                        }
+                    } else {
+                        null
+                    }
+                ThreadSummary(
+                    threadId = row.threadId.toString(),
+                    originMessage = decryptedOrigin,
+                    messageCount = row.messageCount,
+                    lastActiveAt = row.lastActiveAt,
+                )
+            }
+        return ThreadListResponse(chatId = chatId, threads = threads)
     }
 
     private fun resolveNickname(
