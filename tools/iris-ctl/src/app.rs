@@ -3,8 +3,11 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
 
 use crate::views::{TabId, View, ViewAction, events, members, rooms, stats};
-use iris_common::models::SseEvent;
+use crate::views::reply_modal::{ModalAction, ReplyModal};
+use iris_common::models::{ReplyRequest, SseEvent};
 use ratatui::widgets::{Block, Tabs};
+
+pub use crate::views::reply_modal::ReplyResult;
 
 pub enum AppEvent {
     Terminal(Event),
@@ -18,6 +21,9 @@ pub struct App {
     pub stats_view: stats::StatsView,
     pub events_view: events::EventsView,
     pub status: String,
+    pub reply_modal: Option<ReplyModal>,
+    pub pending_reply: Option<ReplyRequest>,
+    pub pending_thread_fetch: Option<i64>,
 }
 
 impl App {
@@ -29,6 +35,9 @@ impl App {
             stats_view: stats::StatsView::new(),
             events_view: events::EventsView::new(),
             status: "Ready".to_string(),
+            reply_modal: None,
+            pending_reply: None,
+            pending_thread_fetch: None,
         }
     }
     pub fn render(&self, frame: &mut Frame<'_>) {
@@ -56,6 +65,9 @@ impl App {
                 .style(ratatui::style::Style::default().dim()),
             chunks[2],
         );
+        if let Some(modal) = &self.reply_modal {
+            modal.render(frame);
+        }
     }
     fn bind_room_context(&mut self, chat_id: i64) {
         self.members_view.set_chat_id(chat_id);
@@ -88,18 +100,51 @@ impl App {
                 self.active_tab = TabId::Rooms;
                 false
             }
-            ViewAction::OpenReply(_) | ViewAction::None => false, // Task 9에서 구현
+            ViewAction::OpenReply(chat_id) => {
+                let room = chat_id.and_then(|id| {
+                    self.rooms_view.rooms.iter().find(|r| r.chat_id == id).cloned()
+                });
+                self.reply_modal = Some(ReplyModal::new(room, self.rooms_view.rooms.clone()));
+                false
+            }
+            ViewAction::None => false,
         }
     }
     fn handle_key_event(&mut self, key: KeyEvent) -> bool {
         if key.kind != KeyEventKind::Press {
             return false;
         }
+        if let Some(modal) = &mut self.reply_modal {
+            let action = modal.handle_key(key);
+            return match action {
+                ModalAction::Close => {
+                    self.reply_modal = None;
+                    false
+                }
+                ModalAction::Send(req) => {
+                    self.pending_reply = Some(req);
+                    false
+                }
+                ModalAction::FetchThreads(chat_id) => {
+                    self.pending_thread_fetch = Some(chat_id);
+                    false
+                }
+                ModalAction::None => false,
+            };
+        }
         if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
             return true;
         }
         match key.code {
             KeyCode::Char('q') => return true,
+            KeyCode::Char('r') => {
+                let chat_id = match self.active_tab {
+                    TabId::Rooms => self.rooms_view.selected_chat_id(),
+                    TabId::Members | TabId::Stats => self.members_view.chat_id,
+                    TabId::Events => None,
+                };
+                return self.apply_action(ViewAction::OpenReply(chat_id));
+            }
             KeyCode::Tab => {
                 let tabs = TabId::all();
                 self.active_tab = tabs[(self.active_tab.index() + 1) % tabs.len()];

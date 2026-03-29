@@ -14,6 +14,108 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
 
+const MAX_IMAGE_BYTES: u64 = 35 * 1024 * 1024;
+
+/// 단일 이미지 경로를 base64로 인코딩하거나 크기 초과/읽기 오류를 반환한다.
+async fn encode_single_image(
+    req: iris_common::models::ReplyRequest,
+) -> Result<iris_common::models::ReplyRequest, app::ReplyResult> {
+    use base64::Engine;
+    let path = req.data.as_str().unwrap_or("").to_owned();
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => {
+            if bytes.len() as u64 > MAX_IMAGE_BYTES {
+                #[allow(clippy::cast_precision_loss)]
+                let mb = bytes.len() as f64 / 1_048_576.0;
+                return Err(app::ReplyResult::Error {
+                    message: format!("파일이 너무 큽니다 ({mb:.1} MB, 상한 35 MB)"),
+                });
+            }
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            Ok(iris_common::models::ReplyRequest {
+                data: serde_json::Value::String(encoded),
+                ..req
+            })
+        }
+        Err(e) => Err(app::ReplyResult::Error {
+            message: format!("파일 읽기 실패: {e}"),
+        }),
+    }
+}
+
+/// 다중 이미지 경로 목록을 base64 배열로 인코딩하거나 크기 초과/읽기 오류를 반환한다.
+async fn encode_multiple_images(
+    req: iris_common::models::ReplyRequest,
+) -> Result<iris_common::models::ReplyRequest, app::ReplyResult> {
+    use base64::Engine;
+    let paths: Vec<String> = req
+        .data
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut encoded_list = Vec::new();
+    let mut total_bytes: u64 = 0;
+    for path in &paths {
+        match tokio::fs::read(path).await {
+            Ok(bytes) => {
+                total_bytes += bytes.len() as u64;
+                if total_bytes > MAX_IMAGE_BYTES {
+                    #[allow(clippy::cast_precision_loss)]
+                    let mb = total_bytes as f64 / 1_048_576.0;
+                    return Err(app::ReplyResult::Error {
+                        message: format!("이미지 합산 크기 초과 ({mb:.1} MB, 상한 35 MB)"),
+                    });
+                }
+                encoded_list.push(serde_json::Value::String(
+                    base64::engine::general_purpose::STANDARD.encode(&bytes),
+                ));
+            }
+            Err(e) => {
+                return Err(app::ReplyResult::Error {
+                    message: format!("파일 읽기 실패 ({path}): {e}"),
+                });
+            }
+        }
+    }
+    Ok(iris_common::models::ReplyRequest {
+        data: serde_json::Value::Array(encoded_list),
+        ..req
+    })
+}
+
+async fn send_reply_async(
+    iris: &api::TuiApi,
+    req: iris_common::models::ReplyRequest,
+) -> app::ReplyResult {
+    use iris_common::models::ReplyType;
+
+    let final_req = match &req.reply_type {
+        ReplyType::Image => match encode_single_image(req).await {
+            Ok(r) => r,
+            Err(e) => return e,
+        },
+        ReplyType::ImageMultiple => match encode_multiple_images(req).await {
+            Ok(r) => r,
+            Err(e) => return e,
+        },
+        _ => req,
+    };
+
+    match iris.send_reply(&final_req).await {
+        Ok(resp) => app::ReplyResult::Success {
+            request_id: resp.request_id,
+        },
+        Err(e) => app::ReplyResult::Error {
+            message: e.to_string(),
+        },
+    }
+}
+
 async fn refresh_rooms(iris: &api::TuiApi, app: &mut app::App) {
     if let Ok(rooms) = iris.rooms().await {
         app.rooms_view.set_rooms(rooms.rooms);
@@ -129,6 +231,7 @@ async fn main() -> Result<()> {
     let iris = api::TuiApi::new(&cfg)?;
     let poll_interval = Duration::from_secs(cfg.ui.poll_interval_secs);
     let (sse_tx, sse_rx) = mpsc::unbounded_channel::<SseEvent>();
+    let (reply_tx, mut reply_rx) = mpsc::unbounded_channel::<app::ReplyResult>();
     let sse_api = iris.clone();
     let last_event_id = Arc::new(AtomicI64::new(0));
     let sse_last_id = last_event_id.clone();
@@ -156,8 +259,33 @@ async fn main() -> Result<()> {
             sse = sse_rx.recv(), if !sse_closed => {
                 handle_sse_event(&mut app, &mut sse_closed, sse);
             }
+            reply_result = reply_rx.recv() => {
+                if let Some(result) = reply_result {
+                    if let Some(modal) = &mut app.reply_modal {
+                        modal.set_result(result);
+                    }
+                }
+            }
             _ = poll_tick.tick() => {
                 refresh_app_data(&iris, &mut app).await;
+            }
+        }
+
+        // 대기 중인 액션 처리
+        if let Some(req) = app.pending_reply.take() {
+            let api = iris.clone();
+            let tx = reply_tx.clone();
+            tokio::spawn(async move {
+                let result = send_reply_async(&api, req).await;
+                let _ = tx.send(result);
+            });
+        }
+
+        if let Some(chat_id) = app.pending_thread_fetch.take() {
+            if let Ok(thread_list) = iris.list_threads(chat_id).await {
+                if let Some(modal) = &mut app.reply_modal {
+                    modal.thread_suggestions = thread_list.threads;
+                }
             }
         }
     }

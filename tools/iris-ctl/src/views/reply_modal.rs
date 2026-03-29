@@ -1,6 +1,3 @@
-// Task 9 통합 전까지 dead_code 허용
-#![allow(dead_code)]
-
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use iris_common::models::{ReplyRequest, ReplyType, RoomSummary, ThreadSummary};
 use ratatui::Frame;
