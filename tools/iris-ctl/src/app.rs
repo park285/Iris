@@ -1,7 +1,6 @@
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
-use ratatui::style::Stylize;
 
 use crate::views::{TabId, View, ViewAction, events, members, rooms, stats};
 use iris_common::models::SseEvent;

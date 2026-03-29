@@ -6,7 +6,7 @@ rust-version.workspace = true
 
 [dependencies]
 iris-common = { path = "../iris-common" }
-ratatui = "0.29"
+ratatui = "0.30"
 crossterm = { version = "0.29", features = ["event-stream"] }
 reqwest = { workspace = true }
 tokio = { workspace = true }
@@ -16,7 +16,7 @@ toml = { workspace = true }
 dirs = { workspace = true }
 anyhow = { workspace = true }
 futures-util = "0.3"
-tui-textarea = "0.7"
+tui-textarea = { package = "tui-textarea-2", version = "0.10" }
 base64 = "0.22"
 hmac = { workspace = true }
 sha2 = { workspace = true }
