@@ -37,9 +37,27 @@ internal fun decodeConfigValues(
         )
 
     return DecodedConfigValues(
-        values = normalizedValues,
+        values = migrateSecretRoles(normalizedValues),
         migratedLegacyEndpoint = migratedLegacyEndpoint,
     )
+}
+
+internal fun migrateSecretRoles(values: ConfigValues): ConfigValues {
+    val inbound = values.inboundSigningSecret.ifBlank { values.webhookToken }
+    val outbound = values.outboundWebhookToken.ifBlank { values.webhookToken }
+    val control = values.botControlToken.ifBlank { values.botToken }
+    return if (inbound == values.inboundSigningSecret &&
+        outbound == values.outboundWebhookToken &&
+        control == values.botControlToken
+    ) {
+        values
+    } else {
+        values.copy(
+            inboundSigningSecret = inbound,
+            outboundWebhookToken = outbound,
+            botControlToken = control,
+        )
+    }
 }
 
 internal fun configuredWebhookEndpoint(
