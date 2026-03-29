@@ -15,7 +15,7 @@ internal class MediaPreparationService(
     private val imageMediaScanEnabled: Boolean,
     private val maxImagesPerRequest: Int = 8,
     private val maxTotalBytes: Int = 30 * 1024 * 1024,
-) {
+) : MediaPreparationCleanup {
     fun prepare(
         room: Long,
         payloadMetadata: List<ImagePayloadMetadata>,
@@ -54,7 +54,7 @@ internal class MediaPreparationService(
         return PreparedImages(room = room, imagePaths = imagePaths, files = createdFiles)
     }
 
-    fun cleanup(preparedImages: PreparedImages) {
+    override fun cleanup(preparedImages: PreparedImages) {
         cleanupPreparedImages(preparedImages)
     }
 }
