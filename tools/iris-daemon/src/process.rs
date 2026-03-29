@@ -83,22 +83,16 @@ fn env_or_default(key: &str, fallback: &str) -> String {
 }
 
 fn start_command(cfg: &DaemonConfig) -> String {
-    let webhook_token = env_or_default("IRIS_WEBHOOK_TOKEN", &cfg.iris.shared_token);
-    let bot_token = env_or_default("IRIS_BOT_TOKEN", &cfg.iris.shared_token);
     let bind_host = env_or_default("IRIS_BIND_HOST", DEFAULT_IRIS_BIND_HOST);
     let log_level = env_or_default("IRIS_LOG_LEVEL", DEFAULT_IRIS_LOG_LEVEL);
     format!(
         "nohup env KAKAOTALK_APP_UID=0 \
          IRIS_CONFIG_PATH={config} \
-         IRIS_WEBHOOK_TOKEN={webhook} \
-         IRIS_BOT_TOKEN={bot} \
          IRIS_BIND_HOST={bind_host} \
          IRIS_LOG_LEVEL={log_level} \
          CLASSPATH={apk} \
          app_process / {main} > {log_dest} 2>&1 &",
         config = shell_quote(&cfg.init.config_dest),
-        webhook = shell_quote(&webhook_token),
-        bot = shell_quote(&bot_token),
         bind_host = shell_quote(&bind_host),
         log_level = shell_quote(&log_level),
         apk = shell_quote(&cfg.init.apk_dest),
@@ -156,21 +150,26 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::cognitive_complexity)]
     fn start_command_includes_runtime_arguments() {
-        let mut cfg = DaemonConfig::default();
-        cfg.iris.shared_token = "shared-token".to_string();
+        let cfg = DaemonConfig::default();
         let command = start_command(&cfg);
 
         assert!(command.contains(IRIS_PROCESS_NAME));
         assert!(command.contains("IRIS_CONFIG_PATH='/data/local/tmp/config.json'"));
-        assert!(command.contains("IRIS_WEBHOOK_TOKEN='shared-token'"));
-        assert!(command.contains("IRIS_BOT_TOKEN='shared-token'"));
         assert!(command.contains("IRIS_BIND_HOST='127.0.0.1'"));
         assert!(command.contains("IRIS_LOG_LEVEL='INFO'"));
         assert!(command.contains("CLASSPATH='/data/local/tmp/Iris.apk'"));
         assert!(command.contains("> '/data/local/tmp/iris.log' 2>&1 &"));
-        assert!(!command.contains("--health-url="));
-        assert!(!command.contains("--shared-token="));
+    }
+
+    #[test]
+    fn start_command_excludes_token_env_vars() {
+        let mut cfg = DaemonConfig::default();
+        cfg.iris.shared_token = "shared-token".to_string();
+        let command = start_command(&cfg);
+
+        // 토큰은 config.json에서만 공급됨, env var 주입 제거됨
+        assert!(!command.contains("IRIS_WEBHOOK_TOKEN"));
+        assert!(!command.contains("IRIS_BOT_TOKEN"));
     }
 }
