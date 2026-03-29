@@ -8,7 +8,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
-use tui_textarea::{Input, Key, TextArea};
+use tui_textarea::TextArea;
 
 use super::path_input::PathInput;
 
@@ -677,7 +677,7 @@ impl ReplyModal {
         }
         match self.reply_type {
             ReplyType::Text | ReplyType::Markdown => {
-                self.text_area.input(crossterm_key_to_input(key));
+                self.text_area.input(key);
             }
             ReplyType::Image => {
                 self.image_path.handle_key(key);
@@ -941,37 +941,6 @@ impl ReplyModal {
             self.image_paths_cursor = 0;
         }
         self.result = Some(result);
-    }
-}
-
-/// crossterm `KeyEvent` → `tui_textarea` `Input` 변환 (크레이트 버전 차이 우회)
-const fn crossterm_key_to_input(key: KeyEvent) -> Input {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    let alt = key.modifiers.contains(KeyModifiers::ALT);
-    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-    let tui_key = match key.code {
-        KeyCode::Char(c) => Key::Char(c),
-        KeyCode::Backspace => Key::Backspace,
-        KeyCode::Enter => Key::Enter,
-        KeyCode::Left => Key::Left,
-        KeyCode::Right => Key::Right,
-        KeyCode::Up => Key::Up,
-        KeyCode::Down => Key::Down,
-        KeyCode::Tab => Key::Tab,
-        KeyCode::Delete => Key::Delete,
-        KeyCode::Home => Key::Home,
-        KeyCode::End => Key::End,
-        KeyCode::PageUp => Key::PageUp,
-        KeyCode::PageDown => Key::PageDown,
-        KeyCode::Esc => Key::Esc,
-        KeyCode::F(n) => Key::F(n),
-        _ => Key::Null,
-    };
-    Input {
-        key: tui_key,
-        ctrl,
-        alt,
-        shift,
     }
 }
 
