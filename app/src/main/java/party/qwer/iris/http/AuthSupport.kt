@@ -6,6 +6,7 @@ import io.ktor.server.request.path
 import io.ktor.server.response.respond
 import party.qwer.iris.AuthResult
 import party.qwer.iris.ConfigProvider
+import party.qwer.iris.IrisLogger
 import party.qwer.iris.RequestAuthenticator
 import party.qwer.iris.canonicalRequestTarget
 import party.qwer.iris.model.CommonErrorResponse
@@ -34,6 +35,7 @@ internal class AuthSupport(
         return when (result) {
             AuthResult.AUTHORIZED -> true
             AuthResult.SERVICE_UNAVAILABLE -> {
+                IrisLogger.error("[AuthSupport] Refusing protected request because bot token is not configured")
                 call.respond(HttpStatusCode.ServiceUnavailable, CommonErrorResponse(message = "service unavailable"))
                 false
             }
