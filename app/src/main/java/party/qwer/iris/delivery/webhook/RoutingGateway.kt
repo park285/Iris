@@ -1,5 +1,7 @@
 package party.qwer.iris.delivery.webhook
 
+import party.qwer.iris.persistence.PendingWebhookDelivery
+import party.qwer.iris.persistence.WebhookDeliveryStore
 import java.io.Closeable
 
 interface RoutingGateway : Closeable {
@@ -20,27 +22,22 @@ internal class H2cRoutingGateway(
 
 internal class OutboxRoutingGateway(
     private val config: party.qwer.iris.ConfigProvider,
-    private val outboxStore: WebhookOutboxStore,
+    private val deliveryStore: WebhookDeliveryStore,
 ) : RoutingGateway {
     override fun route(command: RoutingCommand): RoutingResult {
         val resolved = resolveWebhookDelivery(command, config) ?: return RoutingResult.SKIPPED
-        return if (
-            outboxStore.enqueue(
-                PendingWebhookOutboxEntry(
-                    roomId = resolved.roomId,
-                    route = resolved.route,
-                    messageId = resolved.messageId,
-                    payloadJson = resolved.payloadJson,
-                ),
-            )
-        ) {
-            RoutingResult.ACCEPTED
-        } else {
-            RoutingResult.RETRY_LATER
-        }
+        deliveryStore.enqueue(
+            PendingWebhookDelivery(
+                messageId = resolved.messageId,
+                roomId = resolved.roomId,
+                route = resolved.route,
+                payloadJson = resolved.payloadJson,
+            ),
+        )
+        return RoutingResult.ACCEPTED
     }
 
     override fun close() {
-        outboxStore.close()
+        deliveryStore.close()
     }
 }

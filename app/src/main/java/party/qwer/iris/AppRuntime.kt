@@ -1,17 +1,21 @@
 package party.qwer.iris
 
+import android.database.sqlite.SQLiteDatabase
 import android.net.Uri
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.withContext
-import party.qwer.iris.delivery.webhook.FileWebhookOutboxStore
 import party.qwer.iris.delivery.webhook.OutboxRoutingGateway
 import party.qwer.iris.delivery.webhook.WebhookOutboxDispatcher
 import party.qwer.iris.ingress.CommandIngressService
+import party.qwer.iris.persistence.AndroidSqliteDriver
 import party.qwer.iris.persistence.BatchedCheckpointJournal
 import party.qwer.iris.persistence.CheckpointJournal
+import party.qwer.iris.persistence.IrisDatabaseSchema
+import party.qwer.iris.persistence.SqliteWebhookDeliveryStore
+import party.qwer.iris.persistence.WebhookDeliveryStore
 import party.qwer.iris.reply.DispatchScheduler
 import party.qwer.iris.reply.MediaPreparationService
 import party.qwer.iris.reply.ReplyAdmissionService
@@ -43,8 +47,9 @@ internal class AppRuntime(
     private lateinit var replyService: ReplyService
     private lateinit var kakaoDb: KakaoDB
     private lateinit var memberRepo: MemberRepository
-    private lateinit var webhookOutboxStore: FileWebhookOutboxStore
+    private lateinit var webhookOutboxStore: WebhookDeliveryStore
     private lateinit var webhookOutboxDispatcher: WebhookOutboxDispatcher
+    private lateinit var persistenceDriver: AndroidSqliteDriver
     private lateinit var sseEventBus: SseEventBus
     private lateinit var checkpointJournal: CheckpointJournal
     private lateinit var snapshotCoordinator: SnapshotCoordinator
@@ -146,7 +151,19 @@ internal class AppRuntime(
                 botId = configManager.botId,
                 learnObservedProfileUserMappings = kakaoDb::learnObservedProfileUserMappings,
             )
-        webhookOutboxStore = FileWebhookOutboxStore()
+        val persistenceDbPath = "${PathUtils.getAppPath()}databases/iris.db"
+        val persistenceDbFile = File(persistenceDbPath)
+        persistenceDbFile.parentFile?.mkdirs()
+        persistenceDriver =
+            AndroidSqliteDriver(
+                SQLiteDatabase.openDatabase(
+                    persistenceDbFile.absolutePath,
+                    null,
+                    SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.CREATE_IF_NECESSARY,
+                ),
+            )
+        IrisDatabaseSchema.createWebhookOutboxTable(persistenceDriver)
+        webhookOutboxStore = SqliteWebhookDeliveryStore(persistenceDriver)
         webhookOutboxDispatcher = WebhookOutboxDispatcher(configManager, webhookOutboxStore)
         webhookOutboxDispatcher.start()
         sseEventBus = SseEventBus(bufferSize = 100)

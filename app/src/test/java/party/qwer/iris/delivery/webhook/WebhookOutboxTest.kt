@@ -4,9 +4,14 @@ import com.sun.net.httpserver.HttpServer
 import party.qwer.iris.ConfigManager
 import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
 import party.qwer.iris.model.WebhookOutboxStatus
+import party.qwer.iris.persistence.IrisDatabaseSchema
+import party.qwer.iris.persistence.JdbcSqliteHelper
+import party.qwer.iris.persistence.PendingWebhookDelivery
+import party.qwer.iris.persistence.SqliteWebhookDeliveryStore
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.nio.file.Files
+import java.nio.file.Path
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -46,17 +51,17 @@ class WebhookOutboxTest {
 
     @Test
     fun `outbox dispatcher replays persisted delivery`() {
-        val outboxFile = Files.createTempFile("iris-outbox-replay", ".json").toFile()
-        val store = FileWebhookOutboxStore(outboxFile, clock = System::currentTimeMillis)
+        val helper = JdbcSqliteHelper.inMemory()
+        IrisDatabaseSchema.createWebhookOutboxTable(helper)
+        val store = SqliteWebhookDeliveryStore(helper)
         store.enqueue(
-            PendingWebhookOutboxEntry(
+            PendingWebhookDelivery(
+                messageId = "msg-1",
                 roomId = 1L,
                 route = DEFAULT_WEBHOOK_ROUTE,
-                messageId = "msg-1",
                 payloadJson = """{"route":"$DEFAULT_WEBHOOK_ROUTE","messageId":"msg-1"}""",
             ),
         )
-        store.close()
 
         val configPath = Files.createTempFile("iris-outbox-config", ".json").toFile().absolutePath
         val config = ConfigManager(configPath = configPath)
@@ -80,7 +85,7 @@ class WebhookOutboxTest {
         try {
             WebhookOutboxDispatcher(
                 config = config,
-                store = FileWebhookOutboxStore(outboxFile, clock = System::currentTimeMillis),
+                store = store,
                 transportOverride = "http1",
                 pollIntervalMs = 50L,
             ).use { dispatcher ->
@@ -91,11 +96,10 @@ class WebhookOutboxTest {
         } finally {
             server.stop(0)
             (server.executor as? java.util.concurrent.ExecutorService)?.shutdownNow()
-            outboxFile.delete()
-            Files.deleteIfExists(
-                java.nio.file.Path
-                    .of(configPath),
-            )
+            helper.close()
+            val configFilePath =
+                Path.of(configPath)
+            Files.deleteIfExists(configFilePath)
         }
     }
 
@@ -105,29 +109,30 @@ class WebhookOutboxTest {
         val config = ConfigManager(configPath = configPath)
         val port = reservePort()
         config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, "http://127.0.0.1:$port/webhook/iris")
-        val outboxFile = Files.createTempFile("iris-outbox-order-store", ".json").toFile()
-        val store = FileWebhookOutboxStore(outboxFile, clock = System::currentTimeMillis)
+        val helper = JdbcSqliteHelper.inMemory()
+        IrisDatabaseSchema.createWebhookOutboxTable(helper)
+        val store = SqliteWebhookDeliveryStore(helper)
         store.enqueue(
-            PendingWebhookOutboxEntry(
+            PendingWebhookDelivery(
+                messageId = "msg-1",
                 roomId = 1L,
                 route = DEFAULT_WEBHOOK_ROUTE,
-                messageId = "msg-1",
                 payloadJson = """{"messageId":"msg-1"}""",
             ),
         )
         store.enqueue(
-            PendingWebhookOutboxEntry(
+            PendingWebhookDelivery(
+                messageId = "msg-2",
                 roomId = 1L,
                 route = DEFAULT_WEBHOOK_ROUTE,
-                messageId = "msg-2",
                 payloadJson = """{"messageId":"msg-2"}""",
             ),
         )
         store.enqueue(
-            PendingWebhookOutboxEntry(
+            PendingWebhookDelivery(
+                messageId = "msg-3",
                 roomId = 2L,
                 route = DEFAULT_WEBHOOK_ROUTE,
-                messageId = "msg-3",
                 payloadJson = """{"messageId":"msg-3"}""",
             ),
         )
@@ -169,7 +174,7 @@ class WebhookOutboxTest {
         } finally {
             server.stop(0)
             (server.executor as? java.util.concurrent.ExecutorService)?.shutdownNow()
-            outboxFile.delete()
+            helper.close()
             Files.deleteIfExists(
                 java.nio.file.Path
                     .of(configPath),

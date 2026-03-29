@@ -20,13 +20,14 @@ import party.qwer.iris.delivery.webhook.nextBackoffDelayMs
 import party.qwer.iris.delivery.webhook.nextDeliveryRetrySchedule
 import party.qwer.iris.delivery.webhook.resolveWebhookTransport
 import party.qwer.iris.delivery.webhook.shouldRetryStatus
-import party.qwer.iris.model.StoredWebhookOutboxEntry
+import party.qwer.iris.persistence.ClaimedDelivery
+import party.qwer.iris.persistence.WebhookDeliveryStore
 import java.io.Closeable
 import java.util.concurrent.ConcurrentHashMap
 
 internal class WebhookOutboxDispatcher(
     private val config: ConfigProvider,
-    private val store: WebhookOutboxStore,
+    private val store: WebhookDeliveryStore,
     transportOverride: String? = null,
     private val partitionCount: Int = 4,
     private val pollIntervalMs: Long = 200L,
@@ -49,7 +50,7 @@ internal class WebhookOutboxDispatcher(
         if (pollingJob?.isActive == true) {
             return
         }
-        store.recoverInFlight(System.currentTimeMillis())
+        store.recoverExpiredClaims(olderThanMs = 60_000L)
         pollingJob =
             coroutineScope.launch {
                 while (isActive) {
@@ -60,7 +61,7 @@ internal class WebhookOutboxDispatcher(
     }
 
     private suspend fun pumpReadyEntries() {
-        val claimed = store.claimReady(System.currentTimeMillis(), maxClaimBatchSize)
+        val claimed = store.claimReady(maxClaimBatchSize)
         claimed.forEach { entry ->
             val partition =
                 routePartitions
@@ -68,10 +69,11 @@ internal class WebhookOutboxDispatcher(
                     .partitions[partitionIndexForRoom(entry.roomId, partitionCount)]
             val sendResult = partition.channel.trySend(entry)
             if (sendResult.isFailure) {
-                store.requeueClaim(
+                store.markRetry(
                     id = entry.id,
+                    claimToken = entry.claimToken,
                     nextAttemptAt = System.currentTimeMillis() + pollIntervalMs,
-                    lastError = "partition queue saturated: route=${entry.route}, partition=${partition.index}",
+                    reason = "partition queue saturated: route=${entry.route}, partition=${partition.index}",
                 )
             }
         }
@@ -82,7 +84,7 @@ internal class WebhookOutboxDispatcher(
             route = route,
             partitions =
                 List(partitionCount.coerceAtLeast(1)) { index ->
-                    val channel = Channel<StoredWebhookOutboxEntry>(partitionQueueCapacity)
+                    val channel = Channel<ClaimedDelivery>(partitionQueueCapacity)
                     val job =
                         coroutineScope.launch {
                             for (entry in channel) {
@@ -93,10 +95,10 @@ internal class WebhookOutboxDispatcher(
                 },
         )
 
-    private suspend fun processEntry(entry: StoredWebhookOutboxEntry) {
+    private suspend fun processEntry(entry: ClaimedDelivery) {
         val url = config.webhookEndpointFor(entry.route).takeIf { it.isNotBlank() }
         if (url.isNullOrBlank()) {
-            store.markDead(entry.id, "no webhook URL configured for route=${entry.route}")
+            store.markDead(entry.id, entry.claimToken, "no webhook URL configured for route=${entry.route}")
             return
         }
 
@@ -120,14 +122,14 @@ internal class WebhookOutboxDispatcher(
             }
 
         when {
-            statusCode in 200..299 -> store.markSent(entry.id)
+            statusCode in 200..299 -> store.markSent(entry.id, entry.claimToken)
             shouldRetryStatus(statusCode) -> scheduleRetryOrDead(entry, "status=$statusCode")
-            else -> store.markDead(entry.id, "status=$statusCode")
+            else -> store.markDead(entry.id, entry.claimToken, "status=$statusCode")
         }
     }
 
     private fun scheduleRetryOrDead(
-        entry: StoredWebhookOutboxEntry,
+        entry: ClaimedDelivery,
         reason: String?,
     ) {
         when (
@@ -141,14 +143,16 @@ internal class WebhookOutboxDispatcher(
             is DeliveryRetrySchedule.RetryAttempt ->
                 store.markRetry(
                     id = entry.id,
+                    claimToken = entry.claimToken,
                     nextAttemptAt = System.currentTimeMillis() + retrySchedule.delayMs,
-                    lastError = reason,
+                    reason = reason,
                 )
 
             is DeliveryRetrySchedule.Exhausted ->
                 store.markDead(
                     id = entry.id,
-                    lastError = reason ?: "delivery attempts exhausted",
+                    claimToken = entry.claimToken,
+                    reason = reason ?: "delivery attempts exhausted",
                 )
         }
     }
@@ -181,7 +185,7 @@ internal class WebhookOutboxDispatcher(
 
     private data class PartitionChannel(
         val index: Int,
-        val channel: Channel<StoredWebhookOutboxEntry>,
+        val channel: Channel<ClaimedDelivery>,
         val job: Job,
     )
 }
