@@ -562,4 +562,3 @@ internal fun validateReplyThreadScope(
     require(threadId != null || normalizedScope == 1) { "threadScope requires threadId unless scope is 1" }
     return normalizedScope
 }
-
