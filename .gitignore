@@ -22,15 +22,13 @@ local.properties
 # Worktrees
 .worktrees/
 
-# Claude Code / AI Assistant
+# Assistant local state
 .claude/
 .codex/
 .omx/
 .tasklists/
 .cursor/
 .aider*
-CLAUDE.md
-AGENTS.md
 
 # Serena MCP
 .serena/
@@ -40,8 +38,6 @@ AGENTS.md
 
 # Ops snapshots (local-only)
 docs/current-staging-split.md
-docs/superpowers/plans/
-docs/superpowers/specs/
 
 # Backup files
 *.backup
