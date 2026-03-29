@@ -108,6 +108,7 @@ class ObserverHelperSnapshotTest {
         bundle.helper.runDirtySnapshotDiff(maxRoomsPerTick = 10)
 
         waitUntil { diffEngine.diffedChatIds == listOf(100L, 200L) }
+        waitUntil { bundle.bus.replayFrom(0).size == 2 }
         assertEquals(listOf(100L, 200L), diffEngine.diffedChatIds)
         assertEquals(2, bundle.bus.replayFrom(0).size)
         assertEquals(listOf("100", "200"), bundle.routingGateway.commands.map { it.room })
