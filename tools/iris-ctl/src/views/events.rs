@@ -3,6 +3,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use iris_common::models::SseEvent;
 use ratatui::Frame;
 use ratatui::layout::Rect;
+use ratatui::style::Stylize;
 use ratatui::widgets::{Block, List, ListItem, ListState};
 use std::collections::VecDeque;
 

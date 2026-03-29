@@ -6,7 +6,7 @@ rust-version.workspace = true
 
 [dependencies]
 iris-common = { path = "../iris-common" }
-ratatui = "0.30"
+ratatui = "0.29"
 crossterm = { version = "0.29", features = ["event-stream"] }
 reqwest = { workspace = true }
 tokio = { workspace = true }

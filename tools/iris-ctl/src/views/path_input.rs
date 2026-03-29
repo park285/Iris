@@ -1,9 +1,9 @@
 use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use ratatui::Frame;
 use std::path::Path;
 
 // 미사용 경고 억제: Task 7~9에서 ReplyModal이 이 위젯을 통합하기 전까지 dead_code
@@ -124,15 +124,19 @@ impl PathInput {
 
     fn collect_candidates(&self) -> Vec<String> {
         let path = Path::new(&self.value);
-        let (dir, prefix) = if self.value.ends_with('/') || self.value.ends_with(std::path::MAIN_SEPARATOR) {
-            (path.to_path_buf(), String::new())
-        } else {
-            let dir = path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
-            let prefix = path
-                .file_name()
-                .map_or_else(String::new, |f| f.to_string_lossy().to_string());
-            (dir, prefix)
-        };
+        let (dir, prefix) =
+            if self.value.ends_with('/') || self.value.ends_with(std::path::MAIN_SEPARATOR) {
+                (path.to_path_buf(), String::new())
+            } else {
+                let dir = path
+                    .parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .to_path_buf();
+                let prefix = path
+                    .file_name()
+                    .map_or_else(String::new, |f| f.to_string_lossy().to_string());
+                (dir, prefix)
+            };
 
         let Ok(entries) = std::fs::read_dir(&dir) else {
             return Vec::new();
@@ -140,11 +144,7 @@ impl PathInput {
 
         let mut candidates: Vec<String> = entries
             .filter_map(Result::ok)
-            .filter(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .starts_with(&prefix)
-            })
+            .filter(|e| e.file_name().to_string_lossy().starts_with(&prefix))
             .map(|e| {
                 let mut full = dir.join(e.file_name()).to_string_lossy().to_string();
                 if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
@@ -161,9 +161,7 @@ impl PathInput {
     pub fn validate_file(&mut self) {
         let path = Path::new(&self.value);
         if path.is_file() {
-            let size = std::fs::metadata(path)
-                .map(|m| m.len())
-                .unwrap_or(0);
+            let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
             let ext = path
                 .extension()
                 .map_or_else(String::new, |e| e.to_string_lossy().to_string());
@@ -184,7 +182,10 @@ impl PathInput {
             Style::default().fg(Color::White)
         };
         let display = if self.value.is_empty() {
-            Line::from(Span::styled("경로를 입력하세요...", Style::default().fg(Color::DarkGray)))
+            Line::from(Span::styled(
+                "경로를 입력하세요...",
+                Style::default().fg(Color::DarkGray),
+            ))
         } else {
             Line::from(Span::styled(&self.value, style))
         };
