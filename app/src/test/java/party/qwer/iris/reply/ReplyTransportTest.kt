@@ -16,25 +16,27 @@ class ReplyTransportTest {
         val capturedChatId = AtomicReference<Long>()
         val capturedMessage = AtomicReference<CharSequence>()
 
-        val transport = ReplyTransport(
-            notificationReplySender = { _, chatId, message, _, _ ->
-                notificationCalls.incrementAndGet()
-                capturedChatId.set(chatId)
-                capturedMessage.set(message)
-            },
-            sharedTextReplySender = { _, _, _, _ -> shareCalls.incrementAndGet() },
-            nativeImageReplySender = StubNativeImageSender(),
-            mediaPreparationService = null,
-        )
+        val transport =
+            ReplyTransport(
+                notificationReplySender = { _, chatId, message, _, _ ->
+                    notificationCalls.incrementAndGet()
+                    capturedChatId.set(chatId)
+                    capturedMessage.set(message)
+                },
+                sharedTextReplySender = { _, _, _, _ -> shareCalls.incrementAndGet() },
+                nativeImageReplySender = StubNativeImageSender(),
+                mediaPreparationService = null,
+            )
 
-        val cmd = TextReplyCommand(
-            chatId = 100L,
-            referer = "Iris",
-            message = "hello",
-            threadId = null,
-            threadScope = null,
-            requestId = null,
-        )
+        val cmd =
+            TextReplyCommand(
+                chatId = 100L,
+                referer = "Iris",
+                message = "hello",
+                threadId = null,
+                threadScope = null,
+                requestId = null,
+            )
 
         transport.sendText(cmd)
 
@@ -51,25 +53,27 @@ class ReplyTransportTest {
         val capturedThreadId = AtomicReference<Long?>()
         val capturedScope = AtomicReference<Int?>()
 
-        val transport = ReplyTransport(
-            notificationReplySender = { _, _, _, _, _ -> notificationCalls.incrementAndGet() },
-            sharedTextReplySender = { _, _, threadId, threadScope ->
-                shareCalls.incrementAndGet()
-                capturedThreadId.set(threadId)
-                capturedScope.set(threadScope)
-            },
-            nativeImageReplySender = StubNativeImageSender(),
-            mediaPreparationService = null,
-        )
+        val transport =
+            ReplyTransport(
+                notificationReplySender = { _, _, _, _, _ -> notificationCalls.incrementAndGet() },
+                sharedTextReplySender = { _, _, threadId, threadScope ->
+                    shareCalls.incrementAndGet()
+                    capturedThreadId.set(threadId)
+                    capturedScope.set(threadScope)
+                },
+                nativeImageReplySender = StubNativeImageSender(),
+                mediaPreparationService = null,
+            )
 
-        val cmd = TextReplyCommand(
-            chatId = 100L,
-            referer = "Iris",
-            message = "threaded text",
-            threadId = 500L,
-            threadScope = 2,
-            requestId = null,
-        )
+        val cmd =
+            TextReplyCommand(
+                chatId = 100L,
+                referer = "Iris",
+                message = "threaded text",
+                threadId = 500L,
+                threadScope = 2,
+                requestId = null,
+            )
 
         transport.sendText(cmd)
 
@@ -83,21 +87,23 @@ class ReplyTransportTest {
     fun `dispatches threaded text reply defaults scope to two`() {
         val capturedScope = AtomicReference<Int?>()
 
-        val transport = ReplyTransport(
-            notificationReplySender = { _, _, _, _, _ -> },
-            sharedTextReplySender = { _, _, _, threadScope -> capturedScope.set(threadScope) },
-            nativeImageReplySender = StubNativeImageSender(),
-            mediaPreparationService = null,
-        )
+        val transport =
+            ReplyTransport(
+                notificationReplySender = { _, _, _, _, _ -> },
+                sharedTextReplySender = { _, _, _, threadScope -> capturedScope.set(threadScope) },
+                nativeImageReplySender = StubNativeImageSender(),
+                mediaPreparationService = null,
+            )
 
-        val cmd = TextReplyCommand(
-            chatId = 100L,
-            referer = "Iris",
-            message = "default scope",
-            threadId = 500L,
-            threadScope = null,
-            requestId = null,
-        )
+        val cmd =
+            TextReplyCommand(
+                chatId = 100L,
+                referer = "Iris",
+                message = "default scope",
+                threadId = 500L,
+                threadScope = null,
+                requestId = null,
+            )
 
         transport.sendText(cmd)
         assertEquals(2, capturedScope.get())
@@ -108,23 +114,25 @@ class ReplyTransportTest {
         val shareCalls = AtomicInteger(0)
         val capturedMessage = AtomicReference<CharSequence>()
 
-        val transport = ReplyTransport(
-            notificationReplySender = { _, _, _, _, _ -> },
-            sharedTextReplySender = { _, message, _, _ ->
-                shareCalls.incrementAndGet()
-                capturedMessage.set(message)
-            },
-            nativeImageReplySender = StubNativeImageSender(),
-            mediaPreparationService = null,
-        )
+        val transport =
+            ReplyTransport(
+                notificationReplySender = { _, _, _, _, _ -> },
+                sharedTextReplySender = { _, message, _, _ ->
+                    shareCalls.incrementAndGet()
+                    capturedMessage.set(message)
+                },
+                nativeImageReplySender = StubNativeImageSender(),
+                mediaPreparationService = null,
+            )
 
-        val cmd = ShareReplyCommand(
-            chatId = 200L,
-            message = "shared text",
-            threadId = null,
-            threadScope = null,
-            requestId = null,
-        )
+        val cmd =
+            ShareReplyCommand(
+                chatId = 200L,
+                message = "shared text",
+                threadId = null,
+                threadScope = null,
+                requestId = null,
+            )
 
         transport.sendShare(cmd)
 
@@ -139,42 +147,47 @@ class ReplyTransportTest {
         val cleanupCalled = AtomicInteger(0)
         val tempFile = File.createTempFile("iris-transport-test", ".png")
 
-        val transport = ReplyTransport(
-            notificationReplySender = { _, _, _, _, _ -> },
-            sharedTextReplySender = { _, _, _, _ -> },
-            nativeImageReplySender = object : NativeImageReplySender {
-                override fun send(
-                    roomId: Long,
-                    imagePaths: List<String>,
-                    threadId: Long?,
-                    threadScope: Int?,
-                    requestId: String?,
-                ) {
-                    nativeCalls.incrementAndGet()
-                    capturedPaths.set(imagePaths)
-                }
-            },
-            mediaPreparationService = object : MediaPreparationCleanup {
-                override fun cleanup(preparedImages: PreparedImages) {
-                    cleanupCalled.incrementAndGet()
-                }
-            },
-        )
+        val transport =
+            ReplyTransport(
+                notificationReplySender = { _, _, _, _, _ -> },
+                sharedTextReplySender = { _, _, _, _ -> },
+                nativeImageReplySender =
+                    object : NativeImageReplySender {
+                        override fun send(
+                            roomId: Long,
+                            imagePaths: List<String>,
+                            threadId: Long?,
+                            threadScope: Int?,
+                            requestId: String?,
+                        ) {
+                            nativeCalls.incrementAndGet()
+                            capturedPaths.set(imagePaths)
+                        }
+                    },
+                mediaPreparationService =
+                    object : MediaPreparationCleanup {
+                        override fun cleanup(preparedImages: PreparedImages) {
+                            cleanupCalled.incrementAndGet()
+                        }
+                    },
+            )
 
-        val preparedImages = PreparedImages(
-            room = 300L,
-            imagePaths = arrayListOf(tempFile.absolutePath),
-            files = arrayListOf(tempFile),
-        )
+        val preparedImages =
+            PreparedImages(
+                room = 300L,
+                imagePaths = arrayListOf(tempFile.absolutePath),
+                files = arrayListOf(tempFile),
+            )
 
         transport.sendNativeImages(
-            command = NativeImageReplyCommand(
-                chatId = 300L,
-                base64Images = listOf("base64"),
-                threadId = null,
-                threadScope = null,
-                requestId = "img-1",
-            ),
+            command =
+                NativeImageReplyCommand(
+                    chatId = 300L,
+                    base64Images = listOf("base64"),
+                    threadId = null,
+                    threadScope = null,
+                    requestId = "img-1",
+                ),
             preparedImages = preparedImages,
         )
 
@@ -189,42 +202,45 @@ class ReplyTransportTest {
         val cleanupCalled = AtomicInteger(0)
         val tempFile = File.createTempFile("iris-transport-fail", ".png")
 
-        val transport = ReplyTransport(
-            notificationReplySender = { _: String, _: Long, _: CharSequence, _: Long?, _: Int? -> },
-            sharedTextReplySender = { _: Long, _: CharSequence, _: Long?, _: Int? -> },
-            nativeImageReplySender = object : NativeImageReplySender {
-                override fun send(
-                    roomId: Long,
-                    imagePaths: List<String>,
-                    threadId: Long?,
-                    threadScope: Int?,
-                    requestId: String?,
-                ) {
-                    throw RuntimeException("native send failed")
-                }
-            },
-            mediaPreparationService = object : MediaPreparationCleanup {
-                override fun cleanup(preparedImages: PreparedImages) {
-                    cleanupCalled.incrementAndGet()
-                }
-            },
-        )
+        val transport =
+            ReplyTransport(
+                notificationReplySender = { _: String, _: Long, _: CharSequence, _: Long?, _: Int? -> },
+                sharedTextReplySender = { _: Long, _: CharSequence, _: Long?, _: Int? -> },
+                nativeImageReplySender =
+                    object : NativeImageReplySender {
+                        override fun send(
+                            roomId: Long,
+                            imagePaths: List<String>,
+                            threadId: Long?,
+                            threadScope: Int?,
+                            requestId: String?,
+                        ): Unit = throw RuntimeException("native send failed")
+                    },
+                mediaPreparationService =
+                    object : MediaPreparationCleanup {
+                        override fun cleanup(preparedImages: PreparedImages) {
+                            cleanupCalled.incrementAndGet()
+                        }
+                    },
+            )
 
-        val preparedImages = PreparedImages(
-            room = 400L,
-            imagePaths = arrayListOf(tempFile.absolutePath),
-            files = arrayListOf(tempFile),
-        )
+        val preparedImages =
+            PreparedImages(
+                room = 400L,
+                imagePaths = arrayListOf(tempFile.absolutePath),
+                files = arrayListOf(tempFile),
+            )
 
         try {
             transport.sendNativeImages(
-                command = NativeImageReplyCommand(
-                    chatId = 400L,
-                    base64Images = listOf("base64"),
-                    threadId = null,
-                    threadScope = null,
-                    requestId = null,
-                ),
+                command =
+                    NativeImageReplyCommand(
+                        chatId = 400L,
+                        base64Images = listOf("base64"),
+                        threadId = null,
+                        threadScope = null,
+                        requestId = null,
+                    ),
                 preparedImages = preparedImages,
             )
         } catch (_: RuntimeException) {
@@ -238,23 +254,25 @@ class ReplyTransportTest {
     fun `preserves zero-width characters in text replies`() {
         val capturedMessage = AtomicReference<CharSequence>()
 
-        val transport = ReplyTransport(
-            notificationReplySender = { _: String, _: Long, message: CharSequence, _: Long?, _: Int? ->
-                capturedMessage.set(message)
-            },
-            sharedTextReplySender = { _: Long, _: CharSequence, _: Long?, _: Int? -> },
-            nativeImageReplySender = StubNativeImageSender(),
-            mediaPreparationService = null,
-        )
+        val transport =
+            ReplyTransport(
+                notificationReplySender = { _: String, _: Long, message: CharSequence, _: Long?, _: Int? ->
+                    capturedMessage.set(message)
+                },
+                sharedTextReplySender = { _: Long, _: CharSequence, _: Long?, _: Int? -> },
+                nativeImageReplySender = StubNativeImageSender(),
+                mediaPreparationService = null,
+            )
 
-        val cmd = TextReplyCommand(
-            chatId = 100L,
-            referer = "Iris",
-            message = "a\u200Bb",
-            threadId = null,
-            threadScope = null,
-            requestId = null,
-        )
+        val cmd =
+            TextReplyCommand(
+                chatId = 100L,
+                referer = "Iris",
+                message = "a\u200Bb",
+                threadId = null,
+                threadScope = null,
+                requestId = null,
+            )
 
         transport.sendText(cmd)
 

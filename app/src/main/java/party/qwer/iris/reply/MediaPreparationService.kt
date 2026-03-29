@@ -45,7 +45,8 @@ internal class MediaPreparationService(
         } catch (e: Exception) {
             createdFiles.forEach { file ->
                 if (file.exists() && !file.delete()) {
-                    party.qwer.iris.IrisLogger.error("Failed to delete partially prepared image file: ${file.absolutePath}")
+                    party.qwer.iris.IrisLogger
+                        .error("Failed to delete partially prepared image file: ${file.absolutePath}")
                 }
             }
             throw e

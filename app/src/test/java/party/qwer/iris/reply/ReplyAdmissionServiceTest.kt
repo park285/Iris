@@ -8,16 +8,18 @@ import kotlin.test.assertEquals
 class ReplyAdmissionServiceTest {
     @Test
     fun `accepts request when started and worker available`() {
-        val service = ReplyAdmissionService(
-            maxWorkers = 16,
-            perWorkerQueueCapacity = 16,
-        )
+        val service =
+            ReplyAdmissionService(
+                maxWorkers = 16,
+                perWorkerQueueCapacity = 16,
+            )
         service.start()
 
-        val result = service.enqueue(
-            key = ReplyQueueKey(chatId = 1L, threadId = null),
-            request = stubPipelineRequest(),
-        )
+        val result =
+            service.enqueue(
+                key = ReplyQueueKey(chatId = 1L, threadId = null),
+                request = stubPipelineRequest(),
+            )
 
         assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
         service.shutdown()
@@ -25,42 +27,47 @@ class ReplyAdmissionServiceTest {
 
     @Test
     fun `rejects when not started`() {
-        val service = ReplyAdmissionService(
-            maxWorkers = 16,
-            perWorkerQueueCapacity = 16,
-        )
+        val service =
+            ReplyAdmissionService(
+                maxWorkers = 16,
+                perWorkerQueueCapacity = 16,
+            )
 
-        val result = service.enqueue(
-            key = ReplyQueueKey(chatId = 1L, threadId = null),
-            request = stubPipelineRequest(),
-        )
+        val result =
+            service.enqueue(
+                key = ReplyQueueKey(chatId = 1L, threadId = null),
+                request = stubPipelineRequest(),
+            )
 
         assertEquals(ReplyAdmissionStatus.SHUTDOWN, result.status)
     }
 
     @Test
     fun `rejects after shutdown`() {
-        val service = ReplyAdmissionService(
-            maxWorkers = 16,
-            perWorkerQueueCapacity = 16,
-        )
+        val service =
+            ReplyAdmissionService(
+                maxWorkers = 16,
+                perWorkerQueueCapacity = 16,
+            )
         service.start()
         service.shutdown()
 
-        val result = service.enqueue(
-            key = ReplyQueueKey(chatId = 1L, threadId = null),
-            request = stubPipelineRequest(),
-        )
+        val result =
+            service.enqueue(
+                key = ReplyQueueKey(chatId = 1L, threadId = null),
+                request = stubPipelineRequest(),
+            )
 
         assertEquals(ReplyAdmissionStatus.SHUTDOWN, result.status)
     }
 
     @Test
     fun `rejects when max workers exceeded`() {
-        val service = ReplyAdmissionService(
-            maxWorkers = 2,
-            perWorkerQueueCapacity = 16,
-        )
+        val service =
+            ReplyAdmissionService(
+                maxWorkers = 2,
+                perWorkerQueueCapacity = 16,
+            )
         service.start()
 
         val r1 = service.enqueue(ReplyQueueKey(chatId = 1L, threadId = null), stubPipelineRequest())
@@ -75,10 +82,11 @@ class ReplyAdmissionServiceTest {
 
     @Test
     fun `reuses existing worker for same key`() {
-        val service = ReplyAdmissionService(
-            maxWorkers = 2,
-            perWorkerQueueCapacity = 16,
-        )
+        val service =
+            ReplyAdmissionService(
+                maxWorkers = 2,
+                perWorkerQueueCapacity = 16,
+            )
         service.start()
 
         val r1 = service.enqueue(ReplyQueueKey(chatId = 1L, threadId = null), stubPipelineRequest())
@@ -91,11 +99,12 @@ class ReplyAdmissionServiceTest {
 
     @Test
     fun `rejects when per-worker queue is full`() {
-        val service = ReplyAdmissionService(
-            maxWorkers = 16,
-            perWorkerQueueCapacity = 1,
-            workerIdleTimeoutMs = 60_000L,
-        )
+        val service =
+            ReplyAdmissionService(
+                maxWorkers = 16,
+                perWorkerQueueCapacity = 1,
+                workerIdleTimeoutMs = 60_000L,
+            )
         service.start()
 
         val key = ReplyQueueKey(chatId = 1L, threadId = null)
@@ -114,10 +123,11 @@ class ReplyAdmissionServiceTest {
 
     @Test
     fun `restart clears workers and accepts new requests`() {
-        val service = ReplyAdmissionService(
-            maxWorkers = 16,
-            perWorkerQueueCapacity = 16,
-        )
+        val service =
+            ReplyAdmissionService(
+                maxWorkers = 16,
+                perWorkerQueueCapacity = 16,
+            )
         service.start()
 
         val r1 = service.enqueue(ReplyQueueKey(chatId = 1L, threadId = null), stubPipelineRequest())
@@ -132,11 +142,12 @@ class ReplyAdmissionServiceTest {
 
     @Test
     fun `stale worker retry creates new worker`() {
-        val service = ReplyAdmissionService(
-            maxWorkers = 16,
-            perWorkerQueueCapacity = 16,
-            workerIdleTimeoutMs = 50L,
-        )
+        val service =
+            ReplyAdmissionService(
+                maxWorkers = 16,
+                perWorkerQueueCapacity = 16,
+                workerIdleTimeoutMs = 50L,
+            )
         service.start()
 
         val key = ReplyQueueKey(chatId = 1L, threadId = null)

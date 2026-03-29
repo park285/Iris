@@ -20,16 +20,18 @@ class MediaPreparationServiceTest {
     @Test
     fun `prepares single image and returns prepared images`() {
         val imageDir = Files.createTempDirectory("iris-media-prep").toFile()
-        val service = MediaPreparationService(
-            imageDecoder = { Base64.getMimeDecoder().decode(it) },
-            mediaScanner = {},
-            imageDir = imageDir,
-            imageMediaScanEnabled = false,
-        )
+        val service =
+            MediaPreparationService(
+                imageDecoder = { Base64.getMimeDecoder().decode(it) },
+                mediaScanner = {},
+                imageDir = imageDir,
+                imageMediaScanEnabled = false,
+            )
 
-        val metadata = listOf(
-            ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
-        )
+        val metadata =
+            listOf(
+                ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
+            )
 
         val result = service.prepare(room = 100L, payloadMetadata = metadata)
 
@@ -46,21 +48,23 @@ class MediaPreparationServiceTest {
     fun `prepares multiple images preserving order`() {
         val imageDir = Files.createTempDirectory("iris-media-prep-multi").toFile()
         val decodeOrder = AtomicInteger(0)
-        val service = MediaPreparationService(
-            imageDecoder = { payload ->
-                decodeOrder.incrementAndGet()
-                Base64.getMimeDecoder().decode(payload)
-            },
-            mediaScanner = {},
-            imageDir = imageDir,
-            imageMediaScanEnabled = false,
-        )
+        val service =
+            MediaPreparationService(
+                imageDecoder = { payload ->
+                    decodeOrder.incrementAndGet()
+                    Base64.getMimeDecoder().decode(payload)
+                },
+                mediaScanner = {},
+                imageDir = imageDir,
+                imageMediaScanEnabled = false,
+            )
 
-        val metadata = listOf(
-            ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
-            ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
-            ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
-        )
+        val metadata =
+            listOf(
+                ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
+                ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
+                ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
+            )
 
         val result = service.prepare(room = 200L, payloadMetadata = metadata)
 
@@ -77,16 +81,18 @@ class MediaPreparationServiceTest {
     fun `triggers media scan when enabled`() {
         val imageDir = Files.createTempDirectory("iris-media-scan").toFile()
         val scannedFiles = mutableListOf<File>()
-        val service = MediaPreparationService(
-            imageDecoder = { Base64.getMimeDecoder().decode(it) },
-            mediaScanner = { file -> scannedFiles.add(file) },
-            imageDir = imageDir,
-            imageMediaScanEnabled = true,
-        )
+        val service =
+            MediaPreparationService(
+                imageDecoder = { Base64.getMimeDecoder().decode(it) },
+                mediaScanner = { file -> scannedFiles.add(file) },
+                imageDir = imageDir,
+                imageMediaScanEnabled = true,
+            )
 
-        val metadata = listOf(
-            ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
-        )
+        val metadata =
+            listOf(
+                ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
+            )
 
         val result = service.prepare(room = 300L, payloadMetadata = metadata)
 
@@ -99,16 +105,18 @@ class MediaPreparationServiceTest {
     fun `skips media scan when disabled`() {
         val imageDir = Files.createTempDirectory("iris-media-noscan").toFile()
         val scannedFiles = mutableListOf<File>()
-        val service = MediaPreparationService(
-            imageDecoder = { Base64.getMimeDecoder().decode(it) },
-            mediaScanner = { file -> scannedFiles.add(file) },
-            imageDir = imageDir,
-            imageMediaScanEnabled = false,
-        )
+        val service =
+            MediaPreparationService(
+                imageDecoder = { Base64.getMimeDecoder().decode(it) },
+                mediaScanner = { file -> scannedFiles.add(file) },
+                imageDir = imageDir,
+                imageMediaScanEnabled = false,
+            )
 
-        val metadata = listOf(
-            ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
-        )
+        val metadata =
+            listOf(
+                ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
+            )
 
         val result = service.prepare(room = 400L, payloadMetadata = metadata)
 
@@ -121,23 +129,25 @@ class MediaPreparationServiceTest {
     fun `cleans up partial files on decode failure`() {
         val imageDir = Files.createTempDirectory("iris-media-fail").toFile()
         var callCount = 0
-        val service = MediaPreparationService(
-            imageDecoder = { payload ->
-                callCount++
-                if (callCount == 2) {
-                    throw RuntimeException("decode fail")
-                }
-                Base64.getMimeDecoder().decode(payload)
-            },
-            mediaScanner = {},
-            imageDir = imageDir,
-            imageMediaScanEnabled = false,
-        )
+        val service =
+            MediaPreparationService(
+                imageDecoder = { payload ->
+                    callCount++
+                    if (callCount == 2) {
+                        throw RuntimeException("decode fail")
+                    }
+                    Base64.getMimeDecoder().decode(payload)
+                },
+                mediaScanner = {},
+                imageDir = imageDir,
+                imageMediaScanEnabled = false,
+            )
 
-        val metadata = listOf(
-            ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
-            ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
-        )
+        val metadata =
+            listOf(
+                ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
+                ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
+            )
 
         assertFailsWith<RuntimeException> {
             service.prepare(room = 500L, payloadMetadata = metadata)
@@ -154,16 +164,18 @@ class MediaPreparationServiceTest {
         val imageDir = File(parentDir, "nested/images")
         assertFalse(imageDir.exists())
 
-        val service = MediaPreparationService(
-            imageDecoder = { Base64.getMimeDecoder().decode(it) },
-            mediaScanner = {},
-            imageDir = imageDir,
-            imageMediaScanEnabled = false,
-        )
+        val service =
+            MediaPreparationService(
+                imageDecoder = { Base64.getMimeDecoder().decode(it) },
+                mediaScanner = {},
+                imageDir = imageDir,
+                imageMediaScanEnabled = false,
+            )
 
-        val metadata = listOf(
-            ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
-        )
+        val metadata =
+            listOf(
+                ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
+            )
 
         val result = service.prepare(room = 600L, payloadMetadata = metadata)
 
