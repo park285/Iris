@@ -2,8 +2,8 @@ use crate::auth::{canonical_target, signed_headers};
 use crate::config::IrisConnection;
 use crate::models::{
     BridgeDiagnosticsResponse, HealthResponse, MemberActivityResponse, MemberListResponse,
-    ReplyAcceptedResponse, ReplyRequest, RoomInfoResponse, RoomListResponse, StatsResponse,
-    ThreadListResponse,
+    QueryRequest, QueryResponse, ReplyAcceptedResponse, ReplyRequest, RoomInfoResponse,
+    RoomListResponse, StatsResponse, ThreadListResponse,
 };
 use anyhow::Result;
 use reqwest::Client;
@@ -126,6 +126,16 @@ impl IrisApi {
                 &format!("/rooms/{chat_id}/members/{user_id}/activity"),
                 &query,
             )?
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
+    }
+
+    pub async fn query(&self, req: &QueryRequest) -> Result<QueryResponse> {
+        Ok(self
+            .signed_post_json("/query", req)?
             .send()
             .await?
             .error_for_status()?

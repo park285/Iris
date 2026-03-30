@@ -251,6 +251,29 @@ pub struct ErrorResponse {
     pub message: String,
 }
 
+#[derive(Serialize, Debug, Clone)]
+pub struct QueryRequest {
+    pub query: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bind: Option<Vec<serde_json::Value>>,
+    pub decrypt: bool,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryColumn {
+    pub name: String,
+    pub sqlite_type: String,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryResponse {
+    pub row_count: usize,
+    pub columns: Vec<QueryColumn>,
+    pub rows: Vec<Vec<Option<serde_json::Value>>>,
+}
+
 // --- Thread models ---
 
 #[derive(Deserialize, Debug, Clone)]
@@ -368,5 +391,47 @@ mod tests {
             r#"{"chatId":123,"threads":[{"threadId":"456","messageCount":5,"lastActiveAt":null}]}"#;
         let parsed: ThreadListResponse = serde_json::from_str(payload).unwrap();
         assert_eq!(parsed.threads[0].last_active_at, None);
+    }
+
+    #[test]
+    fn query_request_serializes_bind_and_decrypt() {
+        let req = QueryRequest {
+            query: "SELECT id, message FROM chat_logs WHERE chat_id = ? LIMIT 50".to_string(),
+            bind: Some(vec![serde_json::json!(123)]),
+            decrypt: true,
+        };
+
+        let json = serde_json::to_value(&req).unwrap();
+
+        assert_eq!(
+            json["query"],
+            "SELECT id, message FROM chat_logs WHERE chat_id = ? LIMIT 50"
+        );
+        assert_eq!(json["bind"][0], 123);
+        assert_eq!(json["decrypt"], true);
+    }
+
+    #[test]
+    fn query_response_parses_rows_and_columns() {
+        let payload = r#"{
+            "rowCount": 2,
+            "columns": [
+                {"name": "id", "sqliteType": "INTEGER"},
+                {"name": "message", "sqliteType": "TEXT"}
+            ],
+            "rows": [
+                [101, "hello"],
+                [102, "world"]
+            ]
+        }"#;
+
+        let parsed: QueryResponse = serde_json::from_str(payload).unwrap();
+
+        assert_eq!(parsed.row_count, 2);
+        assert_eq!(parsed.columns[0].name, "id");
+        assert_eq!(parsed.columns[1].sqlite_type, "TEXT");
+        assert_eq!(parsed.rows.len(), 2);
+        assert_eq!(parsed.rows[0][0], Some(serde_json::json!(101)));
+        assert_eq!(parsed.rows[1][1], Some(serde_json::json!("world")));
     }
 }
