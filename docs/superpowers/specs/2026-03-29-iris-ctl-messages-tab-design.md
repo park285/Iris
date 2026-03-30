@@ -1,160 +1,307 @@
-# iris-ctl Messages Tab Design (Draft)
+# iris-ctl Messages Tab Design
 
 ## Overview
 
-iris-ctl TUI에 Messages 탭을 추가하여, 방의 채팅 메시지 히스토리를 조회하고 해당 맥락에서 바로 Reply를 보낼 수 있게 한다.
-현재 Reply Modal은 대화 맥락 없이 방 ID만으로 전송하는 구조여서, 메시지를 보면서 답장하는 자연스러운 UX가 불가능하다.
+`iris-ctl` TUI에 `Messages` 탭을 추가한다. 사용자는 선택된 방의 최근 메시지 50건을 읽고, 해당 메시지의 맥락을 유지한 채 `ReplyModal`을 열어 바로 답장할 수 있다.
 
-## Motivation
+이 작업의 목표는 새 reply 시스템을 만드는 것이 아니라, **기존 Reply Modal에 메시지 컨텍스트를 안정적으로 공급하는 읽기 전용 메시지 뷰를 추가하는 것**이다.
 
-- Reply Modal은 기능적으로 완성되었으나, 대화 흐름을 보지 못한 채 메시지를 보내야 함
-- 스레드 선택도 origin message 미리보기만 가능하고, 스레드 내 대화 흐름은 볼 수 없음
-- Messages 탭이 생기면 기존 Reply Modal을 그대로 재사용하면서 컨텍스트만 자동 연결
+## Goals
 
-## Scope
+- TUI에 5번째 탭으로 `Messages` 추가
+- 현재 선택된 방의 최근 메시지 50건 표시
+- `POST /query` 재활용으로 서버 변경 없이 구현 시작
+- 스레드 접기/펼치기 지원
+- 선택 메시지 기준으로 `ReplyModal`에 room/thread context 사전 입력
+- 기존 poll 주기에 맞춘 자동 갱신
 
-### In scope
+## Non-Goals
 
-- Messages 탭: 5번째 탭으로 추가 (`[Rooms] [Members] [Stats] [Messages] [Events]`)
-- 방의 최근 메시지 조회 (기존 `POST /query` API 활용)
-- 메시지 복호화 표시 (`decrypt=true` 파라미터)
-- 스크롤 (위/아래 방향키, PageUp/PageDown)
-- 스레드 메시지 접기/펼치기
-- 메시지 선택 후 `r` → Reply Modal에 방 + 스레드 ID 자동 채움
-- 자동 갱신 (폴링 주기에 맞춰 새 메시지 추가)
-
-### Out of scope (향후 이터레이션)
-
-- 실시간 SSE 기반 메시지 스트리밍
+- 전용 messages API 추가
+- SSE 기반 실시간 메시지 스트리밍
 - 메시지 검색
-- 이미지/파일 첨부 미리보기
-- 메시지 삭제/수정
-- 무한 스크롤 (초기에는 최근 N건 고정)
+- 이미지/파일 미리보기
+- 무한 스크롤 또는 추가 페이지 로드
+- 메시지 수정/삭제
+- Rooms 탭에서 Messages 탭으로의 자동 전환
+
+## Final Decisions
+
+### Data source
+- 기존 `POST /query`를 재활용한다.
+- `decrypt=true`를 사용해 서버 측 복호화 결과를 표시한다.
+
+### Initial message window
+- 최근 50건 고정으로 시작한다.
+- 추가 페이지 로드나 무한 스크롤은 넣지 않는다.
+
+### Non-text message rendering
+- 첫 버전에서는 placeholder만 표시한다.
+- 예: `[image]`, `[file]`, `[emoticon]`, `[unsupported]`
+
+### Room-to-Messages navigation
+- Rooms 탭에서 방 선택 시 Messages 탭으로 자동 전환하지 않는다.
+- 방 컨텍스트만 갱신하고, 사용자가 직접 Messages 탭으로 이동한다.
+
+### Architecture choice
+- `MessagesView`를 별도 파일로 두는 **뷰 독립형 구조**를 채택한다.
+- `app.rs`는 탭 전환과 액션 라우팅을 담당하고, 메시지 상태와 렌더링은 `views/messages.rs`에 모은다.
 
 ## Proposed Layout
 
-```
+```text
 [Rooms] [Members] [Stats] [Messages] [Events]
-┌─ Messages (#방이름) ─────────────────────────────────────┐
+┌─ Messages (#room-name) ────────────────────────────────────┐
 │  [03-29 12:01] alice: 안녕하세요                           │
 │  [03-29 12:02] bob: ㅎㅇ                                  │
 │  [03-29 12:03] alice: 이거 어떻게 해요?                    │
-│    └─ 스레드 (3건) ▸                          ← Enter 펼치기│
+│    └─ thread (3) ▸                                        │
 │  [03-29 12:05] charlie: 공지 확인해주세요                   │
-│  [03-29 12:06] dave: 확인했습니다                          │
-│▶ [03-29 12:08] alice: 감사합니다                ← 현재 선택 │
+│▶ [03-29 12:08] alice: 감사합니다                           │
 │                                                           │
 ├───────────────────────────────────────────────────────────┤
-│ ↑↓ 이동 │ Enter 스레드 │ r 답장 │ / 검색 │ q 닫기          │
+│ ↑↓ move │ Enter thread │ r reply │ PgUp/PgDn page │ q quit │
 └───────────────────────────────────────────────────────────┘
 ```
 
-### 스레드 펼침 상태
+Thread expanded:
 
-```
+```text
 │  [03-29 12:03] alice: 이거 어떻게 해요?                    │
-│    └─ 스레드 (3건) ▾                                       │
-│       [12:04] bob: 설정에서 바꾸면 됩니다                    │
-│       [12:05] alice: 감사합니다                             │
-│       [12:06] charlie: 저도 궁금했어요                      │
-│  [03-29 12:05] charlie: 공지 확인해주세요                   │
+│    └─ thread (3) ▾                                        │
+│       [12:04] bob: 설정에서 바꾸면 됩니다                  │
+│       [12:05] alice: 감사합니다                            │
+│       [12:06] charlie: 저도 궁금했어요                     │
 ```
 
-## Data Flow
+## Architecture
 
-### 메시지 조회
+### Responsibilities
 
-기존 `POST /query` API를 활용한다:
+#### `tools/iris-ctl/src/views/messages.rs`
+Owns:
+- selected room context for messages view
+- in-memory message list
+- thread expansion state
+- selection and scroll state
+- flattened rows for rendering
+- reply context derivation from current selection
+- empty/loading/error rendering for the messages pane
 
-```sql
-SELECT id, user_id, message, type, created_at, thread_id, v
-FROM chat_logs
-WHERE chat_id = ?
-ORDER BY created_at DESC
-LIMIT 50
-```
+#### `tools/iris-ctl/src/app.rs`
+Owns:
+- adding `Messages` to the tab model
+- routing render/key handling to `MessagesView`
+- opening `ReplyModal` using message-derived context
+- sharing selected room context across tabs
 
-- `decrypt=true` 로 서버 측 복호화 적용
-- 닉네임 해석: `GET /rooms/{chatId}/members`의 캐시된 결과 활용
+#### `tools/iris-ctl/src/main.rs`
+Owns:
+- polling and refreshing message data for the selected room
+- adapting query results into `MessagesView` input
+- reusing already-fetched member data for nickname mapping
 
-### 전용 API 추가 여부
+This keeps the split as:
+- UI state in `MessagesView`
+- tab orchestration in `app.rs`
+- network refresh in `main.rs`
 
-| 방식 | 장점 | 단점 |
-|------|------|------|
-| `POST /query` 재활용 | 서버 변경 없음 | SQL 직접 작성, 구조화 안 됨 |
-| `GET /rooms/{chatId}/messages` 신규 | 구조화된 응답, 페이지네이션 | 서버 엔드포인트 추가 필요 |
+## Data Model
 
-**추천: `POST /query` 재활용으로 시작**, 이후 필요 시 전용 API로 전환.
-
-### Reply 연동
-
-메시지 선택 후 `r`:
-1. 선택된 메시지의 `chat_id` → Reply Modal의 Room 자동 채움
-2. 선택된 메시지가 스레드에 속하면 → `thread_id` 자동 채움
-3. 선택된 메시지 자체가 스레드 시작이면 → 해당 `id`를 `thread_id`로
-4. 스레드 없는 일반 메시지 → 스레드 없이 방에 전송
-
-## State Structure (초안)
+### `MessagesView`
 
 ```rust
 pub struct MessagesView {
-    chat_id: Option<i64>,
+    pub chat_id: Option<i64>,
     messages: Vec<ChatMessage>,
-    scroll_offset: usize,
     selected_index: usize,
-
-    // 스레드 펼침 상태
+    scroll_offset: usize,
     expanded_threads: HashSet<i64>,
-
-    // 닉네임 캐시 (members API에서)
     nicknames: HashMap<i64, String>,
 }
+```
 
+### `ChatMessage`
+
+```rust
 struct ChatMessage {
     id: i64,
+    chat_id: i64,
     user_id: i64,
-    message: String,       // 복호화 후
+    message: String,
     msg_type: i32,
     created_at: i64,
     thread_id: Option<i64>,
 }
 ```
 
-## Key Mapping
+### Flattened render rows
 
-| 키 | 동작 |
-|----|------|
-| ↑ / ↓ | 메시지 선택 이동 |
-| PageUp / PageDown | 페이지 단위 스크롤 |
-| Enter | 스레드 접기/펼치기 |
-| r | 선택된 메시지 컨텍스트로 Reply Modal 오픈 |
-| Home / End | 최신/최구 메시지로 이동 |
+`MessagesView` stores canonical messages, then computes flattened rows during rendering/key handling.
 
-## Dependencies
+Row kinds:
+- top-level message row
+- thread header row
+- expanded thread child row
 
-- 기존 `POST /query` API (변경 없음)
-- 기존 `GET /rooms/{chatId}/members` API (닉네임 해석)
-- Reply Modal (`views/reply_modal.rs`) — 이미 구현됨, 재사용
+This allows thread expansion to remain a view concern instead of mutating the source message list.
 
-## File Impact (예상)
+## Data Flow
 
-### New files
-- `tools/iris-ctl/src/views/messages.rs` — MessagesView 구조체, 렌더링, 키 핸들링
+### 1. Room context source
+
+`Messages` does not own room selection. It reads the current room context already selected elsewhere in the app.
+
+v1 behavior:
+- room selection updates shared room context
+- no automatic tab switch to `Messages`
+- user moves to `Messages` explicitly
+
+### 2. Message fetch
+
+Use `POST /query` with server-side decryption.
+
+Reference query shape:
+
+```sql
+SELECT id, chat_id, user_id, message, type, created_at, thread_id, v
+FROM chat_logs
+WHERE chat_id = ?
+ORDER BY created_at DESC
+LIMIT 50
+```
+
+Behavior:
+- fetch most recent 50 messages in descending order
+- reverse to oldest → newest for display readability
+- preserve existing list when refresh fails
+- refresh on the same poll cadence already used by `iris-ctl`
+
+### 3. Nickname resolution
+
+Do not add a new members fetch for `Messages`.
+
+Instead:
+- reuse the selected room's existing members response
+- derive `user_id -> nickname` map from that data
+- fall back to `user_id` when no nickname is available
+
+### 4. Thread grouping
+
+For v1, thread display should prefer robustness over perfect reconstruction.
+
+Rules:
+- `thread_id == None` → normal top-level message
+- messages sharing a thread id are grouped together
+- when a stable root is identifiable, use it as the header context
+- when root identification is ambiguous, treat the first displayed message in that thread group as the visible thread anchor
+
+If grouping becomes ambiguous or partial, the UI may safely degrade to flatter rendering rather than producing incorrect reply context.
+
+### 5. Reply integration
+
+`MessagesView` computes reply context from the selected row.
+
+Rules:
+- selected child message → use its `thread_id`
+- selected thread root/header → use the root thread id
+- selected non-thread message → open reply without thread id
+
+The selected room is always prefilled.
+The thread id is prefilled only when applicable.
+The existing `ReplyModal` remains the sending UI.
+
+## Interaction Design
+
+### Key mapping
+
+| Key | Action |
+|---|---|
+| `↑` / `↓` | move selection |
+| `PageUp` / `PageDown` | move by page |
+| `Home` / `End` | jump to first/last visible row |
+| `Enter` | toggle thread expansion when on a thread row |
+| `r` | open `ReplyModal` with current message context |
+| `Tab` / `Shift+Tab` | existing tab navigation |
+| `q` | quit app |
+
+### Empty states
+
+No selected room:
+- `No room selected. Choose a room in Rooms tab.`
+
+No messages:
+- `No messages`
+
+### Visual behavior
+
+- title format: `Messages (<room name>)`
+- thread children render one indentation level deeper than parent rows
+- selection operates on visible rows, not raw source indices
+
+## Error Handling
+
+v1 uses status-line driven error handling and keeps the last good state when possible.
+
+### Fetch failure
+- keep previously rendered messages visible
+- update the status line with a concise failure message
+- do not clear the pane just because one poll failed
+
+### Selected room disappears
+- clear `chat_id`
+- clear message list
+- show empty-state guidance
+
+### Missing nickname
+- show `user_id` fallback
+
+### Ambiguous thread structure
+- prefer safe flat rendering over incorrect grouping
+- only prefill reply thread context when confidence is sufficient
+
+## File Impact
+
+### New file
+- `tools/iris-ctl/src/views/messages.rs` — messages state, flattening, rendering, key handling, reply context derivation
 
 ### Modified files
-- `tools/iris-ctl/src/views/mod.rs` — messages 모듈 선언, TabId에 Messages 추가
-- `tools/iris-ctl/src/app.rs` — Messages 탭 렌더링/키 라우팅, 'r' 컨텍스트 확장
-- `tools/iris-ctl/src/main.rs` — 메시지 폴링 로직 추가
-- `tools/iris-common/src/api.rs` — (선택) 전용 messages API 추가 시
+- `tools/iris-ctl/src/views/mod.rs` — `messages` module, `TabId::Messages`, view actions as needed
+- `tools/iris-ctl/src/app.rs` — render/key routing, shared room binding, reply open from messages context
+- `tools/iris-ctl/src/main.rs` — poll refresh for messages, query result adaptation, nickname map update
+- `tools/iris-ctl/src/api.rs` — optional thin helper if query invocation needs a TUI-local wrapper
 
-## Open Questions
+## Testing Strategy
 
-1. **페이지네이션**: 초기 50건 이후 이전 메시지를 어떻게 로드할 것인가? (위로 스크롤 시 추가 로드?)
-2. **메시지 타입 표시**: 이미지/파일/이모티콘 등 텍스트가 아닌 메시지를 어떻게 표시할 것인가?
-3. **폴링 주기**: 기존 room 데이터와 동일한 주기로 갱신? 더 짧은 주기가 필요한가?
-4. **방 전환**: Rooms 탭에서 방 선택 시 자동으로 Messages 탭으로 전환할 것인가?
-5. **POST /query vs 전용 API**: 초기에 query 재활용 후 언제 전용 API로 전환할 것인가?
+### Unit tests for `MessagesView`
+- flatten top-level messages into visible rows
+- expand/collapse thread rows
+- preserve valid selection while rows change
+- derive correct reply context for plain message, thread header, and thread child
+- render placeholder labels for non-text message types
 
-## Status
+### App integration tests
+- include `Messages` in tab ordering
+- route render/key handling to `MessagesView`
+- `r` on `Messages` opens `ReplyModal` with prefilled room/thread context
 
-Draft — 브레인스토밍 및 상세 설계 필요. Reply Modal 구현 완료 후 다음 이터레이션으로 진행.
+### Adapter tests
+- query result → `ChatMessage` conversion
+- descending query order → ascending display order normalization
+- member list → nickname map derivation
+
+## Verification
+
+Minimum verification for this work:
+
+```bash
+cargo test --manifest-path tools/iris-ctl/Cargo.toml
+cargo clippy --manifest-path tools/iris-ctl/Cargo.toml --all-targets -- -D warnings
+```
+
+## Implementation Notes
+
+- Prefer reusing existing view patterns from `rooms.rs`, `members.rs`, and `stats.rs`
+- Keep `app.rs` from absorbing messages-specific list logic
+- Avoid introducing a new public API unless `POST /query` proves insufficient in a later iteration
+- Keep v1 scope focused on read-context + reply handoff
