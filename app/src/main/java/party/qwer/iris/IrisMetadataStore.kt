@@ -222,6 +222,30 @@ internal class IrisMetadataStore(
             }
 
             val link = candidates.single()
+
+            // 상관 윈도우 내에 다른 발신자의 프로필이 존재하면 매칭 모호 — 스킵
+            val nearbyOtherCount =
+                db
+                    .rawQuery(
+                        """
+                        SELECT COUNT(*) FROM observed_profiles
+                        WHERE chat_id = ?
+                          AND posted_at BETWEEN ? AND ?
+                          AND stable_id != ?
+                        """.trimIndent(),
+                        arrayOf(
+                            chatId.toString(),
+                            (messageCreatedAtMs - CORRELATION_WINDOW_MS).toString(),
+                            (messageCreatedAtMs + CORRELATION_WINDOW_MS).toString(),
+                            link.stableId,
+                        ),
+                    ).use { cursor ->
+                        if (cursor.moveToFirst()) cursor.getInt(0) else 0
+                    }
+            if (nearbyOtherCount > 0) {
+                return
+            }
+
             db.execSQL(
                 """
                 INSERT OR REPLACE INTO observed_profile_user_links (

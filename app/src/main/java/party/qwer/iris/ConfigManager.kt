@@ -36,7 +36,7 @@ class ConfigManager(
                 snapshotUser = loaded.userState,
                 appliedUser = loaded.userState.copy(),
                 discovered = it.discovered,
-                isDirty = loaded.migratedLegacyEndpoint,
+                isDirty = loaded.migratedLegacyConfig,
             )
         }
         IrisLogger.debug(
@@ -47,6 +47,9 @@ class ConfigManager(
         )
         if (loaded.migratedLegacyEndpoint) {
             IrisLogger.info("Migrated legacy webhook config to route-aware model")
+        }
+        if (loaded.migratedLegacySecrets) {
+            IrisLogger.info("Migrated legacy secret config to role-aware fields")
         }
     }
 
@@ -164,6 +167,8 @@ class ConfigManager(
         get() = stateStore.current().snapshotUser.botControlToken
 
     internal fun signingSecret(): String = stateStore.current().snapshotUser.inboundSigningSecret
+
+    internal fun snapshotUserState(): UserConfigState = stateStore.current().snapshotUser
 
     override var dbPollingRate: Long
         get() = stateStore.current().appliedUser.dbPollingRate

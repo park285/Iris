@@ -1,13 +1,12 @@
 package party.qwer.iris
 
+import party.qwer.iris.config.ConfigPolicy
 import party.qwer.iris.model.ConfigDiscoveredState
 import party.qwer.iris.model.ConfigPendingRestart
 import party.qwer.iris.model.ConfigResponse
 import party.qwer.iris.model.ConfigState
 import party.qwer.iris.model.ConfigUpdateResponse
 import party.qwer.iris.model.ConfigValues
-
-private const val FIELD_BOT_HTTP_PORT = "bot_http_port"
 
 internal data class ConfigContractState(
     val user: ConfigState,
@@ -58,7 +57,7 @@ internal fun buildConfigContractState(
     snapshot: ConfigValues,
     effective: ConfigValues,
 ): ConfigContractState {
-    val pendingRestartFields = pendingRestartFieldNames(snapshot, effective)
+    val pendingRestartFields = ConfigPolicy.pendingRestartFieldNames(snapshot, effective)
     return ConfigContractState(
         user = snapshot.toConfigState(),
         applied = effective.toConfigState(),
@@ -70,16 +69,6 @@ internal fun buildConfigContractState(
             ),
     )
 }
-
-internal fun pendingRestartFieldNames(
-    snapshot: ConfigValues,
-    effective: ConfigValues,
-): List<String> =
-    buildList {
-        if (snapshot.botHttpPort != effective.botHttpPort) {
-            add(FIELD_BOT_HTTP_PORT)
-        }
-    }
 
 private fun ConfigValues.toConfigState(): ConfigState =
     ConfigState(

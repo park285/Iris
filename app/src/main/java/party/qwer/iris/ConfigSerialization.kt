@@ -8,11 +8,14 @@ import kotlinx.serialization.json.jsonPrimitive
 import party.qwer.iris.model.ConfigValues
 
 private const val LEGACY_WEBHOOKS_KEY = "webhooks"
+private const val LEGACY_WEBHOOK_TOKEN_KEY = "webhookToken"
+private const val LEGACY_BOT_TOKEN_KEY = "botToken"
 internal const val DEFAULT_WEBHOOK_ROUTE = "default"
 
 internal data class DecodedConfigValues(
     val values: ConfigValues,
     val migratedLegacyEndpoint: Boolean,
+    val migratedLegacySecrets: Boolean,
 )
 
 internal fun decodeConfigValues(
@@ -35,10 +38,12 @@ internal fun decodeConfigValues(
                 decodedValues
             },
         )
+    val migratedSecrets = migrateLegacySecrets(rawRoot, normalizedValues)
 
     return DecodedConfigValues(
-        values = normalizedValues,
+        values = migratedSecrets.values,
         migratedLegacyEndpoint = migratedLegacyEndpoint,
+        migratedLegacySecrets = migratedSecrets.migrated,
     )
 }
 
@@ -128,3 +133,30 @@ internal fun extractLegacyEndpoint(root: JsonObject): String? {
 }
 
 internal fun canonicalWebhookRoute(rawRoute: String?): String = rawRoute?.trim().orEmpty()
+
+private data class LegacySecretMigration(
+    val values: ConfigValues,
+    val migrated: Boolean,
+)
+
+private fun migrateLegacySecrets(
+    root: JsonObject,
+    values: ConfigValues,
+): LegacySecretMigration {
+    val legacyWebhookToken = root[LEGACY_WEBHOOK_TOKEN_KEY]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+    val legacyBotToken = root[LEGACY_BOT_TOKEN_KEY]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+    val migratedValues =
+        values.copy(
+            inboundSigningSecret = values.inboundSigningSecret.ifBlank { legacyWebhookToken },
+            outboundWebhookToken = values.outboundWebhookToken.ifBlank { legacyWebhookToken },
+            botControlToken = values.botControlToken.ifBlank { legacyBotToken },
+        )
+
+    return LegacySecretMigration(
+        values = migratedValues,
+        migrated =
+            migratedValues.inboundSigningSecret != values.inboundSigningSecret ||
+                migratedValues.outboundWebhookToken != values.outboundWebhookToken ||
+                migratedValues.botControlToken != values.botControlToken,
+    )
+}

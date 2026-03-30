@@ -1,8 +1,12 @@
 package party.qwer.iris
 
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class SecretRoleMigrationTest {
     @Test
@@ -69,6 +73,33 @@ class SecretRoleMigrationTest {
 
         val manager = ConfigManager(configPath = configPath)
         assertEquals("my-signing-secret", manager.signingSecret())
+        tmpDir.deleteRecursively()
+    }
+
+    @Test
+    fun `save rewrites legacy secret fields into role fields only`() {
+        val tmpDir = Files.createTempDirectory("iris-secret-legacy-save").toFile()
+        val configPath = tmpDir.resolve("config.json").absolutePath
+        tmpDir.resolve("config.json").writeText(
+            """{
+                "webhookToken":"legacy-webhook",
+                "botToken":"legacy-bot"
+            }""",
+        )
+
+        val manager = ConfigManager(configPath = configPath)
+
+        assertEquals("legacy-webhook", manager.inboundSigningSecret)
+        assertEquals("legacy-webhook", manager.outboundWebhookToken)
+        assertEquals("legacy-bot", manager.botControlToken)
+        assertTrue(manager.saveConfigNow())
+
+        val savedRoot = Json.parseToJsonElement(tmpDir.resolve("config.json").readText()).jsonObject
+        assertEquals("legacy-webhook", savedRoot.getValue("inboundSigningSecret").toString().trim('"'))
+        assertEquals("legacy-webhook", savedRoot.getValue("outboundWebhookToken").toString().trim('"'))
+        assertEquals("legacy-bot", savedRoot.getValue("botControlToken").toString().trim('"'))
+        assertFalse("webhookToken" in savedRoot)
+        assertFalse("botToken" in savedRoot)
         tmpDir.deleteRecursively()
     }
 }

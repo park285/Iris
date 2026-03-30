@@ -58,6 +58,20 @@ class ConfigPersistenceTest {
     }
 
     @Test
+    fun `load backs up config when policy validation fails`() {
+        val tmpDir = Files.createTempDirectory("iris-persist-invalid").toFile()
+        val configPath = tmpDir.resolve("config.json").absolutePath
+        tmpDir.resolve("config.json").writeText("""{"botHttpPort":70000}""")
+        val persistence = createPersistence(configPath)
+
+        val result = persistence.load()
+
+        assertNull(result)
+        assertTrue(tmpDir.resolve("config.json.bak").exists())
+        tmpDir.deleteRecursively()
+    }
+
+    @Test
     fun `save writes config and removes temp file`() {
         val tmpDir = Files.createTempDirectory("iris-persist-save").toFile()
         val configPath = tmpDir.resolve("config.json").absolutePath

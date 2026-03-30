@@ -1,5 +1,7 @@
 package party.qwer.iris
 
+import party.qwer.iris.config.ConfigField
+import party.qwer.iris.config.ConfigPolicy
 import party.qwer.iris.model.ConfigRequest
 
 internal data class ConfigUpdateOutcome(
@@ -28,9 +30,7 @@ private fun updateEndpointConfig(
 ): ConfigUpdateOutcome {
     val route = resolveEndpointRoute(request.route)
     val value = request.endpoint?.trim() ?: throw ApiRequestException("missing endpoint value")
-    if (value.isNotEmpty() && !value.startsWith("http://") && !value.startsWith("https://")) {
-        throw ApiRequestException("endpoint must start with http:// or https://")
-    }
+    ConfigPolicy.validateWebhookEndpoint(value)?.let { throw ApiRequestException(it) }
     configManager.setWebhookEndpoint(route, value)
     return ConfigUpdateOutcome(
         name = if (route == DEFAULT_WEBHOOK_ROUTE) name else "$name.$route",
@@ -45,9 +45,16 @@ private fun updateDbRateConfig(
     request: ConfigRequest,
 ): ConfigUpdateOutcome {
     val value = request.rate ?: throw ApiRequestException("missing or invalid rate")
-    if (value < 1) throw ApiRequestException("rate must be greater than 0")
+    requireValidState(
+        field = ConfigField.DB_POLLING_RATE,
+        state = configManager.snapshotUserState().copy(dbPollingRate = value),
+    )
     configManager.dbPollingRate = value
-    return ConfigUpdateOutcome(name = name, applied = true, requiresRestart = false)
+    return ConfigUpdateOutcome(
+        name = name,
+        applied = true,
+        requiresRestart = ConfigPolicy.requiresRestart(ConfigField.DB_POLLING_RATE),
+    )
 }
 
 private fun updateSendRateConfig(
@@ -56,9 +63,16 @@ private fun updateSendRateConfig(
     request: ConfigRequest,
 ): ConfigUpdateOutcome {
     val value = request.rate ?: throw ApiRequestException("missing or invalid rate")
-    if (value < 0) throw ApiRequestException("rate must be 0 or greater")
+    requireValidState(
+        field = ConfigField.MESSAGE_SEND_RATE,
+        state = configManager.snapshotUserState().copy(messageSendRate = value),
+    )
     configManager.messageSendRate = value
-    return ConfigUpdateOutcome(name = name, applied = true, requiresRestart = false)
+    return ConfigUpdateOutcome(
+        name = name,
+        applied = true,
+        requiresRestart = ConfigPolicy.requiresRestart(ConfigField.MESSAGE_SEND_RATE),
+    )
 }
 
 private fun updateBotPortConfig(
@@ -67,16 +81,30 @@ private fun updateBotPortConfig(
     request: ConfigRequest,
 ): ConfigUpdateOutcome {
     val value = request.port ?: throw ApiRequestException("missing or invalid port")
-    if (value < 1 || value > 65535) throw ApiRequestException("invalid port number; port must be between 1 and 65535")
+    requireValidState(
+        field = ConfigField.BOT_SOCKET_PORT,
+        state = configManager.snapshotUserState().copy(botHttpPort = value),
+    )
     configManager.botSocketPort = value
-    return ConfigUpdateOutcome(name = name, applied = false, requiresRestart = true)
+    return ConfigUpdateOutcome(
+        name = name,
+        applied = false,
+        requiresRestart = ConfigPolicy.requiresRestart(ConfigField.BOT_SOCKET_PORT),
+    )
 }
 
 private fun resolveEndpointRoute(rawRoute: String?): String {
     val normalized = canonicalWebhookRoute(rawRoute)
     if (normalized.isEmpty()) return DEFAULT_WEBHOOK_ROUTE
-    if (!normalized.all { it.isLetterOrDigit() || it == '-' || it == '_' }) {
-        throw ApiRequestException("route must contain only letters, digits, '-' or '_'")
-    }
+    ConfigPolicy.validateWebhookRoute(normalized)?.let { throw ApiRequestException(it) }
     return normalized
+}
+
+private fun requireValidState(
+    field: ConfigField,
+    state: UserConfigState,
+) {
+    ConfigPolicy.validateField(field, state)?.let { error ->
+        throw ApiRequestException(error.message)
+    }
 }

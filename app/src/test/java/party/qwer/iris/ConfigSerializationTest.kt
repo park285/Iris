@@ -53,6 +53,47 @@ class ConfigSerializationTest {
     }
 
     @Test
+    fun `seeds legacy webhook and bot tokens into role secrets when new fields are absent`() {
+        val decoded =
+            decodeConfigValues(
+                json,
+                """
+                {
+                  "webhookToken": "legacy-webhook",
+                  "botToken": "legacy-bot"
+                }
+                """.trimIndent(),
+            )
+
+        assertEquals("legacy-webhook", decoded.values.inboundSigningSecret)
+        assertEquals("legacy-webhook", decoded.values.outboundWebhookToken)
+        assertEquals("legacy-bot", decoded.values.botControlToken)
+        assertTrue(decoded.migratedLegacySecrets)
+    }
+
+    @Test
+    fun `prefers explicit role secrets over legacy tokens`() {
+        val decoded =
+            decodeConfigValues(
+                json,
+                """
+                {
+                  "webhookToken": "legacy-webhook",
+                  "botToken": "legacy-bot",
+                  "inboundSigningSecret": "explicit-inbound",
+                  "outboundWebhookToken": "explicit-outbound",
+                  "botControlToken": "explicit-control"
+                }
+                """.trimIndent(),
+            )
+
+        assertEquals("explicit-inbound", decoded.values.inboundSigningSecret)
+        assertEquals("explicit-outbound", decoded.values.outboundWebhookToken)
+        assertEquals("explicit-control", decoded.values.botControlToken)
+        assertFalse(decoded.migratedLegacySecrets)
+    }
+
+    @Test
     fun `preserves multiple webhook routes while deriving default endpoint from default route`() {
         val decoded =
             decodeConfigValues(

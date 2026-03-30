@@ -18,7 +18,11 @@ import java.nio.file.StandardCopyOption
 internal data class LoadedConfig(
     val userState: UserConfigState,
     val migratedLegacyEndpoint: Boolean,
-)
+    val migratedLegacySecrets: Boolean,
+) {
+    val migratedLegacyConfig: Boolean
+        get() = migratedLegacyEndpoint || migratedLegacySecrets
+}
 
 internal class ConfigPersistence(
     private val configPath: String,
@@ -34,9 +38,19 @@ internal class ConfigPersistence(
             val jsonString = configFile.readText()
             val decoded = decodeConfigValues(json, jsonString)
             val userState = decoded.values.toUserConfigState()
+            val validationErrors = ConfigPolicy.validate(userState)
+            if (validationErrors.isNotEmpty()) {
+                IrisLogger.error(
+                    "Config validation failed for $configPath: " +
+                        validationErrors.joinToString { "${it.field}: ${it.message}" },
+                )
+                backupBrokenConfig()
+                return null
+            }
             return LoadedConfig(
                 userState = userState,
                 migratedLegacyEndpoint = decoded.migratedLegacyEndpoint,
+                migratedLegacySecrets = decoded.migratedLegacySecrets,
             )
         } catch (e: IOException) {
             IrisLogger.error("Error reading config.json from $configPath, using in-memory defaults: ${e.message}")

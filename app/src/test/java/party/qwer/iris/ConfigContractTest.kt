@@ -76,4 +76,30 @@ class ConfigContractTest {
         assertFalse(encoded.contains("\"snapshot\""))
         assertFalse(encoded.contains("\"effective\""))
     }
+
+    @Test
+    fun `pending restart includes all restart-gated secret fields`() {
+        val response =
+            buildConfigResponse(
+                snapshot =
+                    ConfigValues(
+                        botHttpPort = 4000,
+                        inboundSigningSecret = "snapshot-inbound",
+                        outboundWebhookToken = "snapshot-outbound",
+                        botControlToken = "snapshot-control",
+                    ),
+                effective =
+                    ConfigValues(
+                        botHttpPort = 3000,
+                        inboundSigningSecret = "effective-inbound",
+                        outboundWebhookToken = "effective-outbound",
+                        botControlToken = "effective-control",
+                    ),
+            )
+
+        assertEquals(
+            listOf("bot_http_port", "inbound_signing_secret", "outbound_webhook_token", "bot_control_token"),
+            response.pendingRestart.fields,
+        )
+    }
 }
