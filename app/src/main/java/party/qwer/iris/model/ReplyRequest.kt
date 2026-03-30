@@ -7,7 +7,7 @@ import kotlinx.serialization.json.JsonElement
 data class ReplyRequest(
     val type: ReplyType = ReplyType.TEXT,
     val room: String,
-    val data: JsonElement,
+    val data: JsonElement? = null,
     val threadId: String? = null,
     val threadScope: Int? = null,
 )

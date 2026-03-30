@@ -1,5 +1,6 @@
 package party.qwer.iris
 
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -20,8 +21,9 @@ internal class SnapshotObserver(
     private val maxRoomsPerTick: Int = 32,
     private val fullReconcileIntervalMs: Long = 60_000L,
     private val clock: () -> Long = System::currentTimeMillis,
+    dispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
-    private val coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val coroutineScope = CoroutineScope(SupervisorJob() + dispatcher)
 
     @Volatile
     private var job: Job? = null
@@ -63,13 +65,17 @@ internal class SnapshotObserver(
     }
 
     fun stop() {
+        runBlocking { stopSuspend() }
+    }
+
+    suspend fun stopSuspend() {
         val captured =
             synchronized(this) {
                 val current = job ?: return
                 job = null
                 current
             }
-        runBlocking { captured.cancelAndJoin() }
+        captured.cancelAndJoin()
         IrisLogger.info("[SnapshotObserver] stopped")
     }
 }

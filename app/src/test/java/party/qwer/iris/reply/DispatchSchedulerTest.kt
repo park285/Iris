@@ -1,75 +1,75 @@
 package party.qwer.iris.reply
 
-import kotlinx.coroutines.runBlocking
-import java.util.concurrent.CopyOnWriteArrayList
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class DispatchSchedulerTest {
     @Test
-    fun `paces sequential send invocations`() {
+    fun `paces sequential send invocations`() =
+        runTest {
         val scheduler =
             DispatchScheduler(
                 baseIntervalMs = { 50L },
                 jitterMaxMs = { 0L },
+                clock = { testScheduler.currentTime },
             )
 
-        val timestamps = CopyOnWriteArrayList<Long>()
+        val timestamps = mutableListOf<Long>()
 
-        runBlocking {
-            repeat(3) {
-                scheduler.awaitPermit()
-                timestamps.add(System.currentTimeMillis())
-            }
+        repeat(3) {
+            scheduler.awaitPermit()
+            timestamps.add(testScheduler.currentTime)
         }
 
-        assertTrue(timestamps.size == 3)
+        assertEquals(3, timestamps.size)
         for (i in 1 until timestamps.size) {
             val gap = timestamps[i] - timestamps[i - 1]
-            assertTrue(gap >= 30, "sends should be paced by at least ~50ms (gap was ${gap}ms)")
+            assertTrue(gap >= 50, "sends should be paced by at least 50ms (gap was ${gap}ms)")
         }
     }
 
     @Test
-    fun `zero interval does not block`() {
+    fun `zero interval does not block`() =
+        runTest {
         val scheduler =
             DispatchScheduler(
                 baseIntervalMs = { 0L },
                 jitterMaxMs = { 0L },
+                clock = { testScheduler.currentTime },
             )
 
-        val start = System.currentTimeMillis()
-        runBlocking {
-            repeat(5) {
-                scheduler.awaitPermit()
-            }
+        repeat(5) {
+            scheduler.awaitPermit()
         }
-        val elapsed = System.currentTimeMillis() - start
 
-        assertTrue(elapsed < 500, "zero interval should not block significantly (took ${elapsed}ms)")
+        assertEquals(0L, testScheduler.currentTime)
     }
 
     @Test
-    fun `jitter adds variance to pacing`() {
+    fun `jitter adds variance to pacing`() =
+        runTest {
         val scheduler =
             DispatchScheduler(
                 baseIntervalMs = { 10L },
                 jitterMaxMs = { 50L },
+                clock = { testScheduler.currentTime },
             )
 
-        val timestamps = CopyOnWriteArrayList<Long>()
+        val timestamps = mutableListOf<Long>()
 
-        runBlocking {
-            repeat(5) {
-                scheduler.awaitPermit()
-                timestamps.add(System.currentTimeMillis())
-            }
+        repeat(5) {
+            scheduler.awaitPermit()
+            timestamps.add(testScheduler.currentTime)
         }
 
-        assertTrue(timestamps.size == 5)
+        assertEquals(5, timestamps.size)
         for (i in 1 until timestamps.size) {
             val gap = timestamps[i] - timestamps[i - 1]
-            assertTrue(gap >= 5, "gap should be at least near base interval (gap was ${gap}ms)")
+            assertTrue(gap >= 10, "gap should be at least base interval (gap was ${gap}ms)")
         }
     }
 }

@@ -2,20 +2,28 @@ package party.qwer.iris.snapshot
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import party.qwer.iris.RoomSnapshotData
 import party.qwer.iris.RoomSnapshotManager
 import party.qwer.iris.SseEventBus
 import party.qwer.iris.model.MemberEvent
+import party.qwer.iris.model.RoomEvent
+import party.qwer.iris.persistence.InMemorySnapshotStateStore
 import party.qwer.iris.storage.ChatId
 import party.qwer.iris.storage.LinkId
 import party.qwer.iris.storage.UserId
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class SnapshotCoordinatorTest {
     private fun snapshot(
         chatId: Long,
@@ -29,17 +37,6 @@ class SnapshotCoordinatorTest {
             blindedIds = emptySet(),
             nicknames = nicknames.map { (k, v) -> UserId(k) to v }.toMap(),
             roles = members.associate { UserId(it) to 2 },
-            profileImages = emptyMap(),
-        )
-
-    private fun deletedSnapshot(chatId: Long): RoomSnapshotData =
-        RoomSnapshotData(
-            chatId = ChatId(chatId),
-            linkId = null,
-            memberIds = emptySet(),
-            blindedIds = emptySet(),
-            nicknames = emptyMap(),
-            roles = emptyMap(),
             profileImages = emptyMap(),
         )
 
@@ -255,7 +252,8 @@ class SnapshotCoordinatorTest {
             coordinator.send(SnapshotCommand.Drain(budget = 10))
             yield()
 
-            assertEquals(listOf(100L, 200L), diffEngine.diffedChatIds.sorted())
+            assertEquals(listOf(200L), diffEngine.diffedChatIds)
+            assertEquals(listOf(100L), diffEngine.missingChatIds)
             assertEquals(listOf(100L, 200L, 100L, 200L), reader.snapshotCalls)
             scope.cancel()
         }
@@ -269,7 +267,7 @@ class SnapshotCoordinatorTest {
                     roomsProvider = { rooms.map(::ChatId) },
                     snapshots =
                         mapOf(
-                            100L to listOf(snapshot(100L, setOf(1L), nicknames = mapOf(1L to "Alice")), deletedSnapshot(100L)),
+                            100L to listOf(snapshot(100L, setOf(1L), nicknames = mapOf(1L to "Alice"))),
                             200L to listOf(snapshot(200L, setOf(2L)), snapshot(200L, setOf(2L))),
                         ),
                 )
@@ -387,6 +385,169 @@ class SnapshotCoordinatorTest {
             assertEquals(listOf(100L), events.map { it.chatId })
             assertEquals(listOf(1L), events.map { it.userId })
             scope.cancel()
+        }
+
+    @Test
+    fun `missing and restored rooms use explicit diff engine semantics`() =
+        runBlocking {
+            val rooms = mutableListOf(100L, 200L)
+            val reader =
+                StubSnapshotReader(
+                    roomsProvider = { rooms.map(::ChatId) },
+                    snapshots =
+                        mapOf(
+                            100L to
+                                listOf(
+                                    snapshot(100L, setOf(1L), nicknames = mapOf(1L to "Alice")),
+                                    snapshot(100L, setOf(2L), nicknames = mapOf(2L to "Bob")),
+                                ),
+                            200L to listOf(snapshot(200L, setOf(9L)), snapshot(200L, setOf(9L))),
+                        ),
+                )
+            val diffEngine = RecordingDiffEngine()
+            val emitter = RecordingEmitter()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            val coordinator = SnapshotCoordinator(scope, reader, diffEngine, emitter)
+
+            coordinator.send(SnapshotCommand.SeedCache)
+            yield()
+
+            rooms.remove(100L)
+            coordinator.send(SnapshotCommand.FullReconcile)
+            yield()
+            coordinator.send(SnapshotCommand.Drain(budget = 10))
+            yield()
+
+            rooms += 100L
+            coordinator.send(SnapshotCommand.FullReconcile)
+            yield()
+            coordinator.send(SnapshotCommand.Drain(budget = 10))
+            yield()
+
+            assertEquals(listOf(100L), diffEngine.missingChatIds)
+            assertEquals(listOf(100L), diffEngine.restoredChatIds)
+            assertEquals(listOf(200L, 200L), diffEngine.diffedChatIds)
+            scope.cancel()
+        }
+
+    @Test
+    fun `persisted present snapshot emits missing diff after restart when room disappears`() =
+        runBlocking {
+            val stateStore = InMemorySnapshotStateStore()
+
+            val initialReader =
+                StubSnapshotReader(
+                    rooms = listOf(100L),
+                    snapshots = mapOf(100L to listOf(snapshot(100L, setOf(1L), nicknames = mapOf(1L to "Alice")))),
+                )
+            val initialScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            SnapshotCoordinator(
+                scope = initialScope,
+                roomSnapshotReader = initialReader,
+                diffEngine = RecordingDiffEngine(),
+                emitter = RecordingEmitter(),
+                stateStore = stateStore,
+            ).also { coordinator ->
+                coordinator.send(SnapshotCommand.SeedCache)
+                yield()
+            }
+            initialScope.cancel()
+
+            val restartedReader =
+                StubSnapshotReader(
+                    roomsProvider = { listOf(ChatId(200L)) },
+                    snapshots =
+                        mapOf(
+                            200L to listOf(snapshot(200L, setOf(9L))),
+                        ),
+                )
+            val diffEngine = RecordingDiffEngine()
+            val emitter = RecordingEmitter()
+            val restartedScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            val restartedCoordinator =
+                SnapshotCoordinator(
+                    scope = restartedScope,
+                    roomSnapshotReader = restartedReader,
+                    diffEngine = diffEngine,
+                    emitter = emitter,
+                    stateStore = stateStore,
+                )
+
+            restartedCoordinator.send(SnapshotCommand.SeedCache)
+            yield()
+            restartedCoordinator.send(SnapshotCommand.Drain(budget = 10))
+            yield()
+
+            assertEquals(listOf(100L), diffEngine.missingChatIds)
+            assertTrue(emitter.emittedEvents.filterIsInstance<MemberEvent>().any { it.event == "leave" && it.chatId == 100L })
+            restartedScope.cancel()
+        }
+
+    @Test
+    fun `persisted missing state emits restored diff after restart when room returns`() =
+        runBlocking {
+            val stateStore = InMemorySnapshotStateStore()
+            val rooms = mutableListOf(100L)
+
+            val initialReader =
+                StubSnapshotReader(
+                    roomsProvider = { rooms.map(::ChatId) },
+                    snapshots =
+                        mapOf(
+                            100L to
+                                listOf(
+                                    snapshot(100L, setOf(1L), nicknames = mapOf(1L to "Alice")),
+                                    snapshot(100L, setOf(2L), nicknames = mapOf(2L to "Bob")),
+                                ),
+                        ),
+                )
+            val initialScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            val initialCoordinator =
+                SnapshotCoordinator(
+                    scope = initialScope,
+                    roomSnapshotReader = initialReader,
+                    diffEngine = RecordingDiffEngine(),
+                    emitter = RecordingEmitter(),
+                    stateStore = stateStore,
+                )
+
+            initialCoordinator.send(SnapshotCommand.SeedCache)
+            yield()
+            rooms.clear()
+            initialCoordinator.send(SnapshotCommand.MarkDirty(ChatId(100L)))
+            yield()
+            initialCoordinator.send(SnapshotCommand.Drain(budget = 10))
+            yield()
+            initialScope.cancel()
+
+            val restartedReader =
+                StubSnapshotReader(
+                    roomsProvider = { listOf(ChatId(100L)) },
+                    snapshots =
+                        mapOf(
+                            100L to listOf(snapshot(100L, setOf(2L), nicknames = mapOf(2L to "Bob"))),
+                        ),
+                )
+            val diffEngine = RecordingDiffEngine()
+            val emitter = RecordingEmitter()
+            val restartedScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            val restartedCoordinator =
+                SnapshotCoordinator(
+                    scope = restartedScope,
+                    roomSnapshotReader = restartedReader,
+                    diffEngine = diffEngine,
+                    emitter = emitter,
+                    stateStore = stateStore,
+                )
+
+            restartedCoordinator.send(SnapshotCommand.SeedCache)
+            yield()
+            restartedCoordinator.send(SnapshotCommand.Drain(budget = 10))
+            yield()
+
+            assertEquals(listOf(100L), diffEngine.restoredChatIds)
+            assertTrue(emitter.emittedEvents.filterIsInstance<MemberEvent>().any { it.event == "join" && it.chatId == 100L })
+            restartedScope.cancel()
         }
 
     @Test
@@ -512,6 +673,35 @@ class SnapshotCoordinatorTest {
             assertEquals(1, diffEngine.calls)
             scope.cancel()
         }
+
+    @Test
+    fun `enqueue coalesces burst dirty marks before actor turn`() =
+        runTest {
+            val reader =
+                StubSnapshotReader(
+                    rooms = listOf(100L),
+                    snapshots = mapOf(100L to listOf(snapshot(100L, setOf(1L)), snapshot(100L, setOf(1L, 2L)))),
+                )
+            val diffEngine = RecordingDiffEngine()
+            val emitter = RecordingEmitter()
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val scope = CoroutineScope(SupervisorJob() + dispatcher)
+            val coordinator = SnapshotCoordinator(scope, reader, diffEngine, emitter)
+
+            coordinator.enqueue(SnapshotCommand.SeedCache)
+            coordinator.enqueue(SnapshotCommand.MarkDirty(chatId = ChatId(100L)))
+            coordinator.enqueue(SnapshotCommand.MarkDirty(chatId = ChatId(100L)))
+            coordinator.enqueue(SnapshotCommand.MarkDirty(chatId = ChatId(100L)))
+            coordinator.enqueue(SnapshotCommand.Drain(budget = 10))
+
+            assertEquals(1, coordinator.dirtyRoomCount())
+
+            runCurrent()
+
+            assertEquals(0, coordinator.dirtyRoomCount())
+            assertEquals(1, diffEngine.calls)
+            scope.cancel()
+        }
 }
 
 private class StubSnapshotReader(
@@ -544,14 +734,54 @@ private class StubSnapshotReader(
 private class RecordingDiffEngine : RoomDiffEngine {
     var calls = 0
     val diffedChatIds = mutableListOf<Long>()
+    var missingCalls = 0
+    var restoredCalls = 0
+    val missingChatIds = mutableListOf<Long>()
+    val restoredChatIds = mutableListOf<Long>()
 
     override fun diff(
         prev: RoomSnapshotData,
         curr: RoomSnapshotData,
-    ): List<Any> {
+    ): List<RoomEvent> {
         calls++
         diffedChatIds += curr.chatId.value
         val joined = (curr.memberIds - prev.memberIds).firstOrNull() ?: return emptyList()
+        return listOf(
+            MemberEvent(
+                event = "join",
+                chatId = curr.chatId.value,
+                linkId = curr.linkId?.value,
+                userId = joined.value,
+                nickname = curr.nicknames[joined],
+                estimated = false,
+                timestamp = 1L,
+            ),
+        )
+    }
+
+    override fun diffMissing(prev: RoomSnapshotData): List<RoomEvent> {
+        calls++
+        missingCalls++
+        missingChatIds += prev.chatId.value
+        val left = prev.memberIds.firstOrNull() ?: return emptyList()
+        return listOf(
+            MemberEvent(
+                event = "leave",
+                chatId = prev.chatId.value,
+                linkId = prev.linkId?.value,
+                userId = left.value,
+                nickname = prev.nicknames[left],
+                estimated = true,
+                timestamp = 1L,
+            ),
+        )
+    }
+
+    override fun diffRestored(curr: RoomSnapshotData): List<RoomEvent> {
+        calls++
+        restoredCalls++
+        restoredChatIds += curr.chatId.value
+        val joined = curr.memberIds.firstOrNull() ?: return emptyList()
         return listOf(
             MemberEvent(
                 event = "join",
@@ -572,9 +802,9 @@ private class RecordingEmitter :
         routingGateway = null,
     ) {
     var emitCalls = 0
-    val emittedEvents = mutableListOf<Any>()
+    val emittedEvents = mutableListOf<RoomEvent>()
 
-    override fun emit(events: List<Any>) {
+    override fun emit(events: List<RoomEvent>) {
         emitCalls++
         emittedEvents.addAll(events)
         super.emit(events)

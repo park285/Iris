@@ -4,63 +4,146 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import party.qwer.iris.RoomSnapshotData
+import party.qwer.iris.persistence.InMemorySnapshotStateStore
+import party.qwer.iris.persistence.PersistedSnapshotState
+import party.qwer.iris.persistence.SnapshotStateStore
 import party.qwer.iris.storage.ChatId
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
-class SnapshotCoordinator(
+internal class SnapshotCoordinator(
     scope: CoroutineScope,
     private val roomSnapshotReader: RoomSnapshotReader,
     private val diffEngine: RoomDiffEngine,
     private val emitter: SnapshotEventEmitter,
+    private val stateStore: SnapshotStateStore = InMemorySnapshotStateStore(),
 ) {
-    private val commands = Channel<SnapshotCommand>(Channel.UNLIMITED)
+    private sealed interface SnapshotState {
+        data class Present(
+            val snapshot: RoomSnapshotData,
+        ) : SnapshotState
 
-    private val previousSnapshots = mutableMapOf<ChatId, RoomSnapshotData>()
+        data object Missing : SnapshotState
+    }
+
+    private val commandSignals = Channel<Unit>(Channel.CONFLATED)
+    private val seedRequested = AtomicBoolean(false)
+    private val fullReconcileRequested = AtomicBoolean(false)
+    private val pendingDrainBudget = AtomicInteger(0)
+    private val pendingDirtyRooms = ConcurrentHashMap.newKeySet<ChatId>()
+
+    private val previousSnapshots = mutableMapOf<ChatId, SnapshotState>()
     private val dirtyRoomSet = mutableSetOf<ChatId>()
     private val dirtyRoomQueue = ArrayDeque<ChatId>()
     private val dirtyRoomCountValue = AtomicInteger(0)
-    private val deletedRoomsPendingCleanup = mutableSetOf<ChatId>()
-
-    // 삭제 완료된 방 — 빈 베이스라인이 previousSnapshots에 유지됨
-    private val cleanedUpRooms = mutableSetOf<ChatId>()
 
     init {
         scope.launch {
-            for (cmd in commands) {
-                handleInternal(cmd)
+            for (ignored in commandSignals) {
+                drainPendingCommands()
             }
         }
     }
 
     suspend fun send(command: SnapshotCommand) {
-        commands.send(command)
+        mergePendingCommand(command)
+        commandSignals.send(Unit)
     }
 
     fun enqueue(command: SnapshotCommand) {
-        commands.trySend(command)
+        mergePendingCommand(command)
+        commandSignals.trySend(Unit)
     }
 
-    fun dirtyRoomCount(): Int = dirtyRoomCountValue.get()
+    fun dirtyRoomCount(): Int = dirtyRoomCountValue.get() + pendingDirtyRooms.size
 
-    private fun handleInternal(cmd: SnapshotCommand) {
-        when (cmd) {
-            is SnapshotCommand.SeedCache -> handleSeedCache()
-            is SnapshotCommand.MarkDirty -> handleMarkDirty(cmd.chatId)
-            is SnapshotCommand.Drain -> handleDrain(cmd.budget)
-            is SnapshotCommand.FullReconcile -> handleFullReconcile()
+    private fun mergePendingCommand(command: SnapshotCommand) {
+        when (command) {
+            SnapshotCommand.SeedCache -> seedRequested.set(true)
+            SnapshotCommand.FullReconcile -> fullReconcileRequested.set(true)
+            is SnapshotCommand.MarkDirty -> {
+                if (command.chatId.value > 0L) {
+                    pendingDirtyRooms.add(command.chatId)
+                }
+            }
+            is SnapshotCommand.Drain -> {
+                pendingDrainBudget.accumulateAndGet(command.budget.coerceAtLeast(0), ::maxOf)
+            }
+        }
+    }
+
+    private fun drainPendingCommands() {
+        while (true) {
+            var handled = false
+
+            if (seedRequested.compareAndSet(true, false)) {
+                handleSeedCache()
+                handled = true
+            }
+
+            if (fullReconcileRequested.compareAndSet(true, false)) {
+                handleFullReconcile()
+                handled = true
+            }
+
+            val pendingDirty =
+                pendingDirtyRooms
+                    .toList()
+                    .filter(pendingDirtyRooms::remove)
+            if (pendingDirty.isNotEmpty()) {
+                pendingDirty.forEach(::handleMarkDirty)
+                handled = true
+            }
+
+            val drainBudget = pendingDrainBudget.getAndSet(0)
+            if (drainBudget > 0) {
+                handleDrain(drainBudget)
+                handled = true
+            }
+
+            if (!handled) {
+                return
+            }
         }
     }
 
     private fun handleSeedCache() {
-        roomSnapshotReader
-            .listRoomChatIds()
-            .filter { it.value > 0L }
-            .forEach { chatId ->
+        previousSnapshots.clear()
+        stateStore
+            .loadAll()
+            .forEach { (chatId, state) ->
+                previousSnapshots[chatId] = state.toSnapshotState()
+            }
+
+        val currentRoomIds =
+            roomSnapshotReader
+                .listRoomChatIds()
+                .filter { it.value > 0L }
+                .toSet()
+
+        if (previousSnapshots.isEmpty()) {
+            currentRoomIds.forEach { chatId ->
                 when (val result = roomSnapshotReader.snapshot(chatId)) {
-                    is RoomSnapshotReadResult.Present -> previousSnapshots[chatId] = result.snapshot
+                    is RoomSnapshotReadResult.Present -> {
+                        previousSnapshots[chatId] = SnapshotState.Present(result.snapshot)
+                        stateStore.savePresent(result.snapshot)
+                    }
                     RoomSnapshotReadResult.Missing -> Unit
                 }
             }
+            return
+        }
+
+        if (currentRoomIds.isEmpty()) {
+            return
+        }
+
+        val previouslyPresentRooms =
+            previousSnapshots
+                .filterValues { state -> state is SnapshotState.Present }
+                .keys
+        (previouslyPresentRooms + currentRoomIds).forEach(::handleMarkDirty)
     }
 
     private fun handleMarkDirty(chatId: ChatId) {
@@ -80,22 +163,30 @@ class SnapshotCoordinator(
 
             when (val result = roomSnapshotReader.snapshot(chatId)) {
                 is RoomSnapshotReadResult.Present -> {
-                    val previousSnapshot = previousSnapshots.put(chatId, result.snapshot) ?: return@repeat
-                    val events = diffEngine.diff(previousSnapshot, result.snapshot)
+                    val events =
+                        when (val previous = previousSnapshots[chatId]) {
+                            is SnapshotState.Present -> diffEngine.diff(previous.snapshot, result.snapshot)
+                            SnapshotState.Missing -> diffEngine.diffRestored(result.snapshot)
+                            null -> emptyList()
+                        }
+                    previousSnapshots[chatId] = SnapshotState.Present(result.snapshot)
+                    stateStore.savePresent(result.snapshot)
                     if (events.isNotEmpty()) {
                         emitter.emit(events)
                     }
                 }
                 RoomSnapshotReadResult.Missing -> {
-                    val previousSnapshot = previousSnapshots[chatId] ?: return@repeat
-                    val empty = previousSnapshot.toEmptyBaseline()
-                    val events = diffEngine.diff(previousSnapshot, empty)
+                    val previousSnapshot =
+                        when (val previous = previousSnapshots[chatId]) {
+                            is SnapshotState.Present -> previous.snapshot
+                            SnapshotState.Missing, null -> null
+                        } ?: return@repeat
+                    val events = diffEngine.diffMissing(previousSnapshot)
                     if (events.isNotEmpty()) {
                         emitter.emit(events)
                     }
-                    previousSnapshots[chatId] = empty
-                    deletedRoomsPendingCleanup.remove(chatId)
-                    cleanedUpRooms.add(chatId)
+                    previousSnapshots[chatId] = SnapshotState.Missing
+                    stateStore.saveMissing(chatId)
                 }
             }
         }
@@ -113,26 +204,16 @@ class SnapshotCoordinator(
             return
         }
 
-        // 부활한 방: 이전에 클린업 완료되었으나 다시 나타난 방
-        val resurrected = cleanedUpRooms.intersect(currentRoomIds)
-        cleanedUpRooms.removeAll(resurrected)
-
-        deletedRoomsPendingCleanup.clear()
-        deletedRoomsPendingCleanup.addAll(previousSnapshots.keys - currentRoomIds - cleanedUpRooms)
-
-        // 클린업된 방은 dirty 대상에서 제외 (부활 방은 포함)
-        val activeRooms = previousSnapshots.keys - cleanedUpRooms
-        (activeRooms + currentRoomIds).forEach(::handleMarkDirty)
+        val previouslyPresentRooms =
+            previousSnapshots
+                .filterValues { state -> state is SnapshotState.Present }
+                .keys
+        (previouslyPresentRooms + currentRoomIds).forEach(::handleMarkDirty)
     }
 
-    private fun RoomSnapshotData.toEmptyBaseline(): RoomSnapshotData =
-        RoomSnapshotData(
-            chatId = chatId,
-            linkId = null,
-            memberIds = emptySet(),
-            blindedIds = emptySet(),
-            nicknames = emptyMap(),
-            roles = emptyMap(),
-            profileImages = emptyMap(),
-        )
+    private fun PersistedSnapshotState.toSnapshotState(): SnapshotState =
+        when (this) {
+            is PersistedSnapshotState.Present -> SnapshotState.Present(snapshot)
+            is PersistedSnapshotState.Missing -> SnapshotState.Missing
+        }
 }

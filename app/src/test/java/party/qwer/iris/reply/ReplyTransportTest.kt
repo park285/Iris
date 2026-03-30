@@ -180,7 +180,7 @@ class ReplyTransportTest {
             command =
                 NativeImageReplyCommand(
                     target = ReplyTarget(chatId = ChatId(300L), threadId = null),
-                    base64Images = listOf("base64"),
+                    imageCount = 1,
                     threadScope = null,
                     requestId = "img-1",
                 ),
@@ -232,7 +232,7 @@ class ReplyTransportTest {
                 command =
                     NativeImageReplyCommand(
                         target = ReplyTarget(chatId = ChatId(400L), threadId = null),
-                        base64Images = listOf("base64"),
+                        imageCount = 1,
                         threadScope = null,
                         requestId = null,
                     ),

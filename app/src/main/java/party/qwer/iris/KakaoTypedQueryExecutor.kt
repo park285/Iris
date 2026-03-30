@@ -1,14 +1,13 @@
 package party.qwer.iris
 
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import party.qwer.iris.model.QueryColumn
 import java.util.Base64
 
-internal class AdminQueryService(
+internal class KakaoTypedQueryExecutor(
     private val runtime: KakaoDbRuntime,
 ) {
-    fun executeQuery(
+    fun execute(
         sqlQuery: String,
         bindArgs: Array<String?>?,
         maxRows: Int,
@@ -27,7 +26,7 @@ internal class AdminQueryService(
         bindArgs: Array<String?>?,
         maxRows: Int,
     ): QueryExecutionResult {
-        val resultRows: MutableList<List<JsonElement?>> = ArrayList(minOf(maxRows, 64))
+        val resultRows = ArrayList<List<kotlinx.serialization.json.JsonElement?>>(minOf(maxRows, 64))
         queryConnection.rawQuery(sqlQuery, bindArgs).use { cursor ->
             val columnNames = cursor.columnNames
             val columnIndices =
@@ -36,7 +35,7 @@ internal class AdminQueryService(
                 }
             val observedTypes = MutableList(columnNames.size) { "UNKNOWN" }
             while (cursor.moveToNext() && resultRows.size < maxRows) {
-                val row = ArrayList<JsonElement?>(columnNames.size)
+                val row = ArrayList<kotlinx.serialization.json.JsonElement?>(columnNames.size)
                 for (index in columnNames.indices) {
                     val (cell, sqliteType) = cursor.readQueryCell(columnIndices[index])
                     row.add(cell)
@@ -59,7 +58,7 @@ internal class AdminQueryService(
     }
 }
 
-private fun android.database.Cursor.readQueryCell(index: Int): Pair<JsonElement?, String> =
+private fun android.database.Cursor.readQueryCell(index: Int): Pair<kotlinx.serialization.json.JsonElement?, String> =
     when (getType(index)) {
         android.database.Cursor.FIELD_TYPE_NULL -> null to "NULL"
         android.database.Cursor.FIELD_TYPE_INTEGER -> JsonPrimitive(getLong(index)) to "INTEGER"

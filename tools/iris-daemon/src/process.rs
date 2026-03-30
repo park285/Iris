@@ -1,6 +1,7 @@
 use crate::adb::Adb;
 use crate::config::DaemonConfig;
 use anyhow::{Result, bail};
+use std::path::Path;
 use std::time::Duration;
 
 const IRIS_PROCESS_NAME: &str = "party.qwer.iris.Main";
@@ -10,21 +11,31 @@ const STARTUP_RETRY_COUNT: usize = 10;
 const KILL_RETRY_WAIT_SECS: u64 = 1;
 const DEFAULT_IRIS_BIND_HOST: &str = "127.0.0.1";
 const DEFAULT_IRIS_LOG_LEVEL: &str = "INFO";
-const DEFAULT_IRIS_LOG_DEST: &str = "/data/local/tmp/iris.log";
+const DEFAULT_IRIS_LOG_DEST: &str = "/data/iris/logs/iris.log";
 
 pub async fn iris_pid(adb: &Adb) -> Option<u32> {
     let output = adb
         .shell(&format!(
-            "ps -ef | grep '{IRIS_PROCESS_NAME}' | grep -v grep"
+            "ps -A -o PID,ARGS | grep 'app_process / {IRIS_PROCESS_NAME}' | grep -v grep"
         ))
         .await
         .ok()?;
+    parse_iris_pid(&output)
+}
+
+fn parse_iris_pid(output: &str) -> Option<u32> {
     for line in output.lines() {
-        if line.contains(IRIS_PROCESS_NAME) && !line.contains("grep") {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 {
-                return parts[1].parse().ok();
-            }
+        if line.contains("grep") {
+            continue;
+        }
+
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 4 {
+            continue;
+        }
+
+        if parts[1] == "app_process" && parts[2] == "/" && parts[3] == IRIS_PROCESS_NAME {
+            return parts[0].parse().ok();
         }
     }
     None
@@ -35,10 +46,11 @@ async fn wait_for_process_exit(wait_secs: u64) {
 }
 
 async fn send_kill(adb: &Adb, pid: u32, signal: Option<&str>) {
-    let command = signal.map_or_else(
+    let kill_cmd = signal.map_or_else(
         || format!("kill {pid}"),
         |signal| format!("kill -{signal} {pid}"),
     );
+    let command = format!("su root sh -c {}", shell_quote(&kill_cmd));
     let _ = adb.shell(&command).await;
 }
 
@@ -85,19 +97,29 @@ fn env_or_default(key: &str, fallback: &str) -> String {
 fn start_command(cfg: &DaemonConfig) -> String {
     let bind_host = env_or_default("IRIS_BIND_HOST", DEFAULT_IRIS_BIND_HOST);
     let log_level = env_or_default("IRIS_LOG_LEVEL", DEFAULT_IRIS_LOG_LEVEL);
-    format!(
-        "nohup env KAKAOTALK_APP_UID=0 \
+    let log_dest = env_or_default("IRIS_LOG_PATH", DEFAULT_IRIS_LOG_DEST);
+    let log_dir = Path::new(&log_dest)
+        .parent()
+        .and_then(|path| path.to_str())
+        .unwrap_or("/data/iris/logs");
+    let launch_cmd = format!(
+        "mkdir -p {log_dir}; KAKAOTALK_APP_UID=0 \
          IRIS_CONFIG_PATH={config} \
          IRIS_BIND_HOST={bind_host} \
          IRIS_LOG_LEVEL={log_level} \
          CLASSPATH={apk} \
          app_process / {main} > {log_dest} 2>&1 &",
+        log_dir = shell_quote(log_dir),
         config = shell_quote(&cfg.init.config_dest),
         bind_host = shell_quote(&bind_host),
         log_level = shell_quote(&log_level),
         apk = shell_quote(&cfg.init.apk_dest),
         main = IRIS_PROCESS_NAME,
-        log_dest = shell_quote(DEFAULT_IRIS_LOG_DEST),
+        log_dest = shell_quote(&log_dest),
+    );
+    format!(
+        "su root sh -c {}",
+        shell_quote(&launch_cmd),
     )
 }
 
@@ -155,11 +177,20 @@ mod tests {
         let command = start_command(&cfg);
 
         assert!(command.contains(IRIS_PROCESS_NAME));
-        assert!(command.contains("IRIS_CONFIG_PATH='/data/local/tmp/config.json'"));
-        assert!(command.contains("IRIS_BIND_HOST='127.0.0.1'"));
-        assert!(command.contains("IRIS_LOG_LEVEL='INFO'"));
-        assert!(command.contains("CLASSPATH='/data/local/tmp/Iris.apk'"));
-        assert!(command.contains("> '/data/local/tmp/iris.log' 2>&1 &"));
+        assert!(command.contains("su root sh -c"));
+        assert!(command.contains("mkdir -p "));
+        assert!(command.contains("/data/iris/logs"));
+        assert!(command.contains("KAKAOTALK_APP_UID=0"));
+        assert!(command.contains("IRIS_CONFIG_PATH="));
+        assert!(command.contains("config.json"));
+        assert!(command.contains("IRIS_BIND_HOST="));
+        assert!(command.contains("127.0.0.1"));
+        assert!(command.contains("IRIS_LOG_LEVEL="));
+        assert!(command.contains("INFO"));
+        assert!(command.contains("CLASSPATH="));
+        assert!(command.contains("Iris.apk"));
+        assert!(command.contains("iris.log"));
+        assert!(command.contains("2>&1 &"));
     }
 
     #[test]
@@ -171,5 +202,11 @@ mod tests {
         // 토큰은 config.json에서만 공급됨, env var 주입 제거됨
         assert!(!command.contains("IRIS_WEBHOOK_TOKEN"));
         assert!(!command.contains("IRIS_BOT_TOKEN"));
+    }
+
+    #[test]
+    fn parse_iris_pid_ignores_shell_wrapper_lines() {
+        let output = "27346 sh -c mkdir -p '/data/iris/logs' && KAKAOTALK_APP_UID=0 app_process / party.qwer.iris.Main\n27348 app_process / party.qwer.iris.Main";
+        assert_eq!(parse_iris_pid(output), Some(27348));
     }
 }

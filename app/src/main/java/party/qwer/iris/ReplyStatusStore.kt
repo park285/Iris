@@ -9,6 +9,7 @@ internal class ReplyStatusStore(
     private val maximumSize: Int = 10_000,
     expireAfterWrite: Duration = Duration.ofMinutes(30),
     private val tickerNanos: () -> Long = System::nanoTime,
+    private val updatedAtEpochMs: () -> Long = System::currentTimeMillis,
 ) {
     private data class TimedSnapshot(
         val snapshot: ReplyStatusSnapshot,
@@ -34,7 +35,7 @@ internal class ReplyStatusStore(
                         ReplyStatusSnapshot(
                             requestId = requestId,
                             state = state,
-                            updatedAtEpochMs = System.currentTimeMillis(),
+                            updatedAtEpochMs = updatedAtEpochMs(),
                             detail = detail,
                         ),
                     writtenAtNanos = now,

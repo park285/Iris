@@ -1,6 +1,7 @@
 package party.qwer.iris
 
 import io.ktor.http.HttpStatusCode
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonPrimitive
 import party.qwer.iris.model.ReplyRequest
 import party.qwer.iris.model.ReplyType
@@ -70,53 +71,59 @@ class ReplyAdmissionTest {
     }
 
     @Test
-    fun `admit reply routes single image through native image sender`() {
+    fun `admit reply rejects json single image requests`() {
         val sender = RecordingMessageSender()
 
-        val result =
-            admitReply(
-                replyRequest =
-                    ReplyRequest(
-                        room = "1",
-                        type = ReplyType.IMAGE,
-                        data = JsonPrimitive("base64"),
-                    ),
-                roomId = 1L,
-                notificationReferer = "Iris",
-                threadId = 123L,
-                threadScope = 2,
-                messageSender = sender,
-                requestId = "reply-image-native-1",
-            )
+        val error =
+            assertFailsWith<ApiRequestException> {
+                runBlocking {
+                    admitReply(
+                        replyRequest =
+                            ReplyRequest(
+                                room = "1",
+                                type = ReplyType.IMAGE,
+                                data = JsonPrimitive("base64"),
+                            ),
+                        roomId = 1L,
+                        notificationReferer = "Iris",
+                        threadId = 123L,
+                        threadScope = 2,
+                        messageSender = sender,
+                        requestId = "reply-image-native-1",
+                    )
+                }
+            }
 
-        assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
-        assertEquals(1, sender.nativePhotoCalls)
-        assertEquals("reply-image-native-1", sender.lastRequestId)
+        assertEquals("image types require multipart/form-data", error.message)
+        assertEquals(0, sender.nativePhotoCalls)
     }
 
     @Test
-    fun `admit reply routes multiple images through native image sender`() {
+    fun `admit reply rejects json multiple image requests`() {
         val sender = RecordingMessageSender()
 
-        val result =
-            admitReply(
-                replyRequest =
-                    ReplyRequest(
-                        room = "1",
-                        type = ReplyType.IMAGE_MULTIPLE,
-                        data = listOf(JsonPrimitive("a"), JsonPrimitive("b")).let { kotlinx.serialization.json.JsonArray(it) },
-                    ),
-                roomId = 1L,
-                notificationReferer = "Iris",
-                threadId = 123L,
-                threadScope = 3,
-                messageSender = sender,
-                requestId = "reply-image-native-2",
-            )
+        val error =
+            assertFailsWith<ApiRequestException> {
+                runBlocking {
+                    admitReply(
+                        replyRequest =
+                            ReplyRequest(
+                                room = "1",
+                                type = ReplyType.IMAGE_MULTIPLE,
+                                data = listOf(JsonPrimitive("a"), JsonPrimitive("b")).let { kotlinx.serialization.json.JsonArray(it) },
+                            ),
+                        roomId = 1L,
+                        notificationReferer = "Iris",
+                        threadId = 123L,
+                        threadScope = 3,
+                        messageSender = sender,
+                        requestId = "reply-image-native-2",
+                    )
+                }
+            }
 
-        assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
-        assertEquals(1, sender.nativeMultiPhotoCalls)
-        assertEquals("reply-image-native-2", sender.lastRequestId)
+        assertEquals("image types require multipart/form-data", error.message)
+        assertEquals(0, sender.nativeMultiPhotoCalls)
     }
 
     @Test
@@ -124,20 +131,22 @@ class ReplyAdmissionTest {
         val sender = RecordingMessageSender()
 
         val result =
-            admitReply(
-                replyRequest =
-                    ReplyRequest(
-                        room = "1",
-                        type = ReplyType.MARKDOWN,
-                        data = JsonPrimitive("# Hello"),
-                    ),
-                roomId = 1L,
-                notificationReferer = "Iris",
-                threadId = 123L,
-                threadScope = 2,
-                messageSender = sender,
-                requestId = "reply-markdown-1",
-            )
+            runBlocking {
+                admitReply(
+                    replyRequest =
+                        ReplyRequest(
+                            room = "1",
+                            type = ReplyType.MARKDOWN,
+                            data = JsonPrimitive("# Hello"),
+                        ),
+                    roomId = 1L,
+                    notificationReferer = "Iris",
+                    threadId = 123L,
+                    threadScope = 2,
+                    messageSender = sender,
+                    requestId = "reply-markdown-1",
+                )
+            }
 
         assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
         assertEquals(1, sender.markdownCalls)
@@ -149,20 +158,22 @@ class ReplyAdmissionTest {
         val sender = RecordingMessageSender()
 
         val result =
-            admitReply(
-                replyRequest =
-                    ReplyRequest(
-                        room = "1",
-                        type = ReplyType.TEXT,
-                        data = JsonPrimitive("hello"),
-                    ),
-                roomId = 1L,
-                notificationReferer = "Iris",
-                threadId = null,
-                threadScope = null,
-                messageSender = sender,
-                requestId = "reply-123",
-            )
+            runBlocking {
+                admitReply(
+                    replyRequest =
+                        ReplyRequest(
+                            room = "1",
+                            type = ReplyType.TEXT,
+                            data = JsonPrimitive("hello"),
+                        ),
+                    roomId = 1L,
+                    notificationReferer = "Iris",
+                    threadId = null,
+                    threadScope = null,
+                    messageSender = sender,
+                    requestId = "reply-123",
+                )
+            }
 
         assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
         assertEquals("reply-123", sender.lastRequestId)
@@ -175,7 +186,7 @@ private class RecordingMessageSender : MessageSender {
     var markdownCalls = 0
     var lastRequestId: String? = null
 
-    override fun sendMessage(
+    override suspend fun sendMessageSuspend(
         referer: String,
         chatId: Long,
         msg: String,
@@ -187,9 +198,9 @@ private class RecordingMessageSender : MessageSender {
         return ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
     }
 
-    override fun sendNativePhoto(
+    override suspend fun sendNativePhotoBytesSuspend(
         room: Long,
-        base64ImageDataString: String,
+        imageBytes: ByteArray,
         threadId: Long?,
         threadScope: Int?,
         requestId: String?,
@@ -199,9 +210,9 @@ private class RecordingMessageSender : MessageSender {
         return ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
     }
 
-    override fun sendNativeMultiplePhotos(
+    override suspend fun sendNativeMultiplePhotosBytesSuspend(
         room: Long,
-        base64ImageDataStrings: List<String>,
+        imageBytesList: List<ByteArray>,
         threadId: Long?,
         threadScope: Int?,
         requestId: String?,
@@ -211,7 +222,7 @@ private class RecordingMessageSender : MessageSender {
         return ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
     }
 
-    override fun sendTextShare(
+    override suspend fun sendTextShareSuspend(
         room: Long,
         msg: String,
         requestId: String?,
@@ -220,7 +231,7 @@ private class RecordingMessageSender : MessageSender {
         return ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
     }
 
-    override fun sendReplyMarkdown(
+    override suspend fun sendReplyMarkdownSuspend(
         room: Long,
         msg: String,
         threadId: Long?,

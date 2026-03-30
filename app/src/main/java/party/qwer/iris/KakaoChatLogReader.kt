@@ -3,7 +3,6 @@ package party.qwer.iris
 internal class KakaoChatLogReader(
     private val runtime: KakaoDbRuntime,
     private val identityReader: KakaoIdentityReader,
-    private val adminQueryService: AdminQueryService,
 ) : ChatLogRepository {
     override fun pollChatLogsAfter(
         afterLogId: Long,
@@ -81,10 +80,4 @@ internal class KakaoChatLogReader(
                 }
             }
         }
-
-    override fun executeQuery(
-        sqlQuery: String,
-        bindArgs: Array<String?>?,
-        maxRows: Int,
-    ): QueryExecutionResult = adminQueryService.executeQuery(sqlQuery, bindArgs, maxRows)
 }

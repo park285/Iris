@@ -1,18 +1,23 @@
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+
 package party.qwer.iris
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.TestCoroutineScheduler
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import party.qwer.iris.model.ReplyLifecycleState
 import party.qwer.iris.reply.ReplyThreadId
 import party.qwer.iris.storage.ChatId
 import java.io.File
 import java.nio.file.Files
-import java.util.Base64
 import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -21,8 +26,11 @@ import kotlin.test.assertTrue
 
 class ReplyServiceTest {
     private companion object {
-        private const val VALID_TEST_PNG_BASE64 =
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+cq1cAAAAASUVORK5CYII="
+        private val VALID_TEST_PNG_BYTES =
+            byteArrayOf(
+                0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+                0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+            )
     }
 
     private val testConfig =
@@ -39,6 +47,19 @@ class ReplyServiceTest {
 
             override fun webhookEndpointFor(route: String) = ""
         }
+
+    private fun deterministicReplyService(
+        config: ConfigProvider = testConfig,
+        scheduler: TestCoroutineScheduler,
+        dispatcher: CoroutineDispatcher = kotlinx.coroutines.test.StandardTestDispatcher(scheduler),
+    ): ReplyService =
+        ReplyService(
+            config = config,
+            admissionDispatcher = dispatcher,
+            dispatchClock = { scheduler.currentTime },
+            statusTickerNanos = { scheduler.currentTime * 1_000_000L },
+            statusUpdatedAtEpochMs = { scheduler.currentTime },
+        )
 
     @Test
     fun `ReplyQueueKey distinguishes by chatId and threadId`() {
@@ -60,26 +81,26 @@ class ReplyServiceTest {
     @Test
     fun `rejects enqueue when max workers exceeded`() {
         val service = ReplyService(testConfig)
-        service.start()
+        service.startBlocking()
 
         for (i in 0L until 16L) {
-            val result = service.sendMessage("ref", chatId = i, msg = "test", threadId = null, threadScope = null)
+            val result = service.sendMessageBlocking("ref", chatId = i, msg = "test", threadId = null, threadScope = null)
             assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status, "worker $i should be accepted")
         }
 
-        val overflow = service.sendMessage("ref", chatId = 99L, msg = "test", threadId = null, threadScope = null)
+        val overflow = service.sendMessageBlocking("ref", chatId = 99L, msg = "test", threadId = null, threadScope = null)
         assertEquals(ReplyAdmissionStatus.QUEUE_FULL, overflow.status)
 
-        service.shutdown()
+        service.shutdownBlocking()
     }
 
     @Test
     fun `rejects enqueue after shutdown`() {
         val service = ReplyService(testConfig)
-        service.start()
-        service.shutdown()
+        service.startBlocking()
+        service.shutdownBlocking()
 
-        val result = service.sendMessage("ref", chatId = 1L, msg = "test", threadId = null, threadScope = null)
+        val result = service.sendMessageBlocking("ref", chatId = 1L, msg = "test", threadId = null, threadScope = null)
         assertEquals(ReplyAdmissionStatus.SHUTDOWN, result.status)
     }
 
@@ -100,476 +121,409 @@ class ReplyServiceTest {
                 override fun webhookEndpointFor(route: String) = ""
             }
         val service = ReplyService(slowConfig)
-        service.start()
+        service.startBlocking()
 
         var fullCount = 0
         for (i in 0 until 20) {
-            val result = service.sendMessage("ref", chatId = 1L, msg = "msg$i", threadId = null, threadScope = null)
+            val result = service.sendMessageBlocking("ref", chatId = 1L, msg = "msg$i", threadId = null, threadScope = null)
             if (result.status == ReplyAdmissionStatus.QUEUE_FULL) fullCount++
         }
 
         assertTrue(fullCount > 0, "at least one enqueue should be rejected as QUEUE_FULL")
-        service.shutdown()
+        service.shutdownBlocking()
     }
 
     @Test
     fun `shutdown then enqueue returns SHUTDOWN`() {
         val service = ReplyService(testConfig)
-        service.start()
+        service.startBlocking()
 
-        service.sendMessage("ref", chatId = 1L, msg = "drain", threadId = null, threadScope = null)
-        service.shutdown()
+        service.sendMessageBlocking("ref", chatId = 1L, msg = "drain", threadId = null, threadScope = null)
+        service.shutdownBlocking()
 
-        val result = service.sendMessage("ref", chatId = 1L, msg = "after", threadId = null, threadScope = null)
+        val result = service.sendMessageBlocking("ref", chatId = 1L, msg = "after", threadId = null, threadScope = null)
         assertEquals(ReplyAdmissionStatus.SHUTDOWN, result.status)
     }
 
     @Test
     fun `same key messages are all accepted in order`() {
         val service = ReplyService(testConfig)
-        service.start()
+        service.startBlocking()
 
         val results =
             (1..10).map { i ->
-                service.sendMessage("ref", chatId = 1L, msg = "msg$i", threadId = 100L, threadScope = 1)
+                service.sendMessageBlocking("ref", chatId = 1L, msg = "msg$i", threadId = 100L, threadScope = 1)
             }
 
         results.forEach { assertEquals(ReplyAdmissionStatus.ACCEPTED, it.status) }
-        service.shutdown()
+        service.shutdownBlocking()
     }
 
     @Test
     fun `different keys create independent workers`() {
         val service = ReplyService(testConfig)
-        service.start()
+        service.startBlocking()
 
-        val result1 = service.sendMessage("ref", chatId = 1L, msg = "a", threadId = 100L, threadScope = 1)
-        val result2 = service.sendMessage("ref", chatId = 1L, msg = "b", threadId = 200L, threadScope = 1)
-        val result3 = service.sendMessage("ref", chatId = 2L, msg = "c", threadId = null, threadScope = null)
+        val result1 = service.sendMessageBlocking("ref", chatId = 1L, msg = "a", threadId = 100L, threadScope = 1)
+        val result2 = service.sendMessageBlocking("ref", chatId = 1L, msg = "b", threadId = 200L, threadScope = 1)
+        val result3 = service.sendMessageBlocking("ref", chatId = 2L, msg = "c", threadId = null, threadScope = null)
 
         assertEquals(ReplyAdmissionStatus.ACCEPTED, result1.status)
         assertEquals(ReplyAdmissionStatus.ACCEPTED, result2.status)
         assertEquals(ReplyAdmissionStatus.ACCEPTED, result3.status)
 
-        service.shutdown()
+        service.shutdownBlocking()
     }
 
     @Test
     fun `new worker is created after restart for same key`() {
         val service = ReplyService(testConfig)
-        service.start()
+        service.startBlocking()
 
-        val result1 = service.sendMessage("ref", chatId = 1L, msg = "before", threadId = null, threadScope = null)
+        val result1 = service.sendMessageBlocking("ref", chatId = 1L, msg = "before", threadId = null, threadScope = null)
         assertEquals(ReplyAdmissionStatus.ACCEPTED, result1.status)
 
-        service.restart()
+        service.restartBlocking()
 
-        val result2 = service.sendMessage("ref", chatId = 1L, msg = "after", threadId = null, threadScope = null)
+        val result2 = service.sendMessageBlocking("ref", chatId = 1L, msg = "after", threadId = null, threadScope = null)
         assertEquals(ReplyAdmissionStatus.ACCEPTED, result2.status)
 
-        service.shutdown()
+        service.shutdownBlocking()
     }
 
     @Test
-    fun `same key preserves send order`() {
-        val service = ReplyService(testConfig)
-        service.start()
-        val executed = CopyOnWriteArrayList<Int>()
-        val latch = CountDownLatch(5)
+    fun `same key preserves send order`() =
+        runTest {
+            val service = deterministicReplyService(scheduler = testScheduler)
+            service.startSuspend()
+            val executed = CopyOnWriteArrayList<Int>()
 
-        for (i in 0 until 5) {
-            service.enqueueAction(chatId = 1L, threadId = 100L) {
-                executed.add(i)
-                latch.countDown()
-            }
-        }
-
-        assertTrue(latch.await(5, TimeUnit.SECONDS), "all messages should be processed")
-        assertEquals(listOf(0, 1, 2, 3, 4), executed)
-        service.shutdown()
-    }
-
-    @Test
-    fun `global gate paces send start times across workers`() {
-        val pacingConfig =
-            object : ConfigProvider {
-                override val botId = 0L
-                override val botName = ""
-                override val botSocketPort = 0
-                override val inboundSigningSecret = ""
-                override val outboundWebhookToken = ""
-                override val botControlToken = ""
-                override val dbPollingRate = 1000L
-                override val messageSendRate = 100L
-                override val messageSendJitterMax = 0L
-
-                override fun webhookEndpointFor(route: String) = ""
-            }
-        val service = ReplyService(pacingConfig)
-        service.start()
-        val timestamps = CopyOnWriteArrayList<Long>()
-        val latch = CountDownLatch(4)
-
-        for (i in 0L until 2L) {
-            repeat(2) {
-                service.enqueueAction(chatId = i, threadId = null, lane = ReplySendLane.TEXT) {
-                    timestamps.add(System.currentTimeMillis())
-                    delay(50)
-                    latch.countDown()
+            for (i in 0 until 5) {
+                service.enqueueActionSuspend(chatId = 1L, threadId = 100L) {
+                    executed.add(i)
                 }
             }
-        }
 
-        assertTrue(latch.await(5, TimeUnit.SECONDS), "all sends should complete")
-        assertEquals(4, timestamps.size)
-        val sorted = timestamps.sorted()
-        for (i in 1 until sorted.size) {
-            val gap = sorted[i] - sorted[i - 1]
-            assertTrue(gap >= 80, "send starts should be paced by at least ~100ms (gap was ${gap}ms)")
+            advanceUntilIdle()
+            assertEquals(listOf(0, 1, 2, 3, 4), executed)
+            service.shutdownSuspend()
         }
-        service.shutdown()
-    }
 
     @Test
-    fun `global gate paces send start times across all lanes`() {
-        val pacingConfig =
-            object : ConfigProvider {
-                override val botId = 0L
-                override val botName = ""
-                override val botSocketPort = 0
-                override val inboundSigningSecret = ""
-                override val outboundWebhookToken = ""
-                override val botControlToken = ""
-                override val dbPollingRate = 1000L
-                override val messageSendRate = 100L
-                override val messageSendJitterMax = 0L
+    fun `global gate paces send start times across workers`() =
+        runTest {
+            val pacingConfig =
+                object : ConfigProvider {
+                    override val botId = 0L
+                    override val botName = ""
+                    override val botSocketPort = 0
+                    override val inboundSigningSecret = ""
+                    override val outboundWebhookToken = ""
+                    override val botControlToken = ""
+                    override val dbPollingRate = 1000L
+                    override val messageSendRate = 100L
+                    override val messageSendJitterMax = 0L
 
-                override fun webhookEndpointFor(route: String) = ""
+                    override fun webhookEndpointFor(route: String) = ""
+                }
+            val service = deterministicReplyService(config = pacingConfig, scheduler = testScheduler)
+            service.startSuspend()
+            val timestamps = mutableListOf<Long>()
+
+            for (i in 0L until 2L) {
+                repeat(2) {
+                    service.enqueueActionSuspend(chatId = i, threadId = null, lane = ReplySendLane.TEXT) {
+                        timestamps.add(testScheduler.currentTime)
+                        delay(50)
+                    }
+                }
             }
-        val service = ReplyService(pacingConfig)
-        service.start()
-        val timestamps = CopyOnWriteArrayList<Long>()
-        val latch = CountDownLatch(2)
 
-        service.enqueueAction(chatId = 1L, threadId = null, lane = ReplySendLane.TEXT) {
-            timestamps.add(System.currentTimeMillis())
-            delay(50)
-            latch.countDown()
+            advanceUntilIdle()
+            assertEquals(4, timestamps.size)
+            val sorted = timestamps.sorted()
+            for (i in 1 until sorted.size) {
+                val gap = sorted[i] - sorted[i - 1]
+                assertTrue(gap >= 100, "send starts should be paced by at least 100ms (gap was ${gap}ms)")
+            }
+            service.shutdownSuspend()
         }
-        service.enqueueAction(chatId = 2L, threadId = null, lane = ReplySendLane.NATIVE_IMAGE) {
-            timestamps.add(System.currentTimeMillis())
-            delay(50)
-            latch.countDown()
-        }
-
-        assertTrue(latch.await(5, TimeUnit.SECONDS), "different lanes should complete")
-        assertEquals(2, timestamps.size)
-        val sorted = timestamps.sorted()
-        val gap = sorted[1] - sorted[0]
-        assertTrue(gap >= 80, "all lanes should respect shared pacing (gap was ${gap}ms)")
-        service.shutdown()
-    }
 
     @Test
-    fun `shutdown drains pending messages`() {
-        val service = ReplyService(testConfig)
-        service.start()
-        val executed = AtomicInteger(0)
+    fun `global gate paces send start times across all lanes`() =
+        runTest {
+            val pacingConfig =
+                object : ConfigProvider {
+                    override val botId = 0L
+                    override val botName = ""
+                    override val botSocketPort = 0
+                    override val inboundSigningSecret = ""
+                    override val outboundWebhookToken = ""
+                    override val botControlToken = ""
+                    override val dbPollingRate = 1000L
+                    override val messageSendRate = 100L
+                    override val messageSendJitterMax = 0L
 
-        repeat(3) {
-            service.enqueueAction(chatId = 1L, threadId = null) {
-                delay(20)
-                executed.incrementAndGet()
+                    override fun webhookEndpointFor(route: String) = ""
+                }
+            val service = deterministicReplyService(config = pacingConfig, scheduler = testScheduler)
+            service.startSuspend()
+            val timestamps = mutableListOf<Long>()
+
+            service.enqueueActionSuspend(chatId = 1L, threadId = null, lane = ReplySendLane.TEXT) {
+                timestamps.add(testScheduler.currentTime)
+                delay(50)
             }
-        }
+            service.enqueueActionSuspend(chatId = 2L, threadId = null, lane = ReplySendLane.NATIVE_IMAGE) {
+                timestamps.add(testScheduler.currentTime)
+                delay(50)
+            }
 
-        service.shutdown()
-        assertEquals(3, executed.get(), "all pending messages should be drained before shutdown completes")
-    }
+            advanceUntilIdle()
+            assertEquals(2, timestamps.size)
+            val sorted = timestamps.sorted()
+            val gap = sorted[1] - sorted[0]
+            assertTrue(gap >= 100, "all lanes should respect shared pacing (gap was ${gap}ms)")
+            service.shutdownSuspend()
+        }
 
     @Test
-    fun `global gate enforces pacing between sends from different workers`() {
-        val pacingConfig =
-            object : ConfigProvider {
-                override val botId = 0L
-                override val botName = ""
-                override val botSocketPort = 0
-                override val inboundSigningSecret = ""
-                override val outboundWebhookToken = ""
-                override val botControlToken = ""
-                override val dbPollingRate = 1000L
-                override val messageSendRate = 100L
-                override val messageSendJitterMax = 0L
+    fun `shutdown drains pending messages`() =
+        runTest {
+            val service = deterministicReplyService(scheduler = testScheduler)
+            service.startSuspend()
+            val executed = AtomicInteger(0)
 
-                override fun webhookEndpointFor(route: String) = ""
+            repeat(3) {
+                service.enqueueActionSuspend(chatId = 1L, threadId = null) {
+                    delay(20)
+                    executed.incrementAndGet()
+                }
             }
-        val service = ReplyService(pacingConfig)
-        service.start()
-        val timestamps = CopyOnWriteArrayList<Long>()
-        val latch = CountDownLatch(3)
 
-        for (i in 0L until 3L) {
-            service.enqueueAction(chatId = i, threadId = null) {
-                timestamps.add(System.currentTimeMillis())
-                latch.countDown()
-            }
+            service.shutdownSuspend()
+            advanceUntilIdle()
+            assertEquals(3, executed.get(), "all pending messages should be drained before shutdown completes")
         }
-
-        assertTrue(latch.await(5, TimeUnit.SECONDS), "all sends should complete")
-        assertEquals(3, timestamps.size)
-        val sorted = timestamps.sorted()
-        for (i in 1 until sorted.size) {
-            val gap = sorted[i] - sorted[i - 1]
-            assertTrue(gap >= 80, "sends should be paced by at least ~100ms (gap was ${gap}ms)")
-        }
-        service.shutdown()
-    }
 
     @Test
-    fun `shutdown terminates workers blocked in dispatch gate pacing`() {
-        val pacingConfig =
-            object : ConfigProvider {
-                override val botId = 0L
-                override val botName = ""
-                override val botSocketPort = 0
-                override val inboundSigningSecret = ""
-                override val outboundWebhookToken = ""
-                override val botControlToken = ""
-                override val dbPollingRate = 1000L
-                override val messageSendRate = 5_000L
-                override val messageSendJitterMax = 0L
+    fun `global gate enforces pacing between sends from different workers`() =
+        runTest {
+            val pacingConfig =
+                object : ConfigProvider {
+                    override val botId = 0L
+                    override val botName = ""
+                    override val botSocketPort = 0
+                    override val inboundSigningSecret = ""
+                    override val outboundWebhookToken = ""
+                    override val botControlToken = ""
+                    override val dbPollingRate = 1000L
+                    override val messageSendRate = 100L
+                    override val messageSendJitterMax = 0L
 
-                override fun webhookEndpointFor(route: String) = ""
+                    override fun webhookEndpointFor(route: String) = ""
+                }
+            val service = deterministicReplyService(config = pacingConfig, scheduler = testScheduler)
+            service.startSuspend()
+            val timestamps = mutableListOf<Long>()
+
+            for (i in 0L until 3L) {
+                service.enqueueActionSuspend(chatId = i, threadId = null) {
+                    timestamps.add(testScheduler.currentTime)
+                }
             }
-        val service = ReplyService(pacingConfig)
-        service.start()
-        val firstDone = CountDownLatch(1)
 
-        service.enqueueAction(chatId = 1L, threadId = null) {
-            firstDone.countDown()
-        }
-        assertTrue(firstDone.await(5, TimeUnit.SECONDS), "first send should complete")
-
-        val blockedRequestId = "gate-blocked"
-        service.enqueueAction(chatId = 1L, threadId = null, requestId = blockedRequestId) {}
-        waitUntil("second action should reach dispatch gate") {
-            service.replyStatusOrNull(blockedRequestId)?.state == ReplyLifecycleState.PREPARED
+            advanceUntilIdle()
+            assertEquals(3, timestamps.size)
+            val sorted = timestamps.sorted()
+            for (i in 1 until sorted.size) {
+                val gap = sorted[i] - sorted[i - 1]
+                assertTrue(gap >= 100, "sends should be paced by at least 100ms (gap was ${gap}ms)")
+            }
+            service.shutdownSuspend()
         }
 
-        val start = System.currentTimeMillis()
-        service.shutdown()
-        val elapsed = System.currentTimeMillis() - start
+    @Test
+    fun `shutdown terminates workers blocked in dispatch gate pacing`() =
+        runTest {
+            val pacingConfig =
+                object : ConfigProvider {
+                    override val botId = 0L
+                    override val botName = ""
+                    override val botSocketPort = 0
+                    override val inboundSigningSecret = ""
+                    override val outboundWebhookToken = ""
+                    override val botControlToken = ""
+                    override val dbPollingRate = 1000L
+                    override val messageSendRate = 5_000L
+                    override val messageSendJitterMax = 0L
 
-        assertTrue(elapsed < 15_000, "shutdown should complete by cancelling gate-blocked workers (took ${elapsed}ms)")
-    }
+                    override fun webhookEndpointFor(route: String) = ""
+                }
+            val service = deterministicReplyService(config = pacingConfig, scheduler = testScheduler)
+            service.startSuspend()
+
+            service.enqueueActionSuspend(chatId = 1L, threadId = null) {
+                Unit
+            }
+            runCurrent()
+
+            val blockedRequestId = "gate-blocked"
+            service.enqueueActionSuspend(chatId = 2L, threadId = null, requestId = blockedRequestId) {}
+            runCurrent()
+            assertTrue(service.replyStatusOrNull(blockedRequestId) != null, "queued request should be tracked before shutdown")
+
+            val start = testScheduler.currentTime
+            service.shutdownSuspend()
+            val elapsed = testScheduler.currentTime - start
+
+            assertTrue(elapsed < 10_000, "shutdown should complete within admission shutdown timeout (took ${elapsed}ms)")
+        }
 
     @Test
     fun `sendNativePhoto rejects invalid payload before native bootstrap`() {
         val service = ReplyService(testConfig)
-        service.start()
+        service.startBlocking()
 
         val result =
-            service.sendNativePhoto(
+            service.sendNativePhotoBytesBlocking(
                 room = 18478615493603057L,
-                base64ImageDataString = "not-base64",
+                imageBytes = ByteArray(0),
                 threadId = 3804154209723703299L,
                 threadScope = 2,
             )
 
         assertEquals(ReplyAdmissionStatus.INVALID_PAYLOAD, result.status)
-        service.shutdown()
-    }
-
-    @Test
-    fun `sendNativePhoto rejects payload with invalid trailing base64 data`() {
-        val service = ReplyService(testConfig)
-        service.start()
-        val payload = "A".repeat(256) + "A==="
-
-        val result =
-            service.sendNativePhoto(
-                room = 18478615493603057L,
-                base64ImageDataString = payload,
-                threadId = 3804154209723703299L,
-                threadScope = 2,
-            )
-
-        assertEquals(ReplyAdmissionStatus.INVALID_PAYLOAD, result.status)
-        service.shutdown()
+        service.shutdownBlocking()
     }
 
     @Test
     fun `sendNativeMultiplePhotos rejects when image count exceeds limit`() {
         val service = ReplyService(testConfig)
-        service.start()
+        service.startBlocking()
 
         val result =
-            service.sendNativeMultiplePhotos(
+            service.sendNativeMultiplePhotosBytesBlocking(
                 room = 18478615493603057L,
-                base64ImageDataStrings = List(9) { VALID_TEST_PNG_BASE64 },
+                imageBytesList = List(9) { VALID_TEST_PNG_BYTES },
                 threadId = null,
                 threadScope = null,
             )
 
         assertEquals(ReplyAdmissionStatus.INVALID_PAYLOAD, result.status)
-        service.shutdown()
+        service.shutdownBlocking()
     }
 
     @Test
-    fun `sendNativePhoto decodes payload only once`() {
-        val decodeCalls = AtomicInteger(0)
-        val latch = CountDownLatch(1)
-        val imageDir = Files.createTempDirectory("iris-reply-service").toFile()
-        val service =
-            ReplyService(
-                testConfig,
-                nativeImageReplySender =
-                    object : NativeImageReplySender {
-                        override fun send(
-                            roomId: Long,
-                            imagePaths: List<String>,
-                            threadId: Long?,
-                            threadScope: Int?,
-                            requestId: String?,
-                        ) {
-                            latch.countDown()
-                        }
-                    },
-                imageDecoder = { payload ->
-                    decodeCalls.incrementAndGet()
-                    Base64.getMimeDecoder().decode(payload)
-                },
-                mediaScanner = {},
-                imageDir = imageDir,
-            )
-        service.start()
+    fun `sendNativePhoto admission does not wait for image persistence`() =
+        runTest {
+            val sendStarted = CompletableDeferred<Unit>()
+            val allowSendToFinish = CompletableDeferred<Unit>()
+            val imageDir = Files.createTempDirectory("iris-reply-deferred-save").toFile()
+            val service =
+                ReplyService(
+                    testConfig,
+                    nativeImageReplySender =
+                        object : NativeImageReplySender {
+                            override fun send(
+                                roomId: Long,
+                                imagePaths: List<String>,
+                                threadId: Long?,
+                                threadScope: Int?,
+                                requestId: String?,
+                            ) {
+                                runBlocking {
+                                    sendStarted.complete(Unit)
+                                    allowSendToFinish.await()
+                                }
+                            }
+                        },
+                    mediaScanner = {},
+                    imageDir = imageDir,
+                )
+            try {
+                service.startSuspend()
 
-        val result =
-            service.sendNativePhoto(
-                room = 18478615493603057L,
-                base64ImageDataString = VALID_TEST_PNG_BASE64,
-                threadId = null,
-                threadScope = null,
-            )
+                val resultDeferred =
+                    async {
+                        service.sendNativePhotoBytesSuspend(
+                            room = 18478615493603057L,
+                            imageBytes = VALID_TEST_PNG_BYTES,
+                            threadId = null,
+                            threadScope = null,
+                            requestId = null,
+                        )
+                    }
 
-        assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
-        assertTrue(latch.await(5, TimeUnit.SECONDS))
-        assertEquals(1, decodeCalls.get(), "worker should decode payload exactly once")
-        service.shutdown()
-        imageDir.deleteRecursively()
-    }
+                sendStarted.await()
+
+                assertTrue(resultDeferred.isCompleted, "queue admission should not block on image persistence")
+                assertEquals(ReplyAdmissionStatus.ACCEPTED, resultDeferred.await().status)
+
+                allowSendToFinish.complete(Unit)
+                service.shutdownSuspend()
+            } finally {
+                allowSendToFinish.complete(Unit)
+                imageDir.deleteRecursively()
+            }
+        }
 
     @Test
-    fun `sendNativePhoto admission does not wait for image decode`() {
-        val decodeStarted = CountDownLatch(1)
-        val allowDecode = CountDownLatch(1)
-        val sendCompleted = CountDownLatch(1)
-        val resultRef = AtomicReference<ReplyAdmissionResult?>()
-        val imageDir = Files.createTempDirectory("iris-reply-deferred-decode").toFile()
-        val service =
-            ReplyService(
-                testConfig,
-                nativeImageReplySender =
-                    object : NativeImageReplySender {
-                        override fun send(
-                            roomId: Long,
-                            imagePaths: List<String>,
-                            threadId: Long?,
-                            threadScope: Int?,
-                            requestId: String?,
-                        ) {
-                            sendCompleted.countDown()
-                        }
-                    },
-                imageDecoder = { payload ->
-                    decodeStarted.countDown()
-                    assertTrue(allowDecode.await(5, TimeUnit.SECONDS), "worker decode should be releasable")
-                    Base64.getMimeDecoder().decode(payload)
-                },
-                mediaScanner = {},
-                imageDir = imageDir,
-            )
-        service.start()
+    fun `sendNativePhoto keeps prepared files after successful native send`() =
+        runTest {
+            val imageDir = Files.createTempDirectory("iris-reply-cleanup").toFile()
+            val observedPaths = CopyOnWriteArrayList<String>()
+            val service =
+                ReplyService(
+                    testConfig,
+                    nativeImageReplySender =
+                        object : NativeImageReplySender {
+                            override fun send(
+                                roomId: Long,
+                                imagePaths: List<String>,
+                                threadId: Long?,
+                                threadScope: Int?,
+                                requestId: String?,
+                            ) {
+                                observedPaths += imagePaths
+                            }
+                        },
+                    mediaScanner = {},
+                    imageDir = imageDir,
+                    admissionDispatcher = kotlinx.coroutines.test.StandardTestDispatcher(testScheduler),
+                    dispatchClock = { testScheduler.currentTime },
+                    statusTickerNanos = { testScheduler.currentTime * 1_000_000L },
+                    statusUpdatedAtEpochMs = { testScheduler.currentTime },
+                )
+            try {
+                service.startSuspend()
 
-        val admissionReturned = CountDownLatch(1)
-        val caller =
-            Thread {
-                resultRef.set(
-                    service.sendNativePhoto(
+                val result =
+                    service.sendNativePhotoBytesSuspend(
                         room = 18478615493603057L,
-                        base64ImageDataString = VALID_TEST_PNG_BASE64,
+                        imageBytes = VALID_TEST_PNG_BYTES,
                         threadId = null,
                         threadScope = null,
-                    ),
-                )
-                admissionReturned.countDown()
+                        requestId = null,
+                    )
+
+                assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
+                advanceUntilIdle()
+                assertTrue(observedPaths.isNotEmpty(), "native sender should observe prepared image paths")
+                assertTrue(observedPaths.all { path -> File(path).exists() }, "prepared files should remain after native send")
+                service.shutdownSuspend()
+            } finally {
+                imageDir.deleteRecursively()
             }
-        caller.start()
-
-        assertTrue(
-            admissionReturned.await(500, TimeUnit.MILLISECONDS),
-            "queue admission should not block on image decode",
-        )
-        assertEquals(ReplyAdmissionStatus.ACCEPTED, resultRef.get()?.status)
-        assertTrue(decodeStarted.await(5, TimeUnit.SECONDS), "worker should eventually start image decode")
-        allowDecode.countDown()
-        assertTrue(sendCompleted.await(5, TimeUnit.SECONDS), "native send should complete after worker decode")
-
-        service.shutdown()
-        caller.join(5_000)
-        imageDir.deleteRecursively()
-    }
+        }
 
     @Test
-    fun `sendNativePhoto keeps prepared files after successful native send`() {
-        val latch = CountDownLatch(1)
-        val imageDir = Files.createTempDirectory("iris-reply-cleanup").toFile()
-        val observedPaths = CopyOnWriteArrayList<String>()
-        val service =
-            ReplyService(
-                testConfig,
-                nativeImageReplySender =
-                    object : NativeImageReplySender {
-                        override fun send(
-                            roomId: Long,
-                            imagePaths: List<String>,
-                            threadId: Long?,
-                            threadScope: Int?,
-                            requestId: String?,
-                        ) {
-                            observedPaths += imagePaths
-                            latch.countDown()
-                        }
-                    },
-                mediaScanner = {},
-                imageDir = imageDir,
-            )
-        service.start()
-
-        val result =
-            service.sendNativePhoto(
-                room = 18478615493603057L,
-                base64ImageDataString = VALID_TEST_PNG_BASE64,
-                threadId = null,
-                threadScope = null,
-            )
-
-        assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
-        assertTrue(latch.await(5, TimeUnit.SECONDS))
-        assertTrue(observedPaths.isNotEmpty(), "native sender should observe prepared image paths")
-        assertTrue(observedPaths.all { path -> File(path).exists() }, "prepared files should remain after native send")
-        service.shutdown()
-        imageDir.deleteRecursively()
-    }
-
-    @Test
-    fun `validateImagePayloads rejects when decoded total exceeds limit`() {
-        val payloads = listOf("a", "b", "c")
+    fun `validateImageBytesPayload rejects when total exceeds limit`() {
+        val payloads = listOf(ByteArray(4), ByteArray(4), ByteArray(4))
 
         assertFailsWith<IllegalArgumentException> {
-            validateImagePayloads(
-                payloads,
-                imageDecoder = { ByteArray(4) },
+            validateImageBytesPayload(
+                imageBytesList = payloads,
                 maxImagesPerRequest = 8,
                 maxTotalBytes = 10,
             )
@@ -577,169 +531,229 @@ class ReplyServiceTest {
     }
 
     @Test
-    fun `request id status advances through queue and send`() {
-        val service = ReplyService(testConfig)
-        service.start()
-        val requestId = "req-123"
-        val latch = CountDownLatch(1)
+    fun `request id status advances through queue and send`() =
+        runTest {
+            val service = deterministicReplyService(scheduler = testScheduler)
+            service.startSuspend()
+            val requestId = "req-123"
 
-        val result =
-            service.enqueueAction(
-                chatId = 1L,
-                threadId = null,
-                lane = ReplySendLane.TEXT,
-                requestId = requestId,
-            ) {
-                latch.countDown()
-            }
+            val result =
+                service.enqueueActionSuspend(
+                    chatId = 1L,
+                    threadId = null,
+                    lane = ReplySendLane.TEXT,
+                    requestId = requestId,
+                ) {
+                    Unit
+                }
 
-        assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
-        assertTrue(latch.await(5, TimeUnit.SECONDS))
-        waitUntil("request should reach handoff completed") {
-            service.replyStatusOrNull(requestId)?.state == ReplyLifecycleState.HANDOFF_COMPLETED
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
+            advanceUntilIdle()
+            assertEquals(ReplyLifecycleState.HANDOFF_COMPLETED, service.replyStatusOrNull(requestId)?.state)
+            service.shutdownSuspend()
         }
-        assertEquals(ReplyLifecycleState.HANDOFF_COMPLETED, service.replyStatusOrNull(requestId)?.state)
-        service.shutdown()
-    }
 
     @Test
-    fun `threaded text replies use share graft lane instead of notification reply lane`() {
-        val notificationStarts = AtomicInteger(0)
-        val shareStarts = AtomicInteger(0)
-        val latch = CountDownLatch(1)
-        val service =
-            ReplyService(
-                testConfig,
-                notificationReplySender = { _, _, _, _, _ ->
-                    notificationStarts.incrementAndGet()
-                },
-                sharedTextReplySender = { _, _, _, _ ->
-                    shareStarts.incrementAndGet()
-                    latch.countDown()
-                },
-            )
-        service.start()
+    fun `threaded text replies use share graft lane instead of notification reply lane`() =
+        runTest {
+            val notificationStarts = AtomicInteger(0)
+            val shareStarts = AtomicInteger(0)
+            val service =
+                ReplyService(
+                    testConfig,
+                    notificationReplySender = { _, _, _, _, _ ->
+                        notificationStarts.incrementAndGet()
+                    },
+                    sharedTextReplySender = { _, _, _, _ ->
+                        shareStarts.incrementAndGet()
+                    },
+                    admissionDispatcher = kotlinx.coroutines.test.StandardTestDispatcher(testScheduler),
+                    dispatchClock = { testScheduler.currentTime },
+                    statusTickerNanos = { testScheduler.currentTime * 1_000_000L },
+                    statusUpdatedAtEpochMs = { testScheduler.currentTime },
+                )
+            service.startSuspend()
 
-        val result =
-            service.sendMessage(
-                referer = "ref",
-                chatId = 18478615493603057L,
-                msg = "**thread text**",
-                threadId = 3805486995143352321L,
-                threadScope = 2,
-            )
+            val result =
+                service.sendMessageSuspend(
+                    referer = "ref",
+                    chatId = 18478615493603057L,
+                    msg = "**thread text**",
+                    threadId = 3805486995143352321L,
+                    threadScope = 2,
+                    requestId = null,
+                )
 
-        assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
-        assertTrue(latch.await(5, TimeUnit.SECONDS), "threaded text should use share/graft lane")
-        assertEquals(0, notificationStarts.get())
-        assertEquals(1, shareStarts.get())
-        service.shutdown()
-    }
-
-    @Test
-    fun `room text replies keep notification reply lane`() {
-        val notificationStarts = AtomicInteger(0)
-        val shareStarts = AtomicInteger(0)
-        val latch = CountDownLatch(1)
-        val service =
-            ReplyService(
-                testConfig,
-                notificationReplySender = { _, _, _, _, _ ->
-                    notificationStarts.incrementAndGet()
-                    latch.countDown()
-                },
-                sharedTextReplySender = { _, _, _, _ ->
-                    shareStarts.incrementAndGet()
-                },
-            )
-        service.start()
-
-        val result =
-            service.sendMessage(
-                referer = "ref",
-                chatId = 18478615493603057L,
-                msg = "plain room text",
-                threadId = null,
-                threadScope = null,
-            )
-
-        assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
-        assertTrue(latch.await(5, TimeUnit.SECONDS), "room text should keep notification reply lane")
-        assertEquals(1, notificationStarts.get())
-        assertEquals(0, shareStarts.get())
-        service.shutdown()
-    }
-
-    @Test
-    fun `threaded text replies default share graft scope to two when omitted`() {
-        val capturedScope = AtomicInteger(-1)
-        val latch = CountDownLatch(1)
-        val service =
-            ReplyService(
-                testConfig,
-                sharedTextReplySender = { _, _, _, threadScope ->
-                    capturedScope.set(threadScope ?: -1)
-                    latch.countDown()
-                },
-            )
-        service.start()
-
-        val result =
-            service.sendMessage(
-                referer = "ref",
-                chatId = 18478615493603057L,
-                msg = "thread scope default",
-                threadId = 3805486995143352321L,
-                threadScope = null,
-            )
-
-        assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
-        assertTrue(latch.await(5, TimeUnit.SECONDS))
-        assertEquals(2, capturedScope.get())
-        service.shutdown()
-    }
-
-    @Test
-    fun `reply markdown alias uses shared text reply lane`() {
-        val shareStarts = AtomicInteger(0)
-        val capturedScope = AtomicInteger(-1)
-        val latch = CountDownLatch(1)
-        val service =
-            ReplyService(
-                testConfig,
-                sharedTextReplySender = { _, _, _, threadScope ->
-                    shareStarts.incrementAndGet()
-                    capturedScope.set(threadScope ?: -1)
-                    latch.countDown()
-                },
-            )
-        service.start()
-
-        val result =
-            service.sendReplyMarkdown(
-                room = 18478615493603057L,
-                msg = "**markdown alias**",
-                threadId = 3805486995143352321L,
-                threadScope = null,
-            )
-
-        assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
-        assertTrue(latch.await(5, TimeUnit.SECONDS))
-        assertEquals(1, shareStarts.get())
-        assertEquals(2, capturedScope.get())
-        service.shutdown()
-    }
-
-    private fun waitUntil(
-        message: String,
-        condition: () -> Boolean,
-    ) = runBlocking {
-        var satisfied = condition()
-        repeat(100) {
-            if (satisfied) return@repeat
-            delay(10L)
-            satisfied = condition()
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
+            advanceUntilIdle()
+            assertEquals(0, notificationStarts.get())
+            assertEquals(1, shareStarts.get())
+            service.shutdownSuspend()
         }
-        assertTrue(satisfied, message)
-    }
+
+    @Test
+    fun `room text replies keep notification reply lane`() =
+        runTest {
+            val notificationStarts = AtomicInteger(0)
+            val shareStarts = AtomicInteger(0)
+            val service =
+                ReplyService(
+                    testConfig,
+                    notificationReplySender = { _, _, _, _, _ ->
+                        notificationStarts.incrementAndGet()
+                    },
+                    sharedTextReplySender = { _, _, _, _ ->
+                        shareStarts.incrementAndGet()
+                    },
+                    admissionDispatcher = kotlinx.coroutines.test.StandardTestDispatcher(testScheduler),
+                    dispatchClock = { testScheduler.currentTime },
+                    statusTickerNanos = { testScheduler.currentTime * 1_000_000L },
+                    statusUpdatedAtEpochMs = { testScheduler.currentTime },
+                )
+            service.startSuspend()
+
+            val result =
+                service.sendMessageSuspend(
+                    referer = "ref",
+                    chatId = 18478615493603057L,
+                    msg = "plain room text",
+                    threadId = null,
+                    threadScope = null,
+                    requestId = null,
+                )
+
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
+            advanceUntilIdle()
+            assertEquals(1, notificationStarts.get())
+            assertEquals(0, shareStarts.get())
+            service.shutdownSuspend()
+        }
+
+    @Test
+    fun `threaded text replies default share graft scope to two when omitted`() =
+        runTest {
+            val capturedScope = AtomicInteger(-1)
+            val service =
+                ReplyService(
+                    testConfig,
+                    sharedTextReplySender = { _, _, _, threadScope ->
+                        capturedScope.set(threadScope ?: -1)
+                    },
+                    admissionDispatcher = kotlinx.coroutines.test.StandardTestDispatcher(testScheduler),
+                    dispatchClock = { testScheduler.currentTime },
+                    statusTickerNanos = { testScheduler.currentTime * 1_000_000L },
+                    statusUpdatedAtEpochMs = { testScheduler.currentTime },
+                )
+            service.startSuspend()
+
+            val result =
+                service.sendMessageSuspend(
+                    referer = "ref",
+                    chatId = 18478615493603057L,
+                    msg = "thread scope default",
+                    threadId = 3805486995143352321L,
+                    threadScope = null,
+                    requestId = null,
+                )
+
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
+            advanceUntilIdle()
+            assertEquals(2, capturedScope.get())
+            service.shutdownSuspend()
+        }
+
+    @Test
+    fun `reply markdown alias uses shared text reply lane`() =
+        runTest {
+            val shareStarts = AtomicInteger(0)
+            val capturedScope = AtomicInteger(-1)
+            val service =
+                ReplyService(
+                    testConfig,
+                    sharedTextReplySender = { _, _, _, threadScope ->
+                        shareStarts.incrementAndGet()
+                        capturedScope.set(threadScope ?: -1)
+                    },
+                    admissionDispatcher = kotlinx.coroutines.test.StandardTestDispatcher(testScheduler),
+                    dispatchClock = { testScheduler.currentTime },
+                    statusTickerNanos = { testScheduler.currentTime * 1_000_000L },
+                    statusUpdatedAtEpochMs = { testScheduler.currentTime },
+                )
+            service.startSuspend()
+
+            val result =
+                service.sendReplyMarkdownSuspend(
+                    room = 18478615493603057L,
+                    msg = "**markdown alias**",
+                    threadId = 3805486995143352321L,
+                    threadScope = null,
+                    requestId = null,
+                )
+
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
+            advanceUntilIdle()
+            assertEquals(1, shareStarts.get())
+            assertEquals(2, capturedScope.get())
+            service.shutdownSuspend()
+        }
 }
+
+private fun ReplyService.startBlocking() =
+    runBlocking {
+        startSuspend()
+    }
+
+private fun ReplyService.restartBlocking() =
+    runBlocking {
+        restartSuspend()
+    }
+
+private fun ReplyService.shutdownBlocking() =
+    runBlocking {
+        shutdownSuspend()
+    }
+
+private fun ReplyService.sendMessageBlocking(
+    referer: String,
+    chatId: Long,
+    msg: String,
+    threadId: Long?,
+    threadScope: Int?,
+    requestId: String? = null,
+): ReplyAdmissionResult =
+    runBlocking {
+        sendMessage(referer, chatId, msg, threadId, threadScope, requestId)
+    }
+
+private fun ReplyService.sendNativePhotoBytesBlocking(
+    room: Long,
+    imageBytes: ByteArray,
+    threadId: Long? = null,
+    threadScope: Int? = null,
+    requestId: String? = null,
+): ReplyAdmissionResult =
+    runBlocking {
+        sendNativePhotoBytes(room, imageBytes, threadId, threadScope, requestId)
+    }
+
+private fun ReplyService.sendNativeMultiplePhotosBytesBlocking(
+    room: Long,
+    imageBytesList: List<ByteArray>,
+    threadId: Long? = null,
+    threadScope: Int? = null,
+    requestId: String? = null,
+): ReplyAdmissionResult =
+    runBlocking {
+        sendNativeMultiplePhotosBytes(room, imageBytesList, threadId, threadScope, requestId)
+    }
+
+private fun ReplyService.enqueueActionBlocking(
+    chatId: Long,
+    threadId: Long?,
+    lane: ReplySendLane = ReplySendLane.TEXT,
+    requestId: String? = null,
+    action: suspend () -> Unit,
+): ReplyAdmissionResult =
+    runBlocking {
+        enqueueAction(chatId, threadId, lane, requestId, action)
+    }

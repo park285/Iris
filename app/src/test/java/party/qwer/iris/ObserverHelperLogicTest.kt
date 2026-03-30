@@ -134,7 +134,6 @@ class ObserverHelperLogicTest {
         helper.seedSnapshotCache()
         helper.markRoomDirty(100L)
         helper.runDirtySnapshotDiff()
-        waitUntil { bus.replayFrom(0).isNotEmpty() }
         val replay = bus.replayFrom(0)
 
         assertEquals(1, replay.size)
@@ -321,7 +320,7 @@ class ObserverHelperLogicTest {
         val journal = BatchedCheckpointJournal(store = checkpointStore, flushIntervalMs = Long.MAX_VALUE, clock = { 0L })
         val coordinator =
             SnapshotCoordinator(
-                scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default),
+                scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Unconfined),
                 roomSnapshotReader = snapshotReader,
                 diffEngine = RoomSnapshotManager(),
                 emitter = SnapshotEventEmitter(bus, routingGateway),
@@ -365,16 +364,6 @@ class ObserverHelperLogicTest {
         return IngressBundle(ingress = ingress, journal = journal)
     }
 
-    private fun waitUntil(
-        timeoutMs: Long = 1_000L,
-        condition: () -> Boolean,
-    ) = kotlinx.coroutines.runBlocking {
-        kotlinx.coroutines.withTimeout(timeoutMs) {
-            while (!condition()) {
-                kotlinx.coroutines.delay(10L)
-            }
-        }
-    }
 }
 
 private data class IngressBundle(
@@ -419,12 +408,6 @@ private class FakeChatLogRepository(
     override fun resolveRoomMetadata(chatId: Long): KakaoDB.RoomMetadata = roomMetadata
 
     override fun latestLogId(): Long = latestLogId
-
-    override fun executeQuery(
-        sqlQuery: String,
-        bindArgs: Array<String?>?,
-        maxRows: Int,
-    ): QueryExecutionResult = QueryExecutionResult(columns = emptyList(), rows = emptyList())
 }
 
 private class FakeCheckpointStore(

@@ -1,6 +1,7 @@
 package party.qwer.iris
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -16,9 +17,11 @@ class ImageDeleter(
     private val imageDirPath: String,
     private val deletionInterval: Long,
     private val retentionMillis: Long,
+    private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private val scopeJob = SupervisorJob()
-    private val coroutineScope = CoroutineScope(scopeJob + Dispatchers.IO)
+    private val coroutineScope = CoroutineScope(scopeJob + dispatcher)
 
     @Volatile
     private var running = true
@@ -51,10 +54,12 @@ class ImageDeleter(
             return
         }
         running = false
-        runBlocking {
-            deletionJob?.cancelAndJoin()
-            scopeJob.cancelAndJoin()
-        }
+        runBlocking { stopDeletionSuspend() }
+    }
+
+    suspend fun stopDeletionSuspend() {
+        deletionJob?.cancelAndJoin()
+        scopeJob.cancelAndJoin()
         deletionJob = null
     }
 
@@ -65,7 +70,7 @@ class ImageDeleter(
             return
         }
 
-        val expirationCutoff = System.currentTimeMillis() - retentionMillis
+        val expirationCutoff = clock() - retentionMillis
         imageDir.listFiles()?.forEach { file ->
             if (file.isFile && file.lastModified() < expirationCutoff) {
                 if (file.delete()) {

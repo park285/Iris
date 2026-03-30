@@ -7,7 +7,7 @@ import party.qwer.iris.snapshot.SnapshotCoordinator
 import party.qwer.iris.storage.ChatId
 import java.io.Closeable
 
-class ObserverHelper(
+internal class ObserverHelper(
     private val ingressService: CommandIngressService,
     private val snapshotCoordinator: SnapshotCoordinator,
     private val checkpointJournal: CheckpointJournal,

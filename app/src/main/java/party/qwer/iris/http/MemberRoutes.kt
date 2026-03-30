@@ -19,21 +19,21 @@ internal fun Route.installMemberRoutes(
     val bus = sseEventBus
 
     get("/rooms") {
-        if (!authSupport.requireBotToken(call, method = "GET")) return@get
+        if (!authSupport.requireBotControlSignature(call, method = "GET")) return@get
         call.respond(repo.listRooms())
     }
     get("/rooms/{chatId}/members") {
-        if (!authSupport.requireBotToken(call, method = "GET")) return@get
+        if (!authSupport.requireBotControlSignature(call, method = "GET")) return@get
         val chatId = call.parameters["chatId"]?.toLongOrNull() ?: invalidRequest("chatId must be a number")
         call.respond(repo.listMembers(chatId))
     }
     get("/rooms/{chatId}/info") {
-        if (!authSupport.requireBotToken(call, method = "GET")) return@get
+        if (!authSupport.requireBotControlSignature(call, method = "GET")) return@get
         val chatId = call.parameters["chatId"]?.toLongOrNull() ?: invalidRequest("chatId must be a number")
         call.respond(repo.roomInfo(chatId))
     }
     get("/rooms/{chatId}/stats") {
-        if (!authSupport.requireBotToken(call, method = "GET")) return@get
+        if (!authSupport.requireBotControlSignature(call, method = "GET")) return@get
         val chatId = call.parameters["chatId"]?.toLongOrNull() ?: invalidRequest("chatId must be a number")
         val period = call.request.queryParameters["period"]
         val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 20
@@ -41,33 +41,33 @@ internal fun Route.installMemberRoutes(
         call.respond(repo.roomStats(chatId, period, limit, minMessages))
     }
     get("/rooms/{chatId}/members/{userId}/activity") {
-        if (!authSupport.requireBotToken(call, method = "GET")) return@get
+        if (!authSupport.requireBotControlSignature(call, method = "GET")) return@get
         val chatId = call.parameters["chatId"]?.toLongOrNull() ?: invalidRequest("chatId must be a number")
         val userId = call.parameters["userId"]?.toLongOrNull() ?: invalidRequest("userId must be a number")
         val period = call.request.queryParameters["period"]
         call.respond(repo.memberActivity(chatId, userId, period))
     }
     get("/rooms/{chatId}/threads") {
-        if (!authSupport.requireBotToken(call, method = "GET")) return@get
+        if (!authSupport.requireBotControlSignature(call, method = "GET")) return@get
         val chatId = call.parameters["chatId"]?.toLongOrNull() ?: invalidRequest("chatId must be a number")
         call.respond(repo.listThreads(chatId))
     }
 
     if (bus != null) {
         get("/events/stream") {
-            if (!authSupport.requireBotToken(call, method = "GET")) return@get
+            if (!authSupport.requireBotControlSignature(call, method = "GET")) return@get
             val lastEventId = call.request.headers["Last-Event-ID"]?.toLongOrNull() ?: 0L
             call.respondBytesWriter(contentType = ContentType.Text.EventStream) {
-                writeStringUtf8(initialSseFrames(bus.replayEnvelopes(lastEventId)))
+                writeStringUtf8(initialSseFrames(bus.replayEnvelopesSuspend(lastEventId)))
                 flush()
-                val channel = bus.openSubscriberChannel()
+                val channel = bus.openSubscriberChannelSuspend()
                 try {
                     for (envelope in channel) {
                         writeStringUtf8("id: ${envelope.id}\nevent: ${envelope.eventType}\ndata: ${envelope.payload}\n\n")
                         flush()
                     }
                 } finally {
-                    bus.removeSubscriber(channel)
+                    bus.removeSubscriberSuspend(channel)
                     channel.close()
                 }
             }

@@ -2,6 +2,9 @@ package party.qwer.iris
 
 import android.content.Intent
 import android.net.Uri
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import party.qwer.iris.model.ReplyStatusSnapshot
 import party.qwer.iris.reply.DispatchScheduler
 import party.qwer.iris.reply.MediaPreparationService
@@ -67,18 +70,37 @@ internal class ReplyService(
             notificationReplySender: (String, Long, CharSequence, Long?, Int?) -> Unit,
             sharedTextReplySender: (Long, CharSequence, Long?, Int?) -> Unit,
             mediaScanner: (File) -> Unit,
-            imageDecoder: (String) -> ByteArray,
             imageDir: File,
+            admissionDispatcher: CoroutineDispatcher,
+            dispatchClock: () -> Long,
+            statusTickerNanos: () -> Long,
+            statusUpdatedAtEpochMs: () -> Long,
         ): ReplyServiceComponents {
             val mediaPreparationService =
                 MediaPreparationService(
-                    imageDecoder = imageDecoder,
                     mediaScanner = mediaScanner,
                     imageDir = imageDir,
                     imageMediaScanEnabled = defaultImageMediaScanEnabled(),
                 )
+            val dispatchScheduler =
+                DispatchScheduler(
+                    baseIntervalMs = { config.messageSendRate },
+                    jitterMaxMs = { config.messageSendJitterMax },
+                    clock = dispatchClock,
+                )
+            val statusTracker =
+                ReplyStatusTracker(
+                    ReplyStatusStore(
+                        tickerNanos = statusTickerNanos,
+                        updatedAtEpochMs = statusUpdatedAtEpochMs,
+                    ),
+                )
             return ReplyServiceComponents(
-                admissionService = ReplyAdmissionService(),
+                admissionService =
+                    ReplyAdmissionService(
+                        dispatcher = admissionDispatcher,
+                        initialRequestProcessor = buildAdmissionRequestProcessor(dispatchScheduler, statusTracker),
+                    ),
                 commandFactory = ReplyCommandFactory(),
                 mediaPreparationService = mediaPreparationService,
                 transport =
@@ -88,13 +110,37 @@ internal class ReplyService(
                         nativeImageReplySender = nativeImageReplySender,
                         mediaPreparationService = mediaPreparationService,
                     ),
-                dispatchScheduler =
-                    DispatchScheduler(
-                        baseIntervalMs = { config.messageSendRate },
-                        jitterMaxMs = { config.messageSendJitterMax },
-                    ),
-                statusTracker = ReplyStatusTracker(ReplyStatusStore()),
+                dispatchScheduler = dispatchScheduler,
+                statusTracker = statusTracker,
             )
+        }
+
+        private fun buildAdmissionRequestProcessor(
+            dispatchScheduler: DispatchScheduler,
+            statusTracker: ReplyStatusTracker,
+        ): suspend (PipelineRequest) -> Unit = { request ->
+            val pipelineRequest = request as? ReplyPipelineRequest
+            if (pipelineRequest == null) {
+                request.prepare()
+                dispatchScheduler.awaitPermit()
+                request.send()
+            } else {
+                try {
+                    statusTracker.transition(pipelineRequest.requestId, ReplyTransitionEvent.PrepareStarted)
+                    pipelineRequest.prepare()
+                    statusTracker.transition(pipelineRequest.requestId, ReplyTransitionEvent.PrepareCompleted)
+                    dispatchScheduler.awaitPermit()
+                    statusTracker.transition(pipelineRequest.requestId, ReplyTransitionEvent.SendStarted)
+                    pipelineRequest.send()
+                    statusTracker.transition(pipelineRequest.requestId, ReplyTransitionEvent.SendCompleted)
+                } catch (e: Exception) {
+                    statusTracker.transition(
+                        pipelineRequest.requestId,
+                        ReplyTransitionEvent.Failed(e.message ?: "reply pipeline failure"),
+                    )
+                    IrisLogger.error("[ReplyService] pipeline send error: ${e.message}", e)
+                }
+            }
         }
     }
 
@@ -112,8 +158,11 @@ internal class ReplyService(
             dispatchSharedTextReply(startActivityAs, room, preparedMessage, threadId, threadScope)
         },
         mediaScanner: (File) -> Unit = { file -> broadcastMediaScan(Uri.fromFile(file)) },
-        imageDecoder: (String) -> ByteArray = ::decodeBase64Image,
         imageDir: File = File(IRIS_IMAGE_DIR_PATH),
+        admissionDispatcher: CoroutineDispatcher = Dispatchers.IO,
+        dispatchClock: () -> Long = System::currentTimeMillis,
+        statusTickerNanos: () -> Long = System::nanoTime,
+        statusUpdatedAtEpochMs: () -> Long = System::currentTimeMillis,
     ) : this(
         components =
             buildComponents(
@@ -122,28 +171,39 @@ internal class ReplyService(
                 notificationReplySender = notificationReplySender,
                 sharedTextReplySender = sharedTextReplySender,
                 mediaScanner = mediaScanner,
-                imageDecoder = imageDecoder,
                 imageDir = imageDir,
+                admissionDispatcher = admissionDispatcher,
+                dispatchClock = dispatchClock,
+                statusTickerNanos = statusTickerNanos,
+                statusUpdatedAtEpochMs = statusUpdatedAtEpochMs,
             ),
     )
 
-    init {
-        admissionService.onRequestProcess = ::processRequest
+    suspend fun startSuspend() {
+        admissionService.startSuspend()
+    }
+
+    suspend fun restartSuspend() {
+        admissionService.restartSuspend()
+    }
+
+    suspend fun shutdownSuspend() {
+        admissionService.shutdownSuspend()
     }
 
     fun start() {
-        admissionService.start()
+        runBlocking { startSuspend() }
     }
 
     fun restart() {
-        admissionService.restart()
+        runBlocking { restartSuspend() }
     }
 
     fun shutdown() {
-        admissionService.shutdown()
+        runBlocking { shutdownSuspend() }
     }
 
-    override fun sendMessage(
+    override suspend fun sendMessageSuspend(
         referer: String,
         chatId: Long,
         msg: String,
@@ -162,32 +222,32 @@ internal class ReplyService(
         )
     }
 
-    override fun sendNativePhoto(
+    override suspend fun sendNativePhotoBytesSuspend(
         room: Long,
-        base64ImageDataString: String,
+        imageBytes: ByteArray,
         threadId: Long?,
         threadScope: Int?,
         requestId: String?,
-    ): ReplyAdmissionResult = sendNativeMultiplePhotos(room, listOf(base64ImageDataString), threadId, threadScope, requestId)
+    ): ReplyAdmissionResult = sendNativeMultiplePhotosBytesSuspend(room, listOf(imageBytes), threadId, threadScope, requestId)
 
-    override fun sendNativeMultiplePhotos(
+    override suspend fun sendNativeMultiplePhotosBytesSuspend(
         room: Long,
-        base64ImageDataStrings: List<String>,
+        imageBytesList: List<ByteArray>,
         threadId: Long?,
         threadScope: Int?,
         requestId: String?,
     ): ReplyAdmissionResult {
-        val payloadMetadata =
+        val validatedPayloads =
             try {
-                validateImagePayloadMetadata(
-                    base64ImageDataStrings,
+                validateImageBytesPayload(
+                    imageBytesList = imageBytesList,
                     maxImagesPerRequest = MAX_IMAGES_PER_REQUEST,
                     maxTotalBytes = MAX_TOTAL_IMAGE_PAYLOAD_BYTES_PER_REQUEST,
                 )
             } catch (_: IllegalArgumentException) {
                 return ReplyAdmissionResult(
                     ReplyAdmissionStatus.INVALID_PAYLOAD,
-                    "image replies require valid base64 payload",
+                    "image replies require valid binary payload",
                 )
             }
 
@@ -197,13 +257,13 @@ internal class ReplyService(
             requestId = requestId,
             pipelineRequest =
                 NativeImagePipelineRequest(
-                    command = commandFactory.nativeImageReply(room, payloadMetadata.map { it.base64 }, threadId, threadScope, requestId),
-                    payloadMetadata = payloadMetadata,
+                    command = commandFactory.nativeImageReply(room, validatedPayloads.size, threadId, threadScope, requestId),
+                    imageBytesList = validatedPayloads,
                 ),
         )
     }
 
-    internal fun enqueueAction(
+    internal suspend fun enqueueActionSuspend(
         chatId: Long,
         threadId: Long?,
         lane: ReplySendLane = ReplySendLane.TEXT,
@@ -217,7 +277,16 @@ internal class ReplyService(
             pipelineRequest = ActionPipelineRequest(requestId = requestId, action = action),
         )
 
-    override fun sendTextShare(
+    internal fun enqueueAction(
+        chatId: Long,
+        threadId: Long?,
+        lane: ReplySendLane = ReplySendLane.TEXT,
+        requestId: String? = null,
+        action: suspend () -> Unit,
+    ): ReplyAdmissionResult =
+        runBlocking { enqueueActionSuspend(chatId, threadId, lane, requestId, action) }
+
+    override suspend fun sendTextShareSuspend(
         room: Long,
         msg: String,
         requestId: String?,
@@ -229,7 +298,7 @@ internal class ReplyService(
             pipelineRequest = SharePipelineRequest(commandFactory.shareReply(room, msg, threadId = null, threadScope = null, requestId = requestId)),
         )
 
-    override fun sendReplyMarkdown(
+    override suspend fun sendReplyMarkdownSuspend(
         room: Long,
         msg: String,
         threadId: Long?,
@@ -248,7 +317,7 @@ internal class ReplyService(
 
     internal fun replyStatusOrNull(requestId: String): ReplyStatusSnapshot? = statusTracker.get(requestId)
 
-    private fun enqueueRequest(
+    private suspend fun enqueueRequest(
         chatId: Long,
         threadId: Long?,
         requestId: String?,
@@ -256,7 +325,7 @@ internal class ReplyService(
     ): ReplyAdmissionResult {
         statusTracker.onQueued(requestId)
         val result =
-            admissionService.enqueue(
+            admissionService.enqueueSuspend(
                 ReplyQueueKey(
                     chatId = ChatId(chatId),
                     threadId = threadId?.let(::ReplyThreadId),
@@ -270,31 +339,6 @@ internal class ReplyService(
                 statusTracker.transition(requestId, ReplyTransitionEvent.Failed(result.message ?: result.status.name))
             }
             result
-        }
-    }
-
-    private suspend fun processRequest(request: PipelineRequest) {
-        val pipelineRequest =
-            request as? ReplyPipelineRequest ?: run {
-                request.prepare()
-                dispatchScheduler.awaitPermit()
-                request.send()
-                return
-            }
-        try {
-            statusTracker.transition(pipelineRequest.requestId, ReplyTransitionEvent.PrepareStarted)
-            pipelineRequest.prepare()
-            statusTracker.transition(pipelineRequest.requestId, ReplyTransitionEvent.PrepareCompleted)
-            dispatchScheduler.awaitPermit()
-            statusTracker.transition(pipelineRequest.requestId, ReplyTransitionEvent.SendStarted)
-            pipelineRequest.send()
-            statusTracker.transition(pipelineRequest.requestId, ReplyTransitionEvent.SendCompleted)
-        } catch (e: Exception) {
-            statusTracker.transition(
-                pipelineRequest.requestId,
-                ReplyTransitionEvent.Failed(e.message ?: "reply pipeline failure"),
-            )
-            IrisLogger.error("[ReplyService] pipeline send error: ${e.message}", e)
         }
     }
 
@@ -331,16 +375,19 @@ internal class ReplyService(
 
     private inner class NativeImagePipelineRequest(
         private val command: NativeImageReplyCommand,
-        private val payloadMetadata: List<ImagePayloadMetadata>,
+        imageBytesList: List<ByteArray>,
     ) : ReplyPipelineRequest {
         override val requestId: String? = command.requestId
         private lateinit var preparedImages: PreparedImages
+        private var imageBytesList: List<ByteArray>? = imageBytesList
 
         override suspend fun prepare() {
+            val payloads = imageBytesList ?: error("image payload bytes already consumed")
             IrisLogger.info(
-                "[ReplyService] preparing image reply room=${command.chatId} threadId=${command.threadId} imageCount=${payloadMetadata.size}",
+                "[ReplyService] preparing image reply room=${command.chatId} threadId=${command.threadId} imageCount=${command.imageCount}",
             )
-            preparedImages = mediaPreparationService.prepare(command.chatId, payloadMetadata)
+            preparedImages = mediaPreparationService.prepare(command.chatId, payloads)
+            imageBytesList = null
         }
 
         override suspend fun send() {

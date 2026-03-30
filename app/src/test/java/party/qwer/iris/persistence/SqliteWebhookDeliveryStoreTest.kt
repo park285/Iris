@@ -110,7 +110,38 @@ class SqliteWebhookDeliveryStoreTest {
     }
 
     @Test
-    fun `markDead prevents further claim`() {
+    fun `releaseClaim preserves attempt count and makes entry immediately claimable`() {
+        var now = 1000L
+        val (helper, store) = createStore(clock = { now })
+
+        helper.use {
+            store.use {
+                store.enqueue(
+                    PendingWebhookDelivery(
+                        messageId = "message-1",
+                        roomId = 100L,
+                        route = "default",
+                        payloadJson = "{\"text\":\"hello\"}",
+                    ),
+                )
+
+                val firstClaim = store.claimReady(limit = 1).single()
+                store.releaseClaim(
+                    id = firstClaim.id,
+                    claimToken = firstClaim.claimToken,
+                    nextAttemptAt = now,
+                    reason = "graceful shutdown",
+                )
+
+                val reclaimed = store.claimReady(limit = 1).single()
+                assertEquals(firstClaim.id, reclaimed.id)
+                assertEquals(0, reclaimed.attemptCount)
+            }
+        }
+    }
+
+    @Test
+    fun `markDead increments attempt count and prevents further claim`() {
         val (helper, store) = createStore()
 
         helper.use {
@@ -128,6 +159,13 @@ class SqliteWebhookDeliveryStoreTest {
                 store.markDead(claim.id, claim.claimToken, "permanent failure")
 
                 assertTrue(store.claimReady(limit = 10).isEmpty())
+                assertEquals(
+                    1L,
+                    helper.queryLong(
+                        "SELECT attempt_count FROM ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE} WHERE id = ?",
+                        claim.id,
+                    ),
+                )
             }
         }
     }

@@ -21,12 +21,12 @@ internal fun Route.installConfigRoutes(
 ) {
     route("/config") {
         get {
-            if (!authSupport.requireBotToken(call, method = "GET")) return@get
+            if (!authSupport.requireInboundSignature(call, method = "GET")) return@get
             call.respond(configManager.configResponse())
         }
         post("{name}") {
             readProtectedBody(call, MAX_CONFIG_REQUEST_BODY_BYTES).use { bodyResult ->
-                if (!authSupport.requireBotToken(call, method = "POST", bodySha256Hex = bodyResult.sha256Hex)) {
+                if (!authSupport.requireInboundSignature(call, method = "POST", bodySha256Hex = bodyResult.sha256Hex)) {
                     return@post
                 }
                 val name = call.parameters["name"] ?: throw ApiRequestException("missing config name")

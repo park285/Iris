@@ -77,6 +77,7 @@ internal class IrisMetadataStore(
             )
         ensureObservedProfileTable(db)
         ensureObservedProfileUserLinkTable(db)
+        migrateUserLinksIfNeeded(db)
     }
 
     override fun upsertObservedProfile(identity: KakaoNotificationIdentity) {
@@ -358,6 +359,18 @@ internal class IrisMetadataStore(
             ON observed_profile_user_links (user_id, updated_at DESC)
             """.trimIndent(),
         )
+    }
+
+    private fun migrateUserLinksIfNeeded(db: SQLiteDatabase) {
+        val version =
+            db.rawQuery("PRAGMA user_version", null).use { cursor ->
+                if (cursor.moveToFirst()) cursor.getInt(0) else 0
+            }
+        if (version < 1) {
+            // v1: 오매칭 방지 로직 도입 — 기존 학습 데이터를 리셋하여 잘못된 매핑 제거
+            db.execSQL("DELETE FROM observed_profile_user_links")
+            db.execSQL("PRAGMA user_version = 1")
+        }
     }
 
     private fun ensureObservedProfileChatIdColumn(db: SQLiteDatabase) {

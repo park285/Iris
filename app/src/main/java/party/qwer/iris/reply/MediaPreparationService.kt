@@ -1,15 +1,13 @@
 package party.qwer.iris.reply
 
-import party.qwer.iris.ImagePayloadMetadata
 import party.qwer.iris.PreparedImages
 import party.qwer.iris.cleanupPreparedImages
 import party.qwer.iris.ensureImageDir
 import party.qwer.iris.saveImage
-import party.qwer.iris.validateImagePayloads
+import party.qwer.iris.validateImageBytesPayload
 import java.io.File
 
 internal class MediaPreparationService(
-    private val imageDecoder: (String) -> ByteArray,
     private val mediaScanner: (File) -> Unit,
     private val imageDir: File,
     private val imageMediaScanEnabled: Boolean,
@@ -18,12 +16,11 @@ internal class MediaPreparationService(
 ) : MediaPreparationCleanup {
     fun prepare(
         room: Long,
-        payloadMetadata: List<ImagePayloadMetadata>,
+        imageBytesList: List<ByteArray>,
     ): PreparedImages {
         val validatedPayloads =
-            validateImagePayloads(
-                payloadMetadata.map { it.base64 },
-                imageDecoder = imageDecoder,
+            validateImageBytesPayload(
+                imageBytesList = imageBytesList,
                 maxImagesPerRequest = maxImagesPerRequest,
                 maxTotalBytes = maxTotalBytes,
             )
@@ -34,7 +31,7 @@ internal class MediaPreparationService(
 
         try {
             validatedPayloads.forEach { payload ->
-                val imageFile = saveImage(payload.bytes, imageDir)
+                val imageFile = saveImage(payload, imageDir)
                 createdFiles.add(imageFile)
                 if (imageMediaScanEnabled) {
                     mediaScanner(imageFile)

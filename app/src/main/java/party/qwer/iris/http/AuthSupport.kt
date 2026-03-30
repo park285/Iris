@@ -15,13 +15,27 @@ internal class AuthSupport(
     private val authenticator: RequestAuthenticator,
     private val config: ConfigProvider,
 ) {
-    suspend fun requireBotToken(
+    suspend fun requireInboundSignature(
         call: ApplicationCall,
+        method: String,
+        bodySha256Hex: String = party.qwer.iris.sha256Hex(ByteArray(0)),
+    ): Boolean = requireSignature(call, SecretRole.INBOUND, method, bodySha256Hex)
+
+    suspend fun requireBotControlSignature(
+        call: ApplicationCall,
+        method: String,
+        bodySha256Hex: String = party.qwer.iris.sha256Hex(ByteArray(0)),
+    ): Boolean = requireSignature(call, SecretRole.BOT_CONTROL, method, bodySha256Hex)
+
+    private suspend fun requireSignature(
+        call: ApplicationCall,
+        role: SecretRole,
         method: String,
         bodySha256Hex: String = party.qwer.iris.sha256Hex(ByteArray(0)),
     ): Boolean {
         val result =
             authenticateRequest(
+                role = role,
                 method = method,
                 path = canonicalRequestTarget(call.request.path(), call.request.queryParameters),
                 bodySha256Hex = bodySha256Hex,
@@ -32,7 +46,7 @@ internal class AuthSupport(
         return when (result) {
             AuthResult.AUTHORIZED -> true
             AuthResult.SERVICE_UNAVAILABLE -> {
-                IrisLogger.error("[AuthSupport] Refusing protected request because bot token is not configured")
+                IrisLogger.error("[AuthSupport] Refusing protected request because ${role.description} is not configured")
                 call.respond(HttpStatusCode.ServiceUnavailable, CommonErrorResponse(message = "service unavailable"))
                 false
             }
@@ -44,6 +58,7 @@ internal class AuthSupport(
     }
 
     fun authenticateRequest(
+        role: SecretRole,
         method: String,
         path: String,
         bodySha256Hex: String,
@@ -56,9 +71,26 @@ internal class AuthSupport(
             path = path,
             body = "",
             bodySha256Hex = bodySha256Hex,
-            expectedSecret = config.inboundSigningSecret,
+            expectedSecret = role.resolveSecret(config),
             timestampHeader = timestampHeader,
             nonceHeader = nonceHeader,
             signatureHeader = signatureHeader,
         )
+
+    internal enum class SecretRole(
+        val description: String,
+        private val secretSelector: (ConfigProvider) -> String,
+    ) {
+        INBOUND(
+            description = "inbound signing secret",
+            secretSelector = ConfigProvider::inboundSigningSecret,
+        ),
+        BOT_CONTROL(
+            description = "bot control token",
+            secretSelector = ConfigProvider::botControlToken,
+        ),
+        ;
+
+        fun resolveSecret(config: ConfigProvider): String = secretSelector(config)
+    }
 }

@@ -7,6 +7,7 @@ import party.qwer.iris.delivery.webhook.RoutingGateway
 import party.qwer.iris.model.MemberEvent
 import party.qwer.iris.model.NicknameChangeEvent
 import party.qwer.iris.model.ProfileChangeEvent
+import party.qwer.iris.model.RoomEvent
 import party.qwer.iris.model.RoleChangeEvent
 
 open class SnapshotEventEmitter(
@@ -19,7 +20,7 @@ open class SnapshotEventEmitter(
             explicitNulls = false
         }
 
-    open fun emit(events: List<Any>) {
+    open fun emit(events: List<RoomEvent>) {
         for (event in events) {
             val (jsonStr, eventChatId) =
                 when (event) {
@@ -30,7 +31,6 @@ open class SnapshotEventEmitter(
                         serverJson.encodeToString(RoleChangeEvent.serializer(), event) to event.chatId
                     is ProfileChangeEvent ->
                         serverJson.encodeToString(ProfileChangeEvent.serializer(), event) to event.chatId
-                    else -> continue
                 }
             bus.emit(jsonStr)
             routingGateway?.route(

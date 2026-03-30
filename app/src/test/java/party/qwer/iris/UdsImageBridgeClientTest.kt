@@ -11,7 +11,7 @@ import kotlin.test.assertTrue
 
 class UdsImageBridgeClientTest {
     @Test
-    fun `warns when bridge token is blank`() {
+    fun `warns when bridge token is blank in development mode`() {
         val originalErr = System.err
         val capturedErr = ByteArrayOutputStream()
         try {
@@ -19,12 +19,34 @@ class UdsImageBridgeClientTest {
 
             UdsImageBridgeClient(
                 bridgeToken = "",
+                securityModeRaw = "development",
                 socketFactory = { FakeBridgeSocket() },
             )
 
             val output = capturedErr.toString(Charsets.UTF_8.name())
-            assertTrue(output.contains("IRIS_BRIDGE_TOKEN is not configured; bridge requests will be unauthenticated"))
+            assertTrue(output.contains("IRIS_BRIDGE_TOKEN is not configured; bridge requests will be unauthenticated in development mode"))
             assertTrue(output.contains("level=WARN"))
+        } finally {
+            System.setErr(originalErr)
+        }
+    }
+
+    @Test
+    fun `logs error when bridge token is blank in production mode`() {
+        val originalErr = System.err
+        val capturedErr = ByteArrayOutputStream()
+        try {
+            System.setErr(PrintStream(capturedErr, true, Charsets.UTF_8.name()))
+
+            UdsImageBridgeClient(
+                bridgeToken = "",
+                securityModeRaw = null,
+                socketFactory = { FakeBridgeSocket() },
+            )
+
+            val output = capturedErr.toString(Charsets.UTF_8.name())
+            assertTrue(output.contains("IRIS_BRIDGE_TOKEN must be configured in production mode"))
+            assertTrue(output.contains("level=ERROR"))
         } finally {
             System.setErr(originalErr)
         }

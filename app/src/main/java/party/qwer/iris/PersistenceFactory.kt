@@ -5,8 +5,10 @@ import party.qwer.iris.persistence.AndroidSqliteDriver
 import party.qwer.iris.persistence.BatchedCheckpointJournal
 import party.qwer.iris.persistence.CheckpointJournal
 import party.qwer.iris.persistence.IrisDatabaseSchema
+import party.qwer.iris.persistence.SnapshotStateStore
 import party.qwer.iris.persistence.SqliteCheckpointJournal
 import party.qwer.iris.persistence.SqliteDriver
+import party.qwer.iris.persistence.SqliteSnapshotStateStore
 import party.qwer.iris.persistence.SqliteWebhookDeliveryStore
 import party.qwer.iris.persistence.WebhookDeliveryStore
 import java.io.File
@@ -15,6 +17,7 @@ internal data class PersistenceRuntime(
     val driver: SqliteDriver,
     val webhookOutboxStore: WebhookDeliveryStore,
     val checkpointJournal: CheckpointJournal,
+    val snapshotStateStore: SnapshotStateStore,
 )
 
 internal object PersistenceFactory {
@@ -50,6 +53,7 @@ internal object PersistenceFactory {
                     flushIntervalMs = checkpointFlushIntervalMs,
                     clock = clock,
                 ),
+            snapshotStateStore = SqliteSnapshotStateStore(driver, clock),
         )
     }
 }

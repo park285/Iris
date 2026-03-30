@@ -89,6 +89,21 @@ class SqliteWebhookDeliveryStore(
         )
     }
 
+    override fun releaseClaim(
+        id: Long,
+        claimToken: String,
+        nextAttemptAt: Long,
+        reason: String?,
+    ) {
+        db.update(
+            """UPDATE ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE}
+               SET status = 'RETRY',
+                   next_attempt_at = ?, last_error = ?, claim_token = NULL, claimed_at = NULL, updated_at = ?
+               WHERE id = ? AND claim_token = ?""",
+            listOf(nextAttemptAt, reason, clock(), id, claimToken),
+        )
+    }
+
     override fun markDead(
         id: Long,
         claimToken: String,
@@ -96,7 +111,8 @@ class SqliteWebhookDeliveryStore(
     ) {
         db.update(
             """UPDATE ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE}
-               SET status = 'DEAD', last_error = ?, claim_token = NULL, claimed_at = NULL, updated_at = ?
+               SET status = 'DEAD', attempt_count = attempt_count + 1,
+                   last_error = ?, claim_token = NULL, claimed_at = NULL, updated_at = ?
                WHERE id = ? AND claim_token = ?""",
             listOf(reason, clock(), id, claimToken),
         )

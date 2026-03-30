@@ -1,7 +1,6 @@
 package party.qwer.iris
 
 import io.ktor.http.HttpStatusCode
-import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import party.qwer.iris.model.ReplyRequest
 import party.qwer.iris.model.ReplyType
@@ -28,7 +27,7 @@ internal fun replyAdmissionHttpStatus(status: ReplyAdmissionStatus): HttpStatusC
 
 internal fun supportsThreadReply(replyType: ReplyType): Boolean = replyType == ReplyType.TEXT || replyType == ReplyType.IMAGE || replyType == ReplyType.IMAGE_MULTIPLE || replyType == ReplyType.MARKDOWN
 
-internal fun admitReply(
+internal suspend fun admitReply(
     replyRequest: ReplyRequest,
     roomId: Long,
     notificationReferer: String,
@@ -38,7 +37,7 @@ internal fun admitReply(
     requestId: String? = null,
 ): ReplyAdmissionResult = dispatchReply(replyRequest, roomId, notificationReferer, threadId, threadScope, messageSender, requestId)
 
-private fun dispatchReply(
+private suspend fun dispatchReply(
     replyRequest: ReplyRequest,
     roomId: Long,
     notificationReferer: String,
@@ -48,21 +47,12 @@ private fun dispatchReply(
     requestId: String? = null,
 ): ReplyAdmissionResult =
     when (replyRequest.type) {
-        ReplyType.TEXT -> messageSender.sendMessage(notificationReferer, roomId, extractTextPayload(replyRequest), threadId, threadScope, requestId)
-        ReplyType.IMAGE -> messageSender.sendNativePhoto(roomId, extractSingleImagePayload(replyRequest), threadId, threadScope, requestId)
-        ReplyType.IMAGE_MULTIPLE -> messageSender.sendNativeMultiplePhotos(roomId, extractImagePayloads(replyRequest), threadId, threadScope, requestId)
-        ReplyType.MARKDOWN -> messageSender.sendReplyMarkdown(roomId, extractTextPayload(replyRequest), threadId, threadScope, requestId)
+        ReplyType.TEXT -> messageSender.sendMessageSuspend(notificationReferer, roomId, extractTextPayload(replyRequest), threadId, threadScope, requestId)
+        ReplyType.IMAGE, ReplyType.IMAGE_MULTIPLE -> throw ApiRequestException("image types require multipart/form-data")
+        ReplyType.MARKDOWN -> messageSender.sendReplyMarkdownSuspend(roomId, extractTextPayload(replyRequest), threadId, threadScope, requestId)
     }
 
 internal fun extractTextPayload(replyRequest: ReplyRequest): String =
-    runCatching { replyRequest.data.jsonPrimitive.content }
+    runCatching { replyRequest.data?.jsonPrimitive?.content }
         .getOrElse { throw ApiRequestException("text replies require string data") }
-
-private fun extractSingleImagePayload(replyRequest: ReplyRequest): String = extractTextPayload(replyRequest)
-
-internal fun extractImagePayloads(replyRequest: ReplyRequest): List<String> =
-    runCatching {
-        replyRequest.data.jsonArray.map { element -> element.jsonPrimitive.content }
-    }.getOrElse {
-        throw ApiRequestException("image_multiple replies require a JSON array of base64 strings")
-    }
+        ?: throw ApiRequestException("text replies require string data")

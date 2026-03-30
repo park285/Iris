@@ -7,8 +7,8 @@ class KakaoDB(
     private val metadataStore = IrisMetadataStore()
     private val runtime = KakaoDbRuntime(config)
     private val identityReader = KakaoIdentityReader(runtime, config)
-    private val adminQueryService = AdminQueryService(runtime)
-    private val chatLogReader = KakaoChatLogReader(runtime, identityReader, adminQueryService)
+    private val typedQueryExecutor = KakaoTypedQueryExecutor(runtime)
+    private val chatLogReader = KakaoChatLogReader(runtime, identityReader)
 
     override fun pollChatLogsAfter(
         afterLogId: Long,
@@ -21,11 +21,11 @@ class KakaoDB(
 
     override fun latestLogId(): Long = chatLogReader.latestLogId()
 
-    override fun executeQuery(
+    internal fun executeTypedQuery(
         sqlQuery: String,
         bindArgs: Array<String?>?,
         maxRows: Int,
-    ): QueryExecutionResult = chatLogReader.executeQuery(sqlQuery, bindArgs, maxRows)
+    ): QueryExecutionResult = typedQueryExecutor.execute(sqlQuery, bindArgs, maxRows)
 
     override fun upsertObservedProfile(identity: KakaoNotificationIdentity) = metadataStore.upsertObservedProfile(identity)
 
@@ -71,7 +71,6 @@ class KakaoDB(
     )
 
     companion object {
-        const val DEFAULT_QUERY_RESULT_LIMIT = 500
         const val DEFAULT_POLL_BATCH_SIZE = 100
     }
 }

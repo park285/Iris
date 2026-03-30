@@ -3,6 +3,7 @@ package party.qwer.iris
 import party.qwer.iris.persistence.IrisDatabaseSchema
 import party.qwer.iris.persistence.JdbcSqliteHelper
 import party.qwer.iris.persistence.PendingWebhookDelivery
+import party.qwer.iris.persistence.PersistedSnapshotState
 import party.qwer.iris.snapshot.RoomSnapshotReadResult
 import party.qwer.iris.storage.ChatId
 import party.qwer.iris.storage.UserId
@@ -59,6 +60,11 @@ class AppRuntimeWiringTest {
                 CHAT_LOGS_STREAM,
             ),
         )
+        runtime.snapshotStateStore.saveMissing(ChatId(77L))
+        assertEquals(
+            PersistedSnapshotState.Missing(ChatId(77L)),
+            runtime.snapshotStateStore.loadAll()[ChatId(77L)],
+        )
     }
 
     @Test
@@ -95,11 +101,13 @@ class AppRuntimeWiringTest {
                     stopImageDeleter = { calls += "imageDeleter" },
                     closeWebhookOutbox = { calls += "webhookOutbox" },
                     closeIngress = { calls += "ingress" },
+                    closeSseEventBus = { calls += "sseEventBus" },
                     cancelSnapshotScope = { calls += "snapshotScope" },
                     shutdownReplyService = { calls += "replyService" },
                     stopBridgeHealthCache = { calls += "bridgeHealthCache" },
                     persistConfig = { calls += "persistConfig" },
                     flushCheckpointJournal = { calls += "flushCheckpoint" },
+                    closeSnapshotStateStore = { calls += "closeSnapshotStateStore" },
                     closePersistenceDriver = { calls += "closePersistenceDriver" },
                     closeKakaoDb = { calls += "closeKakaoDb" },
                 ),
@@ -108,7 +116,9 @@ class AppRuntimeWiringTest {
         RuntimeBuilders.runShutdownPlan(plan)
 
         assertTrue(calls.indexOf("flushCheckpoint") < calls.indexOf("closePersistenceDriver"))
+        assertTrue(calls.indexOf("closeSnapshotStateStore") < calls.indexOf("closePersistenceDriver"))
         assertTrue(calls.indexOf("closePersistenceDriver") < calls.indexOf("closeKakaoDb"))
+        assertTrue(calls.indexOf("ingress") < calls.indexOf("sseEventBus"))
         assertNotNull(plan.firstOrNull { it.name == "flushCheckpointJournal" })
     }
 

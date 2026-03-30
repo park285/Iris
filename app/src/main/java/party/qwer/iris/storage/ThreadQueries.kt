@@ -12,34 +12,38 @@ class ThreadQueries(
      * 지정된 chatId의 스레드 목록을 집계해 반환한다.
      * thread_id IS NOT NULL인 행을 GROUP BY thread_id로 집계하고,
      * MAX(created_at) 기준 최신순으로 THREAD_LIST_LIMIT개 반환한다.
-     * 원본 메시지는 MIN(id) 서브쿼리로 thread를 시작한 첫 번째 행에서 가져온다.
+     * 원본 메시지는 집계 단계에서 구한 MIN(id)를 이용해 한 번만 조인한다.
      */
     fun listThreads(chatId: ChatId): List<ThreadRow> =
         db.query(
             QuerySpec(
                 sql =
                     """
+                    WITH thread_stats AS (
+                        SELECT
+                            thread_id,
+                            COUNT(*) AS message_count,
+                            MAX(created_at) AS last_active_at,
+                            MIN(id) AS origin_id
+                        FROM chat_logs
+                        WHERE chat_id = ? AND thread_id IS NOT NULL
+                        GROUP BY thread_id
+                    )
                     SELECT
-                        cl.thread_id,
-                        COUNT(*) AS message_count,
-                        MAX(cl.created_at) AS last_active_at,
+                        ts.thread_id,
+                        ts.message_count,
+                        ts.last_active_at,
                         origin.message AS origin_message,
                         origin.user_id AS origin_user_id,
                         origin.v AS origin_v
-                    FROM chat_logs cl
+                    FROM thread_stats ts
                     LEFT JOIN chat_logs origin
-                        ON origin.id = (
-                            SELECT MIN(id) FROM chat_logs
-                            WHERE chat_id = ? AND thread_id = cl.thread_id
-                        )
-                    WHERE cl.chat_id = ? AND cl.thread_id IS NOT NULL
-                    GROUP BY cl.thread_id
-                    ORDER BY last_active_at DESC
+                        ON origin.id = ts.origin_id
+                    ORDER BY ts.last_active_at DESC
                     LIMIT ?
                     """.trimIndent(),
                 bindArgs =
                     listOf(
-                        SqlArg.LongVal(chatId.value),
                         SqlArg.LongVal(chatId.value),
                         SqlArg.IntVal(THREAD_LIST_LIMIT),
                     ),

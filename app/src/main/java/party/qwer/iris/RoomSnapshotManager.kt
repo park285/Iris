@@ -3,6 +3,7 @@ package party.qwer.iris
 import party.qwer.iris.model.MemberEvent
 import party.qwer.iris.model.NicknameChangeEvent
 import party.qwer.iris.model.ProfileChangeEvent
+import party.qwer.iris.model.RoomEvent
 import party.qwer.iris.model.RoleChangeEvent
 import party.qwer.iris.model.roleCodeToName
 import party.qwer.iris.snapshot.RoomDiffEngine
@@ -11,8 +12,8 @@ open class RoomSnapshotManager : RoomDiffEngine {
     override fun diff(
         prev: RoomSnapshotData,
         curr: RoomSnapshotData,
-    ): List<Any> {
-        val events = mutableListOf<Any>()
+    ): List<RoomEvent> {
+        val events = mutableListOf<RoomEvent>()
         val now = System.currentTimeMillis() / 1000
 
         val joined = curr.memberIds - prev.memberIds
@@ -94,5 +95,35 @@ open class RoomSnapshotManager : RoomDiffEngine {
         }
 
         return events
+    }
+
+    override fun diffMissing(prev: RoomSnapshotData): List<RoomEvent> {
+        val now = System.currentTimeMillis() / 1000
+        return prev.memberIds.map { uid ->
+            MemberEvent(
+                event = "leave",
+                chatId = prev.chatId.value,
+                linkId = prev.linkId?.value,
+                userId = uid.value,
+                nickname = prev.nicknames[uid],
+                estimated = true,
+                timestamp = now,
+            )
+        }
+    }
+
+    override fun diffRestored(curr: RoomSnapshotData): List<RoomEvent> {
+        val now = System.currentTimeMillis() / 1000
+        return curr.memberIds.map { uid ->
+            MemberEvent(
+                event = "join",
+                chatId = curr.chatId.value,
+                linkId = curr.linkId?.value,
+                userId = uid.value,
+                nickname = curr.nicknames[uid],
+                estimated = false,
+                timestamp = now,
+            )
+        }
     }
 }

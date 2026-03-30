@@ -2,12 +2,12 @@
 
 최종 확인: 2026-03-28 KST
 
-이 문서는 Iris의 `/reply-markdown` 및 in-thread `/reply` text가 타는 Kakao share intent 기반 markdown 렌더링 동작을 실측한 결과를 정리한 것입니다.
+이 문서는 Iris의 `POST /reply` `type="markdown"` 및 in-thread `/reply` text가 타는 Kakao share intent 기반 markdown 렌더링 동작을 실측한 결과를 정리한 것입니다.
 코드 경로 설명과 실제 렌더링 결과를 분리해서 기록합니다.
 
 ## 전송 경로 요약
 
-- `/reply-markdown`은 Kakao direct share intent에 `markdown=true`, `markdownParam=true`를 넣어 전송한다.
+- markdown reply는 Kakao direct share intent에 `markdown=true`, `markdownParam=true`를 넣어 전송한다.
 - in-thread `/reply` text도 현재는 같은 share/graft lane을 사용한다.
 - 관련 코드:
   - `app/src/main/java/party/qwer/iris/ReplyMarkdownIntent.kt`
@@ -75,4 +75,4 @@
 - `app/src/main/java/party/qwer/iris/ReplyMarkdownIntent.kt`
   - Kakao direct share intent에 markdown 관련 extra를 넣는다.
 - `app/src/main/java/party/qwer/iris/ReplyService.kt`
-  - `/reply-markdown`과 in-thread `/reply` text가 share 기반 text lane으로 합류한다.
+  - `type="markdown"` reply와 in-thread `/reply` text가 share 기반 text lane으로 합류한다.

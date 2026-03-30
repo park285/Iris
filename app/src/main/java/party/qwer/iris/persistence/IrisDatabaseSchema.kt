@@ -3,6 +3,7 @@ package party.qwer.iris.persistence
 object IrisDatabaseSchema {
     const val WEBHOOK_OUTBOX_TABLE = "webhook_outbox"
     const val CHECKPOINT_TABLE = "checkpoints"
+    const val SNAPSHOT_STATE_TABLE = "snapshot_states"
     private const val SQLITE_JOURNAL_MODE_WAL = "PRAGMA journal_mode=WAL"
     private const val SQLITE_BUSY_TIMEOUT_MS = "PRAGMA busy_timeout=5000"
 
@@ -40,6 +41,16 @@ object IrisDatabaseSchema {
         )
         """.trimIndent()
 
+    private val CREATE_SNAPSHOT_STATE =
+        """
+        CREATE TABLE IF NOT EXISTS $SNAPSHOT_STATE_TABLE (
+            chat_id INTEGER PRIMARY KEY,
+            state TEXT NOT NULL,
+            snapshot_json TEXT,
+            updated_at INTEGER NOT NULL
+        )
+        """.trimIndent()
+
     fun initializeConnection(driver: SqliteDriver) {
         driver.execute(SQLITE_JOURNAL_MODE_WAL)
         driver.execute(SQLITE_BUSY_TIMEOUT_MS)
@@ -54,9 +65,14 @@ object IrisDatabaseSchema {
         driver.execute(CREATE_CHECKPOINT)
     }
 
+    fun createSnapshotStateTable(driver: SqliteDriver) {
+        driver.execute(CREATE_SNAPSHOT_STATE)
+    }
+
     fun createAll(driver: SqliteDriver) {
         initializeConnection(driver)
         createWebhookOutboxTable(driver)
         createCheckpointTable(driver)
+        createSnapshotStateTable(driver)
     }
 }

@@ -2,16 +2,12 @@ package party.qwer.iris
 
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
-import java.util.Base64
 import java.util.UUID
 
-private val base64MimeDecoder = Base64.getMimeDecoder()
 internal const val MAX_IMAGE_PAYLOAD_BYTES = 20 * 1024 * 1024
-internal const val MAX_BASE64_IMAGE_PAYLOAD_LENGTH = MAX_IMAGE_PAYLOAD_BYTES * 4 / 3 + 4
-
-internal fun decodeBase64Image(base64ImageDataString: String): ByteArray = base64MimeDecoder.decode(base64ImageDataString)
 
 internal fun saveImage(
     imageBytes: ByteArray,
@@ -38,6 +34,53 @@ internal fun saveImage(
             StandardCopyOption.REPLACE_EXISTING,
         )
         return targetFile
+    } catch (error: Exception) {
+        tempFile.delete()
+        throw error
+    }
+}
+
+internal fun saveStreamedImage(
+    input: InputStream,
+    outputDir: File,
+): File {
+    val tempFile = File(outputDir, "${UUID.randomUUID()}.upload.tmp")
+    val sample = ArrayList<Byte>(32)
+    try {
+        FileOutputStream(tempFile).use { output ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val read = input.read(buffer)
+                if (read <= 0) {
+                    break
+                }
+                val remainingSampleCapacity = 32 - sample.size
+                if (remainingSampleCapacity > 0) {
+                    repeat(minOf(read, remainingSampleCapacity)) { index ->
+                        sample += buffer[index]
+                    }
+                }
+                output.write(buffer, 0, read)
+            }
+            output.fd.sync()
+        }
+        val extension = detectImageFileExtension(sample.toByteArray())
+        val targetFile = File(outputDir, "${UUID.randomUUID()}.$extension")
+        try {
+            Files.move(
+                tempFile.toPath(),
+                targetFile.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+            )
+            return targetFile
+        } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+            Files.move(
+                tempFile.toPath(),
+                targetFile.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+            return targetFile
+        }
     } catch (error: Exception) {
         tempFile.delete()
         throw error

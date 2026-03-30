@@ -3,10 +3,12 @@ package party.qwer.iris
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import party.qwer.iris.delivery.webhook.WebhookOutboxDispatcher
 import party.qwer.iris.ingress.CommandIngressService
 import party.qwer.iris.persistence.CheckpointJournal
+import party.qwer.iris.persistence.SnapshotStateStore
 import party.qwer.iris.persistence.SqliteDriver
 import party.qwer.iris.persistence.WebhookDeliveryStore
 import party.qwer.iris.snapshot.SnapshotCoordinator
@@ -29,6 +31,7 @@ internal class AppRuntime(
     private lateinit var persistenceDriver: SqliteDriver
     private lateinit var sseEventBus: SseEventBus
     private lateinit var checkpointJournal: CheckpointJournal
+    private lateinit var snapshotStateStore: SnapshotStateStore
     private lateinit var snapshotCoordinator: SnapshotCoordinator
     private lateinit var ingressService: CommandIngressService
     private lateinit var snapshotScope: CoroutineScope
@@ -48,7 +51,7 @@ internal class AppRuntime(
         bridgeClient = UdsImageBridgeClient()
 
         replyService = ReplyRuntimeFactory.create(configManager, bridgeClient).replyService
-        replyService.start()
+        runBlocking { replyService.startSuspend() }
         IrisLogger.info("Message sender thread started")
 
         val storageRuntime = RuntimeBuilders.createStorageRuntime(configManager)
@@ -62,6 +65,7 @@ internal class AppRuntime(
         persistenceDriver = persistenceRuntime.driver
         webhookOutboxStore = persistenceRuntime.webhookOutboxStore
         checkpointJournal = persistenceRuntime.checkpointJournal
+        snapshotStateStore = persistenceRuntime.snapshotStateStore
         webhookOutboxDispatcher = WebhookOutboxDispatcher(configManager, webhookOutboxStore)
         webhookOutboxDispatcher.start()
         sseEventBus = SseEventBus(bufferSize = 100)
@@ -74,6 +78,7 @@ internal class AppRuntime(
                 roomDirectoryQueries = storageRuntime.roomDirectoryQueries,
                 webhookOutboxStore = webhookOutboxStore,
                 sseEventBus = sseEventBus,
+                snapshotStateStore = snapshotStateStore,
             )
         snapshotScope = snapshotRuntime.snapshotScope
         snapshotCoordinator = snapshotRuntime.snapshotCoordinator
@@ -121,7 +126,6 @@ internal class AppRuntime(
                 null
             } else {
                 IrisServer(
-                    kakaoDb,
                     configManager,
                     notificationReferer,
                     replyService,
@@ -154,8 +158,9 @@ internal class AppRuntime(
                         stopImageDeleter = imageDeleter::stopDeletion,
                         closeWebhookOutbox = webhookOutboxDispatcher::close,
                         closeIngress = observerHelper::close,
+                        closeSseEventBus = sseEventBus::close,
                         cancelSnapshotScope = snapshotScope::cancel,
-                        shutdownReplyService = replyService::shutdown,
+                        shutdownReplyService = { runBlocking { replyService.shutdownSuspend() } },
                         stopBridgeHealthCache = bridgeHealthCache::stop,
                         persistConfig = {
                             if (!configManager.saveConfigNow()) {
@@ -163,6 +168,7 @@ internal class AppRuntime(
                             }
                         },
                         flushCheckpointJournal = checkpointJournal::flushNow,
+                        closeSnapshotStateStore = snapshotStateStore::close,
                         closePersistenceDriver = persistenceDriver::close,
                         closeKakaoDb = kakaoDb::closeConnection,
                     ),

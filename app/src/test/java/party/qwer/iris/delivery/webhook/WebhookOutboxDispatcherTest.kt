@@ -1,6 +1,12 @@
 package party.qwer.iris.delivery.webhook
 
 import com.sun.net.httpserver.HttpServer
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import party.qwer.iris.ConfigManager
 import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
 import party.qwer.iris.persistence.ClaimedDelivery
@@ -16,11 +22,11 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
-import java.util.concurrent.locks.ReentrantLock
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class WebhookOutboxDispatcherTest {
     private val fakeClock = AtomicLong(1_000_000L)
 
@@ -31,7 +37,7 @@ class WebhookOutboxDispatcherTest {
         val port = reservePort()
         config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, "http://127.0.0.1:$port/webhook/iris")
 
-        val retryLatch = CountDownLatch(1)
+        val releaseLatch = CountDownLatch(1)
         val store =
             RecordingWebhookDeliveryStore(
                 claimedEntries =
@@ -40,7 +46,7 @@ class WebhookOutboxDispatcherTest {
                         claimedEntry(id = 2L, roomId = 1L, messageId = "msg-2"),
                         claimedEntry(id = 3L, roomId = 1L, messageId = "msg-3"),
                     ),
-                onRetry = { retryLatch.countDown() },
+                onRelease = { releaseLatch.countDown() },
             )
 
         val server =
@@ -66,7 +72,7 @@ class WebhookOutboxDispatcherTest {
                 clock = fakeClock::get,
             ).use { dispatcher ->
                 dispatcher.start()
-                assertTrue(retryLatch.await(5, TimeUnit.SECONDS))
+                assertTrue(releaseLatch.await(5, TimeUnit.SECONDS))
             }
         } finally {
             server.stop(0)
@@ -75,64 +81,122 @@ class WebhookOutboxDispatcherTest {
             Files.deleteIfExists(Path.of(configPath))
         }
 
-        assertTrue(store.retriedIds.isNotEmpty())
-        assertTrue(store.retriedIds.any { it in setOf(2L, 3L) })
-        assertTrue(store.retryReasons.any { it.contains("partition queue saturated") })
+        assertTrue(store.releasedIds.isNotEmpty())
+        assertTrue(store.releasedIds.any { it in setOf(2L, 3L) })
+        assertTrue(store.releaseReasons.any { it.contains("partition queue saturated") })
     }
 
     @Test
-    fun `dispatcher periodically recovers expired claims while running`() {
+    fun `dispatcher periodically recovers expired claims while running`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val configPath = Files.createTempFile("iris-outbox-dispatcher", ".json").toFile().absolutePath
+            val config = ConfigManager(configPath = configPath)
+            val store = RecordingWebhookDeliveryStore(claimedEntries = emptyList())
+            val recoveryInterval = 10_000L
+            val outboxDispatcher =
+                WebhookOutboxDispatcher(
+                    config = config,
+                    store = store,
+                    pollIntervalMs = 25L,
+                    maxClaimBatchSize = 1,
+                    claimRecoveryIntervalMs = recoveryInterval,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            try {
+                outboxDispatcher.start()
+                assertEquals(1, store.recoverCallCount.get())
+                runCurrent()
+                advanceTimeBy(recoveryInterval + 25L)
+                assertEquals(2, store.recoverCallCount.get())
+            } finally {
+                outboxDispatcher.closeSuspend()
+                Files.deleteIfExists(Path.of(configPath))
+            }
+
+            assertEquals(listOf(60_000L, 60_000L), store.recoverOlderThanMs.take(2))
+        }
+
+    @Test
+    fun `dispatcher recovers expired claims immediately on start`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val configPath = Files.createTempFile("iris-outbox-dispatcher", ".json").toFile().absolutePath
+            val config = ConfigManager(configPath = configPath)
+            val store = RecordingWebhookDeliveryStore(claimedEntries = emptyList())
+            val outboxDispatcher =
+                WebhookOutboxDispatcher(
+                    config = config,
+                    store = store,
+                    pollIntervalMs = 1_000L,
+                    maxClaimBatchSize = 1,
+                    claimRecoveryIntervalMs = 30_000L,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            try {
+                outboxDispatcher.start()
+                assertEquals(1, store.recoverCallCount.get())
+                runCurrent()
+                assertEquals(listOf(60_000L), store.recoverOlderThanMs.toList())
+            } finally {
+                outboxDispatcher.closeSuspend()
+                Files.deleteIfExists(Path.of(configPath))
+            }
+        }
+
+    @Test
+    fun `close releases outstanding claims immediately without incrementing attempt`() {
+        val requestStarted = CountDownLatch(1)
+        val releaseLatch = CountDownLatch(1)
+        val port = reservePort()
+        val server =
+            HttpServer.create(InetSocketAddress("127.0.0.1", port), 0).apply {
+                createContext("/webhook/iris") { exchange ->
+                    requestStarted.countDown()
+                    CountDownLatch(1).await(300, TimeUnit.MILLISECONDS)
+                    exchange.sendResponseHeaders(204, -1)
+                    exchange.close()
+                }
+                executor = Executors.newSingleThreadExecutor()
+                start()
+            }
         val configPath = Files.createTempFile("iris-outbox-dispatcher", ".json").toFile().absolutePath
         val config = ConfigManager(configPath = configPath)
-        val store = RecordingWebhookDeliveryStore(claimedEntries = emptyList())
-        val recoveryInterval = 10_000L
-
-        try {
+        config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, "http://127.0.0.1:$port/webhook/iris")
+        val store =
+            RecordingWebhookDeliveryStore(
+                claimedEntries = listOf(claimedEntry(id = 1L, roomId = 1L, messageId = "msg-1")),
+                onRelease = { releaseLatch.countDown() },
+            )
+        val outboxDispatcher =
             WebhookOutboxDispatcher(
                 config = config,
                 store = store,
+                transportOverride = "http1",
                 pollIntervalMs = 25L,
                 maxClaimBatchSize = 1,
-                claimRecoveryIntervalMs = recoveryInterval,
                 clock = fakeClock::get,
-            ).use { dispatcher ->
-                dispatcher.start()
-                // start()에서 즉시 1회 회수 완료, 폴링 루프가 clock 기반으로 다음 회수를 결정
-                assertTrue(store.awaitRecoveries(expectedCalls = 1, timeoutMs = 500L))
-                // 시계를 recoveryInterval 이상으로 전진시켜 두 번째 회수를 유발
-                fakeClock.addAndGet(recoveryInterval + 1)
-                assertTrue(store.awaitRecoveries(expectedCalls = 2, timeoutMs = 500L))
-            }
-        } finally {
-            Files.deleteIfExists(Path.of(configPath))
-        }
-
-        assertTrue(store.recoverCallCount.get() >= 2)
-        assertEquals(listOf(60_000L, 60_000L), store.recoverOlderThanMs.take(2))
-    }
-
-    @Test
-    fun `dispatcher recovers expired claims immediately on start`() {
-        val configPath = Files.createTempFile("iris-outbox-dispatcher", ".json").toFile().absolutePath
-        val config = ConfigManager(configPath = configPath)
-        val store = RecordingWebhookDeliveryStore(claimedEntries = emptyList())
+            )
 
         try {
-            WebhookOutboxDispatcher(
-                config = config,
-                store = store,
-                pollIntervalMs = 1_000L,
-                maxClaimBatchSize = 1,
-                claimRecoveryIntervalMs = 30_000L,
-                clock = fakeClock::get,
-            ).use { dispatcher ->
-                dispatcher.start()
-                assertEquals(1, store.recoverCallCount.get())
-                assertEquals(listOf(60_000L), store.recoverOlderThanMs.toList())
-            }
+            outboxDispatcher.start()
+            assertTrue(requestStarted.await(5, TimeUnit.SECONDS), "dispatcher should start processing claimed entry")
+            runBlocking { outboxDispatcher.closeSuspend() }
+            assertTrue(releaseLatch.await(5, TimeUnit.SECONDS), "dispatcher should release claim during shutdown")
         } finally {
+            server.stop(0)
+            (server.executor as? java.util.concurrent.ExecutorService)
+                ?.shutdownNow()
             Files.deleteIfExists(Path.of(configPath))
         }
+
+        assertEquals(listOf(1L), store.releasedIds.toList())
+        assertTrue(store.releaseReasons.contains("dispatcher shutdown"))
+        assertTrue(store.retriedIds.isEmpty(), "graceful close should not increment retry attempt")
     }
 
     private fun claimedEntry(
@@ -159,12 +223,13 @@ class WebhookOutboxDispatcherTest {
 private class RecordingWebhookDeliveryStore(
     private val claimedEntries: List<ClaimedDelivery>,
     private val onRetry: () -> Unit = {},
+    private val onRelease: () -> Unit = {},
 ) : WebhookDeliveryStore {
     private var claimed = false
-    private val recoveryLock = ReentrantLock()
-    private val recoveryCondition = recoveryLock.newCondition()
     val retriedIds = CopyOnWriteArrayList<Long>()
     val retryReasons = CopyOnWriteArrayList<String>()
+    val releasedIds = CopyOnWriteArrayList<Long>()
+    val releaseReasons = CopyOnWriteArrayList<String>()
     val recoverOlderThanMs = CopyOnWriteArrayList<Long>()
     val recoverCallCount = AtomicInteger(0)
 
@@ -198,37 +263,22 @@ private class RecordingWebhookDeliveryStore(
         reason: String?,
     ) {}
 
+    override fun releaseClaim(
+        id: Long,
+        claimToken: String,
+        nextAttemptAt: Long,
+        reason: String?,
+    ) {
+        releasedIds += id
+        releaseReasons += reason.orEmpty()
+        onRelease()
+    }
+
     override fun recoverExpiredClaims(olderThanMs: Long): Int {
         recoverOlderThanMs += olderThanMs
         recoverCallCount.incrementAndGet()
-        recoveryLock.lock()
-        try {
-            recoveryCondition.signalAll()
-        } finally {
-            recoveryLock.unlock()
-        }
         return 0
     }
 
     override fun close() {}
-
-    fun awaitRecoveries(
-        expectedCalls: Int,
-        timeoutMs: Long,
-    ): Boolean {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        recoveryLock.lock()
-        try {
-            while (recoverCallCount.get() < expectedCalls) {
-                val remaining = deadline - System.currentTimeMillis()
-                if (remaining <= 0L) {
-                    break
-                }
-                recoveryCondition.await(remaining, TimeUnit.MILLISECONDS)
-            }
-        } finally {
-            recoveryLock.unlock()
-        }
-        return recoverCallCount.get() >= expectedCalls
-    }
 }

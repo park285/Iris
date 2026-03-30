@@ -7,9 +7,7 @@ import io.ktor.server.request.receiveChannel
 import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readAvailable
 import party.qwer.iris.requestRejected
-import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
-import java.io.InputStream
 import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
@@ -27,6 +25,7 @@ internal suspend fun readProtectedBody(
         bodyChannel = call.receiveChannel(),
         declaredContentLength = call.request.headers[HttpHeaders.ContentLength]?.toLongOrNull(),
         maxBodyBytes = maxBodyBytes,
+        bufferingPolicy = RequestBodyBufferingPolicy.fromEnv(),
     )
 
 internal suspend fun readBodyWithStreamingDigest(
@@ -59,9 +58,9 @@ internal suspend fun readBodyWithStreamingDigest(
         }
 
         val hexDigest = digest.digest().joinToString("") { byte -> "%02x".format(byte) }
-        return RequestBodyHandle(
-            storage = requestBodySink.detachStorage(),
+        return requestBodySink.detachHandle(
             sha256Hex = hexDigest,
+            sizeBytes = totalRead.toLong(),
         )
     } catch (error: Throwable) {
         requestBodySink.close()
@@ -89,18 +88,23 @@ private class RequestBodySink(
         totalBufferedBytes = nextTotalBufferedBytes
     }
 
-    fun readUtf8Body(): String = storage.readUtf8Body()
-
-    fun detachStorage(): RequestBodyStorage =
+    fun detachHandle(
+        sha256Hex: String,
+        sizeBytes: Long,
+    ): RequestBodyHandle =
         storage.also {
             storage = DetachedRequestBodyStorage
-        }
+        }.toHandle(
+            sha256Hex = sha256Hex,
+            sizeBytes = sizeBytes,
+        )
 
     override fun close() {
         storage.close()
     }
 
     private fun spillToDisk(memoryStorage: InMemoryRequestBodyStorage): RequestBodyStorage {
+        Files.createDirectories(policy.spillDirectory)
         val spillPath =
             Files.createTempFile(
                 policy.spillDirectory,
@@ -138,6 +142,32 @@ internal data class RequestBodyBufferingPolicy(
     init {
         require(maxInMemoryBytes > 0) { "maxInMemoryBytes must be positive" }
     }
+
+    companion object {
+        private const val MAX_IN_MEMORY_ENV = "IRIS_REQUEST_BODY_MAX_IN_MEMORY_BYTES"
+        private const val SPILL_DIR_ENV = "IRIS_REQUEST_BODY_SPILL_DIR"
+
+        fun fromEnv(
+            env: Map<String, String> = System.getenv(),
+            defaultTmpDir: String = System.getProperty("java.io.tmpdir") ?: ".",
+        ): RequestBodyBufferingPolicy {
+            val configuredMaxInMemoryBytes =
+                env[MAX_IN_MEMORY_ENV]
+                    ?.trim()
+                    ?.toIntOrNull()
+                    ?.takeIf { it > 0 }
+                    ?: MAX_IN_MEMORY_BODY_BYTES
+            val configuredSpillDirectory =
+                env[SPILL_DIR_ENV]
+                    ?.trim()
+                    .orEmpty()
+                    .ifBlank { defaultTmpDir }
+            return RequestBodyBufferingPolicy(
+                maxInMemoryBytes = configuredMaxInMemoryBytes,
+                spillDirectory = java.nio.file.Paths.get(configuredSpillDirectory),
+            )
+        }
+    }
 }
 
 internal interface RequestBodyStorage : AutoCloseable {
@@ -147,9 +177,10 @@ internal interface RequestBodyStorage : AutoCloseable {
         length: Int,
     )
 
-    fun readUtf8Body(): String
-
-    fun openInputStream(): InputStream
+    fun toHandle(
+        sha256Hex: String,
+        sizeBytes: Long,
+    ): RequestBodyHandle
 }
 
 private class InMemoryRequestBodyStorage(
@@ -167,9 +198,10 @@ private class InMemoryRequestBodyStorage(
 
     fun toByteArray(): ByteArray = buffer.toByteArray()
 
-    override fun readUtf8Body(): String = buffer.toString(Charsets.UTF_8.name())
-
-    override fun openInputStream(): InputStream = ByteArrayInputStream(buffer.toByteArray())
+    override fun toHandle(
+        sha256Hex: String,
+        sizeBytes: Long,
+    ): RequestBodyHandle = InMemoryRequestBodyHandle(buffer.toByteArray(), sha256Hex)
 
     override fun close() = Unit
 }
@@ -188,14 +220,16 @@ private class SpillFileRequestBodyStorage(
         output.write(bytes, offset, length)
     }
 
-    override fun readUtf8Body(): String {
+    override fun toHandle(
+        sha256Hex: String,
+        sizeBytes: Long,
+    ): RequestBodyHandle {
         closeWriter()
-        return Files.newBufferedReader(path, Charsets.UTF_8).use { reader -> reader.readText() }
-    }
-
-    override fun openInputStream(): InputStream {
-        closeWriter()
-        return Files.newInputStream(path)
+        return SpillFileRequestBodyHandle(
+            path = path,
+            sizeBytes = sizeBytes,
+            sha256Hex = sha256Hex,
+        )
     }
 
     override fun close() {
@@ -218,9 +252,10 @@ private object DetachedRequestBodyStorage : RequestBodyStorage {
         length: Int,
     ) = error("detached storage cannot be written")
 
-    override fun readUtf8Body(): String = error("detached storage cannot be read")
-
-    override fun openInputStream(): InputStream = error("detached storage cannot be opened")
+    override fun toHandle(
+        sha256Hex: String,
+        sizeBytes: Long,
+    ): RequestBodyHandle = error("detached storage cannot create a handle")
 
     override fun close() = Unit
 }

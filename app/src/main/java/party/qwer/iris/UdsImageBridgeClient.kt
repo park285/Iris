@@ -2,6 +2,7 @@ package party.qwer.iris
 
 import android.net.LocalSocket
 import android.net.LocalSocketAddress
+import party.qwer.iris.ImageBridgeProtocol
 import party.qwer.iris.model.ImageBridgeDiscoveryHook
 import party.qwer.iris.model.ImageBridgeHealthCheck
 import party.qwer.iris.model.ImageBridgeHealthResult
@@ -82,11 +83,16 @@ internal class UdsImageBridgeClient(
     private val connectTimeoutMs: Int = 5_000,
     private val readTimeoutMs: Int = 30_000,
     private val bridgeToken: String = System.getenv("IRIS_BRIDGE_TOKEN") ?: "",
+    private val securityModeRaw: String? = System.getenv("IRIS_BRIDGE_SECURITY_MODE"),
     private val socketFactory: () -> BridgeSocket = { AndroidBridgeSocket() },
 ) {
     init {
         if (bridgeToken.isBlank()) {
-            IrisLogger.warn("[UdsImageBridgeClient] IRIS_BRIDGE_TOKEN is not configured; bridge requests will be unauthenticated")
+            if (isProductionSecurityMode(securityModeRaw)) {
+                IrisLogger.error("[UdsImageBridgeClient] IRIS_BRIDGE_TOKEN must be configured in production mode")
+            } else {
+                IrisLogger.warn("[UdsImageBridgeClient] IRIS_BRIDGE_TOKEN is not configured; bridge requests will be unauthenticated in development mode")
+            }
         }
     }
 
@@ -218,4 +224,12 @@ internal class UdsImageBridgeClient(
                     }.orEmpty(),
         )
     }
+
+    private fun isProductionSecurityMode(raw: String?): Boolean =
+        when (raw?.trim()?.lowercase()) {
+            "development",
+            "dev",
+            -> false
+            else -> true
+        }
 }

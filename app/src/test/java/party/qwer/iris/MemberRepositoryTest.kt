@@ -134,6 +134,38 @@ class MemberRepositoryTest {
     }
 
     @Test
+    fun `roomSummary resolves non open room metadata`() {
+        val repo =
+            buildRepoFromLegacy(
+                executeQueryTyped =
+                    legacyQuery { sql, args, _ ->
+                        when {
+                            sql.contains("FROM chat_rooms WHERE id = ?") && args?.firstOrNull() == "42" ->
+                                listOf(
+                                    mapOf(
+                                        "id" to "42",
+                                        "type" to "DirectChat",
+                                        "link_id" to null,
+                                        "active_members_count" to "1",
+                                        "meta" to """[{"type":"3","content":"Room Title"}]""",
+                                        "members" to "[2]",
+                                        "blinded_member_ids" to null,
+                                    ),
+                                )
+                            else -> emptyList()
+                        }
+                    },
+            )
+
+        val summary = repo.roomSummary(42L)
+
+        requireNotNull(summary)
+        assertEquals(42L, summary.chatId)
+        assertEquals("DirectChat", summary.type)
+        assertEquals("Room Title", summary.linkName)
+    }
+
+    @Test
     fun `roomStats keeps totals before top member limit`() {
         val chatId = 100L
         val repo =

@@ -8,6 +8,7 @@ import party.qwer.iris.delivery.webhook.RoutingGateway
 import party.qwer.iris.delivery.webhook.RoutingResult
 import party.qwer.iris.ingress.CommandIngressService
 import party.qwer.iris.model.MemberEvent
+import party.qwer.iris.model.RoomEvent
 import party.qwer.iris.persistence.CheckpointJournal
 import party.qwer.iris.snapshot.RoomDiffEngine
 import party.qwer.iris.snapshot.RoomSnapshotReadResult
@@ -63,7 +64,6 @@ class ObserverHelperSnapshotTest {
 
         repeat(3) { bundle.helper.checkChange() }
 
-        waitUntil { diffEngine.diffCalls == 0 }
         assertEquals(0, diffEngine.diffCalls)
     }
 
@@ -96,24 +96,19 @@ class ObserverHelperSnapshotTest {
         val diffEngine = requireNotNull(bundle.diffEngine)
 
         bundle.helper.seedSnapshotCache()
-        waitUntil { bundle.snapshotReader.snapshotCalls.size == 2 }
+        assertEquals(2, bundle.snapshotReader.snapshotCalls.size)
 
         bundle.helper.markRoomDirty(100L)
         bundle.helper.markRoomDirty(100L)
         bundle.helper.markRoomDirty(200L)
         bundle.helper.runDirtySnapshotDiff(maxRoomsPerTick = 1)
 
-        waitUntil { diffEngine.diffedChatIds == listOf(100L) }
-        waitUntil { bundle.bus.replayFrom(0).size == 1 }
-        waitUntil { bundle.routingGateway.commands.map { it.room } == listOf("100") }
         assertEquals(listOf(100L), diffEngine.diffedChatIds)
         assertEquals(1, bundle.bus.replayFrom(0).size)
         assertEquals(listOf("100"), bundle.routingGateway.commands.map { it.room })
 
         bundle.helper.runDirtySnapshotDiff(maxRoomsPerTick = 10)
 
-        waitUntil { diffEngine.diffedChatIds == listOf(100L, 200L) }
-        waitUntil { bundle.bus.replayFrom(0).size == 2 }
         assertEquals(listOf(100L, 200L), diffEngine.diffedChatIds)
         assertEquals(2, bundle.bus.replayFrom(0).size)
         assertEquals(listOf("100", "200"), bundle.routingGateway.commands.map { it.room })
@@ -141,14 +136,12 @@ class ObserverHelperSnapshotTest {
             )
 
         bundle.helper.seedSnapshotCache()
-        waitUntil { bundle.snapshotReader.snapshotCalls.size == 3 }
+        assertEquals(3, bundle.snapshotReader.snapshotCalls.size)
 
         bundle.helper.markAllRoomsDirty()
-        waitUntil { bundle.helper.dirtyRoomCount() == 3 }
         assertEquals(3, bundle.helper.dirtyRoomCount())
 
         bundle.helper.runDirtySnapshotDiff(maxRoomsPerTick = 10)
-        waitUntil { bundle.helper.dirtyRoomCount() == 0 }
         assertEquals(0, bundle.helper.dirtyRoomCount())
     }
 
@@ -182,7 +175,7 @@ class ObserverHelperSnapshotTest {
             )
 
         bundle.helper.seedSnapshotCache()
-        waitUntil { bundle.snapshotReader.snapshotCalls.size == 1 }
+        assertEquals(1, bundle.snapshotReader.snapshotCalls.size)
 
         repeat(3) { bundle.helper.checkChange() }
 
@@ -210,15 +203,13 @@ class ObserverHelperSnapshotTest {
             )
 
         bundle.helper.seedSnapshotCache()
-        waitUntil { bundle.snapshotReader.snapshotCalls.size == 2 }
+        assertEquals(2, bundle.snapshotReader.snapshotCalls.size)
 
         bundle.helper.markRoomDirty(100L)
         bundle.helper.markRoomDirty(200L)
-        waitUntil { bundle.helper.dirtyRoomCount() == 2 }
         assertEquals(2, bundle.helper.dirtyRoomCount())
 
         bundle.helper.runDirtySnapshotDiff(maxRoomsPerTick = 1)
-        waitUntil { bundle.helper.dirtyRoomCount() == 1 }
         assertEquals(1, bundle.helper.dirtyRoomCount())
     }
 
@@ -228,7 +219,7 @@ class ObserverHelperSnapshotTest {
         snapshotReader: SnapshotTestSnapshotReader,
         diffEngine: RoomDiffEngine,
     ): TestObserverHelperBundle {
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         val bus = SseEventBus(bufferSize = 16)
         val routingGateway = SnapshotTestRecordingRoutingGateway()
         val emitter = SnapshotEventEmitter(bus = bus, routingGateway = routingGateway)
@@ -270,16 +261,6 @@ class ObserverHelperSnapshotTest {
             profileImages = profileImages.map { (k, v) -> UserId(k) to v }.toMap(),
         )
 
-    private fun waitUntil(
-        timeoutMs: Long = 1_000L,
-        condition: () -> Boolean,
-    ) = kotlinx.coroutines.runBlocking {
-        kotlinx.coroutines.withTimeout(timeoutMs) {
-            while (!condition()) {
-                kotlinx.coroutines.delay(10L)
-            }
-        }
-    }
 }
 
 private fun snapshotCoordinatorMarkDirty(
@@ -294,7 +275,7 @@ private fun snapshotCoordinatorMarkDirty(
     }
 }
 
-data class TestObserverHelperBundle(
+internal data class TestObserverHelperBundle(
     val helper: ObserverHelper,
     val coordinator: SnapshotCoordinator,
     val bus: SseEventBus,
@@ -303,7 +284,7 @@ data class TestObserverHelperBundle(
     val snapshotReader: SnapshotTestSnapshotReader,
 )
 
-class SnapshotTestCountingDiffEngine : RoomDiffEngine {
+internal class SnapshotTestCountingDiffEngine : RoomDiffEngine {
     @Volatile
     var diffCalls = 0
     val diffedChatIds = CopyOnWriteArrayList<Long>()
@@ -311,7 +292,7 @@ class SnapshotTestCountingDiffEngine : RoomDiffEngine {
     override fun diff(
         prev: RoomSnapshotData,
         curr: RoomSnapshotData,
-    ): List<Any> {
+    ): List<RoomEvent> {
         diffCalls++
         diffedChatIds += curr.chatId.value
         val joined = (curr.memberIds - prev.memberIds).firstOrNull() ?: return emptyList()
@@ -327,9 +308,13 @@ class SnapshotTestCountingDiffEngine : RoomDiffEngine {
             ),
         )
     }
+
+    override fun diffMissing(prev: RoomSnapshotData): List<RoomEvent> = emptyList()
+
+    override fun diffRestored(curr: RoomSnapshotData): List<RoomEvent> = emptyList()
 }
 
-class SnapshotTestRecordingRoutingGateway : RoutingGateway {
+internal class SnapshotTestRecordingRoutingGateway : RoutingGateway {
     val commands = CopyOnWriteArrayList<RoutingCommand>()
 
     override fun route(command: RoutingCommand): RoutingResult {
@@ -359,7 +344,7 @@ private class InMemoryCheckpointJournal(
     override fun load(stream: String): Long? = cursors[stream]
 }
 
-class SnapshotTestChatLogRepository(
+internal class SnapshotTestChatLogRepository(
     var latestLogId: Long = 1L,
     var polledLogs: List<KakaoDB.ChatLogEntry> = emptyList(),
 ) : ChatLogRepository {
@@ -373,15 +358,9 @@ class SnapshotTestChatLogRepository(
     override fun resolveRoomMetadata(chatId: Long): KakaoDB.RoomMetadata = KakaoDB.RoomMetadata()
 
     override fun latestLogId(): Long = latestLogId
-
-    override fun executeQuery(
-        sqlQuery: String,
-        bindArgs: Array<String?>?,
-        maxRows: Int,
-    ): QueryExecutionResult = QueryExecutionResult(columns = emptyList(), rows = emptyList())
 }
 
-class SnapshotTestSnapshotReader(
+internal class SnapshotTestSnapshotReader(
     private val rooms: List<Long>,
     private val snapshots: Map<Long, List<RoomSnapshotData>>,
 ) : RoomSnapshotReader {

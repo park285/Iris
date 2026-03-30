@@ -26,6 +26,7 @@ class ImageBridgeRequestHandlerTest {
             ImageBridgeRequestHandler(
                 imageSender = { request -> captured = request },
                 healthProvider = { readyHealthSnapshot() },
+                handshakeValidator = developmentHandshakeValidator(),
                 pathValidator = BridgeImagePathValidator(rootDir.absolutePath),
             )
 
@@ -60,6 +61,7 @@ class ImageBridgeRequestHandlerTest {
             ImageBridgeRequestHandler(
                 imageSender = { error("should not be called") },
                 healthProvider = { readyHealthSnapshot() },
+                handshakeValidator = developmentHandshakeValidator(),
             )
 
         val response =
@@ -82,6 +84,7 @@ class ImageBridgeRequestHandlerTest {
             ImageBridgeRequestHandler(
                 imageSender = { throw IllegalStateException("send failed") },
                 healthProvider = { readyHealthSnapshot() },
+                handshakeValidator = developmentHandshakeValidator(),
                 pathValidator = BridgeImagePathValidator(rootDir.absolutePath),
                 logError = { _, _, _ -> },
             )
@@ -128,6 +131,7 @@ class ImageBridgeRequestHandlerTest {
                         lastCrashMessage = "bind failed",
                     )
                 },
+                handshakeValidator = developmentHandshakeValidator(),
             )
 
         val response =
@@ -163,6 +167,7 @@ class ImageBridgeRequestHandlerTest {
                         lastCrashMessage = null,
                     )
                 },
+                handshakeValidator = developmentHandshakeValidator(),
                 pathValidator = BridgeImagePathValidator(rootDir.absolutePath),
                 logError = { _, _, _ -> },
             )
@@ -193,6 +198,7 @@ class ImageBridgeRequestHandlerTest {
                         lastCrashMessage = null,
                     )
                 },
+                handshakeValidator = developmentHandshakeValidator(),
                 pathValidator = BridgeImagePathValidator(rootDir.absolutePath),
                 logError = { _, _, _ -> },
             )
@@ -231,6 +237,7 @@ class ImageBridgeRequestHandlerTest {
                         lastCrashMessage = null,
                     )
                 },
+                handshakeValidator = developmentHandshakeValidator(),
                 pathValidator = BridgeImagePathValidator(rootDir.absolutePath),
                 logError = { _, _, _ -> },
             )
@@ -256,6 +263,7 @@ class ImageBridgeRequestHandlerTest {
             ImageBridgeRequestHandler(
                 imageSender = { error("should not be called") },
                 healthProvider = { readyHealthSnapshot() },
+                handshakeValidator = developmentHandshakeValidator(),
                 logError = { _, _, _ -> },
             )
 
@@ -309,6 +317,12 @@ private fun sendImageRequest(
     )
 
 private fun healthRequest(token: String? = null): ImageBridgeProtocol.ImageBridgeRequest = ImageBridgeProtocol.buildHealthRequest(token = token)
+
+private fun developmentHandshakeValidator(): BridgeHandshakeValidator =
+    BridgeHandshakeValidator(
+        expectedToken = "",
+        securityMode = BridgeSecurityMode.DEVELOPMENT,
+    )
 
 class KakaoSendInvocationFactoryTest {
     @Test
@@ -672,6 +686,13 @@ class RoomThreadSerialExecutorTest {
 }
 
 class BridgeSecurityTest {
+    @Test
+    fun `security mode defaults to production unless development is explicitly requested`() {
+        assertEquals(BridgeSecurityMode.PRODUCTION, BridgeSecurityMode.fromEnv(null))
+        assertEquals(BridgeSecurityMode.PRODUCTION, BridgeSecurityMode.fromEnv("unknown"))
+        assertEquals(BridgeSecurityMode.DEVELOPMENT, BridgeSecurityMode.fromEnv("development"))
+    }
+
     @Test
     fun `peer validator rejects unauthorized uid`() {
         val validator = BridgePeerIdentityValidator(setOf(2000))

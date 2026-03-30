@@ -1,6 +1,7 @@
 package party.qwer.iris.reply
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -8,7 +9,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import party.qwer.iris.IrisLogger
 import party.qwer.iris.ReplyAdmissionResult
@@ -39,7 +39,12 @@ internal class ReplyAdmissionService(
     private val perWorkerQueueCapacity: Int = 16,
     private val workerIdleTimeoutMs: Long = 60_000L,
     private val shutdownTimeoutMs: Long = 10_000L,
-    internal var onRequestProcess: (suspend (PipelineRequest) -> Unit)? = null,
+    private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val commandChannelCapacity: Int = Channel.BUFFERED,
+    initialRequestProcessor: suspend (PipelineRequest) -> Unit = { request ->
+        request.prepare()
+        request.send()
+    },
 ) {
     private data class WorkerState(
         val workerId: Long,
@@ -88,8 +93,9 @@ internal class ReplyAdmissionService(
         val workerScope: CoroutineScope? = null,
     )
 
-    private val commands = Channel<AdmissionCommand>(Channel.UNLIMITED)
+    private val commands = Channel<AdmissionCommand>(commandChannelCapacity)
     private val commandScope = buildCoroutineScope()
+    private val requestProcessor = initialRequestProcessor
 
     private var workerRegistry = mutableMapOf<ReplyQueueKey, WorkerState>()
     private var workerScope = buildCoroutineScope()
@@ -104,48 +110,40 @@ internal class ReplyAdmissionService(
         }
     }
 
-    fun start() {
-        val started = dispatchCommand<AdmissionCommand.Start, Boolean> { AdmissionCommand.Start(it) }
+    suspend fun startSuspend() {
+        val started = dispatchSuspend<AdmissionCommand.Start, Boolean> { AdmissionCommand.Start(it) }
         if (started) {
             IrisLogger.debug("[ReplyAdmissionService] started")
         }
     }
 
-    fun restart() {
+    suspend fun restartSuspend() {
         IrisLogger.info("[ReplyAdmissionService] Restarting...")
         val plan =
-            dispatchCommand<AdmissionCommand.Restart, WorkerClosePlan> {
+            dispatchSuspend<AdmissionCommand.Restart, WorkerClosePlan> {
                 AdmissionCommand.Restart(it)
             }
         if (!plan.allowed) {
             return
         }
-        closeWorkers(plan.workers)
+        closeWorkersSuspend(plan.workers)
         plan.workerScope?.cancel()
-        dispatchCommand<AdmissionCommand.RestartCompleted, Unit> {
+        dispatchSuspend<AdmissionCommand.RestartCompleted, Unit> {
             AdmissionCommand.RestartCompleted(it)
         }
         IrisLogger.info("[ReplyAdmissionService] Restart complete")
     }
 
-    fun shutdown() {
+    suspend fun shutdownSuspend() {
         IrisLogger.info("[ReplyAdmissionService] Shutting down...")
         val plan =
-            dispatchCommand<AdmissionCommand.Shutdown, WorkerClosePlan> {
+            dispatchSuspend<AdmissionCommand.Shutdown, WorkerClosePlan> {
                 AdmissionCommand.Shutdown(it)
             }
-        closeWorkers(plan.workers)
+        closeWorkersSuspend(plan.workers)
         plan.workerScope?.cancel()
         IrisLogger.info("[ReplyAdmissionService] Shutdown complete")
     }
-
-    fun enqueue(
-        key: ReplyQueueKey,
-        request: PipelineRequest,
-    ): ReplyAdmissionResult =
-        dispatchCommand<AdmissionCommand.Enqueue, ReplyAdmissionResult> {
-            AdmissionCommand.Enqueue(key, request, it)
-        }
 
     suspend fun enqueueSuspend(
         key: ReplyQueueKey,
@@ -153,11 +151,6 @@ internal class ReplyAdmissionService(
     ): ReplyAdmissionResult =
         dispatchSuspend<AdmissionCommand.Enqueue, ReplyAdmissionResult> {
             AdmissionCommand.Enqueue(key, request, it)
-        }
-
-    internal fun debugSnapshot(): ReplyAdmissionDebugSnapshot =
-        dispatchCommand<AdmissionCommand.DebugSnapshot, ReplyAdmissionDebugSnapshot> {
-            AdmissionCommand.DebugSnapshot(it)
         }
 
     internal suspend fun debugSnapshotSuspend(): ReplyAdmissionDebugSnapshot =
@@ -234,7 +227,7 @@ internal class ReplyAdmissionService(
             if (lifecycle != ReplyAdmissionLifecycle.RUNNING) {
                 ReplyAdmissionResult(ReplyAdmissionStatus.SHUTDOWN, "reply sender unavailable")
             } else {
-                val worker = getOrCreateWorkerLocked(command.key)
+                val worker = getOrCreateWorkerInternal(command.key)
                 if (worker == null) {
                     ReplyAdmissionResult(
                         ReplyAdmissionStatus.QUEUE_FULL,
@@ -263,15 +256,15 @@ internal class ReplyAdmissionService(
         }
     }
 
-    private fun getOrCreateWorkerLocked(key: ReplyQueueKey): WorkerState? {
+    private fun getOrCreateWorkerInternal(key: ReplyQueueKey): WorkerState? {
         workerRegistry[key]?.let { return it }
         if (workerRegistry.size >= maxWorkers) {
             return null
         }
-        return launchWorkerLocked(key).also { workerRegistry[key] = it }
+        return launchWorkerInternal(key).also { workerRegistry[key] = it }
     }
 
-    private fun launchWorkerLocked(key: ReplyQueueKey): WorkerState {
+    private fun launchWorkerInternal(key: ReplyQueueKey): WorkerState {
         val channel = Channel<PipelineRequest>(perWorkerQueueCapacity)
         val workerId = nextWorkerId++
         lateinit var state: WorkerState
@@ -290,10 +283,7 @@ internal class ReplyAdmissionService(
                         }
                         val request = receiveResult.getOrNull() ?: break
                         try {
-                            onRequestProcess?.invoke(request) ?: run {
-                                request.prepare()
-                                request.send()
-                            }
+                            requestProcessor(request)
                         } catch (e: Exception) {
                             IrisLogger.error("[ReplyAdmissionService] worker($key) error: ${e.message}", e)
                         }
@@ -335,7 +325,7 @@ internal class ReplyAdmissionService(
                     ReplyAdmissionResult(ReplyAdmissionStatus.SHUTDOWN, "reply sender unavailable")
                 } else {
                     val retryWorker =
-                        getOrCreateWorkerLocked(key)
+                        getOrCreateWorkerInternal(key)
                             ?: return ReplyAdmissionResult(
                                 ReplyAdmissionStatus.QUEUE_FULL,
                                 "too many active reply workers",
@@ -361,22 +351,10 @@ internal class ReplyAdmissionService(
         }
     }
 
-    private fun closeWorkers(workers: List<WorkerState>) {
-        runBlocking { closeWorkersSuspend(workers) }
-    }
-
     private suspend fun <C : AdmissionCommand, T> dispatchSuspend(build: (CompletableDeferred<T>) -> C): T {
         val reply = CompletableDeferred<T>()
         commands.send(build(reply))
         return reply.await()
     }
-
-    private fun <C : AdmissionCommand, T> dispatchCommand(
-        build: (CompletableDeferred<T>) -> C,
-    ): T =
-        runBlocking {
-            dispatchSuspend(build)
-        }
-
-    private fun buildCoroutineScope(): CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private fun buildCoroutineScope(): CoroutineScope = CoroutineScope(SupervisorJob() + dispatcher)
 }

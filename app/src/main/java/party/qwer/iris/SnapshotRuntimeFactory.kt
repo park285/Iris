@@ -6,6 +6,7 @@ import kotlinx.coroutines.SupervisorJob
 import party.qwer.iris.delivery.webhook.OutboxRoutingGateway
 import party.qwer.iris.ingress.CommandIngressService
 import party.qwer.iris.persistence.CheckpointJournal
+import party.qwer.iris.persistence.SnapshotStateStore
 import party.qwer.iris.persistence.WebhookDeliveryStore
 import party.qwer.iris.snapshot.RoomSnapshotReader
 import party.qwer.iris.snapshot.SnapshotCommand
@@ -32,6 +33,7 @@ internal object SnapshotRuntimeFactory {
         roomDirectoryQueries: RoomDirectoryQueries,
         webhookOutboxStore: WebhookDeliveryStore,
         sseEventBus: SseEventBus,
+        snapshotStateStore: SnapshotStateStore,
     ): SnapshotRuntime {
         val routingGateway = OutboxRoutingGateway(configManager, webhookOutboxStore)
         val roomSnapshotReader =
@@ -46,6 +48,7 @@ internal object SnapshotRuntimeFactory {
                 roomSnapshotReader = roomSnapshotReader,
                 diffEngine = RoomSnapshotManager(),
                 emitter = SnapshotEventEmitter(sseEventBus, routingGateway),
+                stateStore = snapshotStateStore,
             )
         val ingressService =
             CommandIngressService(

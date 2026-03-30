@@ -120,18 +120,19 @@ class ThreadQueriesTest {
 
     @Test
     fun `listThreads passes correct chatId bind args`() {
+        var capturedSql: String? = null
         val capturedArgs = mutableListOf<Array<String?>?>()
         val queries =
-            buildThreadQueries { _, args, _ ->
+            buildThreadQueries { sql, args, _ ->
+                capturedSql = sql
                 capturedArgs.add(args)
                 emptyResult()
             }
         queries.listThreads(ChatId(999L))
         assertEquals(1, capturedArgs.size)
         val args = capturedArgs.first()
-        // SQL에서 chatId를 두 번 바인딩(서브쿼리 + 외부 WHERE) + LIMIT 한 번
+        assertTrue(capturedSql?.contains("WITH thread_stats AS") == true)
         assertEquals("999", args?.get(0))
-        assertEquals("999", args?.get(1))
-        assertEquals("20", args?.get(2))
+        assertEquals("20", args?.get(1))
     }
 }

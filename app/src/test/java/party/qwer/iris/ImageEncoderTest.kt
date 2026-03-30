@@ -51,27 +51,11 @@ class ImageEncoderTest {
     }
 
     @Test
-    fun `decodes valid base64 image payload`() {
-        val validSmallPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-
-        val decoded = decodeBase64Image(validSmallPng)
-
-        assertEquals(70, decoded.size)
-    }
-
-    @Test
-    fun `rejects invalid base64 image payload`() {
-        assertFailsWith<IllegalArgumentException> {
-            decodeBase64Image("not-base64!!")
-        }
-    }
-
-    @Test
-    fun `rejects payload exceeding size limit`() {
-        val oversized = "A".repeat(MAX_BASE64_IMAGE_PAYLOAD_LENGTH + 1)
+    fun `rejects single image payload exceeding size limit`() {
+        val oversized = ByteArray(MAX_IMAGE_PAYLOAD_BYTES + 1)
 
         assertFailsWith<IllegalArgumentException> {
-            require(oversized.length <= MAX_BASE64_IMAGE_PAYLOAD_LENGTH) { "payload exceeds size limit" }
+            validateImageBytesPayload(listOf(oversized))
         }
     }
 

@@ -1,12 +1,18 @@
 package party.qwer.iris
 
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import party.qwer.iris.delivery.webhook.RoutingCommand
 import party.qwer.iris.delivery.webhook.RoutingGateway
 import party.qwer.iris.delivery.webhook.RoutingResult
 import party.qwer.iris.model.MemberEvent
+import party.qwer.iris.model.RoomEvent
 import party.qwer.iris.persistence.BatchedCheckpointJournal
 import party.qwer.iris.snapshot.RoomDiffEngine
 import party.qwer.iris.snapshot.RoomSnapshotReadResult
@@ -18,142 +24,140 @@ import party.qwer.iris.storage.LinkId
 import party.qwer.iris.storage.UserId
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicLong
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class SnapshotObserverTest {
     @Test
-    fun `full reconcile triggers after configured interval`() {
-        val currentTimeMs = AtomicLong(0L)
-        val diffEngine = SnapshotObserverTestDiffEngine()
-        val rooms = mutableListOf(100L)
-        val snapshotReader =
-            SnapshotObserverTestSnapshotReader(
-                roomsProvider = { rooms.toList() },
-                snapshots =
-                    mapOf(
-                        100L to
-                            listOf(
-                                snapshotObserverTestSnapshot(chatId = 100L, members = setOf(1L), nicknames = mapOf(1L to "Alice")),
-                                snapshotObserverTestSnapshot(chatId = 100L, members = setOf(1L), nicknames = mapOf(1L to "Alice Updated")),
-                            ),
-                        200L to
-                            listOf(
-                                snapshotObserverTestSnapshot(chatId = 200L, members = setOf(2L), nicknames = mapOf(2L to "Bob")),
-                            ),
-                    ),
-            )
-        val checkpointStore = SnapshotObserverTestCheckpointStore(initial = mapOf("chat_logs" to 10L))
-        val checkpointJournal =
-            BatchedCheckpointJournal(
-                store = checkpointStore,
-                flushIntervalMs = 0L,
-                clock = currentTimeMs::get,
-            )
-        val bus = SseEventBus(bufferSize = 16)
-        val routingGateway = SnapshotObserverTestRoutingGateway()
-        val coordinator =
-            SnapshotCoordinator(
-                scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
-                roomSnapshotReader = snapshotReader,
-                diffEngine = diffEngine,
-                emitter = SnapshotEventEmitter(bus, routingGateway),
-            )
-        val observer =
-            SnapshotObserver(
-                snapshotCoordinator = coordinator,
-                checkpointJournal = checkpointJournal,
-                intervalMs = 50L,
-                maxRoomsPerTick = 32,
-                fullReconcileIntervalMs = 200L,
-                clock = currentTimeMs::get,
-            )
-
-        runBlockingSeed(coordinator)
-        observer.start()
-        rooms += 200L
-        currentTimeMs.set(250L)
-        waitUntil(timeoutMs = 300L) { snapshotReader.snapshotCalls.contains(200L) }
-        observer.stop()
-
-        assertTrue(diffEngine.diffCalls >= 1)
-        assertTrue(diffEngine.diffedChatIds.contains(100L))
-        assertTrue(snapshotReader.snapshotCalls.contains(200L))
-    }
-
-    @Test
-    fun `adaptive drain increases budget under backlog pressure`() {
-        val rooms =
-            (1L..256L).associateWith { chatId ->
-                listOf(
-                    snapshotObserverTestSnapshot(chatId = chatId, members = setOf(chatId)),
-                    snapshotObserverTestSnapshot(chatId = chatId, members = setOf(chatId, chatId + 10_000L)),
+    fun `full reconcile triggers after configured interval`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val diffEngine = SnapshotObserverTestDiffEngine()
+            val rooms = mutableListOf(100L)
+            val snapshotReader =
+                SnapshotObserverTestSnapshotReader(
+                    roomsProvider = { rooms.toList() },
+                    snapshots =
+                        mapOf(
+                            100L to
+                                listOf(
+                                    snapshotObserverTestSnapshot(chatId = 100L, members = setOf(1L), nicknames = mapOf(1L to "Alice")),
+                                    snapshotObserverTestSnapshot(chatId = 100L, members = setOf(1L), nicknames = mapOf(1L to "Alice Updated")),
+                                ),
+                            200L to
+                                listOf(
+                                    snapshotObserverTestSnapshot(chatId = 200L, members = setOf(2L), nicknames = mapOf(2L to "Bob")),
+                                ),
+                        ),
                 )
-            }
-        val diffEngine = SnapshotObserverTestDiffEngine()
-        val snapshotReader =
-            SnapshotObserverTestSnapshotReader(
-                rooms = rooms.keys.toList(),
-                snapshots = rooms,
-            )
-        val checkpointJournal =
-            BatchedCheckpointJournal(
-                store = SnapshotObserverTestCheckpointStore(initial = mapOf("chat_logs" to 10L)),
-                flushIntervalMs = Long.MAX_VALUE,
-                clock = { 0L },
-            )
-        val coordinator =
-            SnapshotCoordinator(
-                scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
-                roomSnapshotReader = snapshotReader,
-                diffEngine = diffEngine,
-                emitter = SnapshotEventEmitter(SseEventBus(bufferSize = 512), SnapshotObserverTestRoutingGateway()),
-            )
-        val observer =
-            SnapshotObserver(
-                snapshotCoordinator = coordinator,
-                checkpointJournal = checkpointJournal,
-                intervalMs = 5_000L,
-                maxRoomsPerTick = 32,
-                fullReconcileIntervalMs = 60_000L,
-            )
+            val checkpointStore = SnapshotObserverTestCheckpointStore(initial = mapOf("chat_logs" to 10L))
+            val checkpointJournal =
+                BatchedCheckpointJournal(
+                    store = checkpointStore,
+                    flushIntervalMs = 0L,
+                    clock = { testScheduler.currentTime },
+                )
+            val bus = SseEventBus(bufferSize = 16)
+            val routingGateway = SnapshotObserverTestRoutingGateway()
+            val coordinatorScope = CoroutineScope(SupervisorJob() + dispatcher)
+            val coordinator =
+                SnapshotCoordinator(
+                    scope = coordinatorScope,
+                    roomSnapshotReader = snapshotReader,
+                    diffEngine = diffEngine,
+                    emitter = SnapshotEventEmitter(bus, routingGateway),
+                )
+            val observer =
+                SnapshotObserver(
+                    snapshotCoordinator = coordinator,
+                    checkpointJournal = checkpointJournal,
+                    intervalMs = 50L,
+                    maxRoomsPerTick = 32,
+                    fullReconcileIntervalMs = 200L,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
 
-        runBlockingSeed(coordinator)
-        runBlockingFullReconcile(coordinator)
-        waitUntil(timeoutMs = 300L) { coordinator.dirtyRoomCount() == 256 }
+            coordinator.send(party.qwer.iris.snapshot.SnapshotCommand.SeedCache)
+            runCurrent()
+            try {
+                observer.start()
+                rooms += 200L
+                advanceTimeBy(250L)
+                runCurrent()
+                observer.stopSuspend()
 
-        observer.start()
-        waitUntil(timeoutMs = 300L) { diffEngine.diffCalls >= 128 }
-        observer.stop()
-
-        assertEquals(128, diffEngine.diffCalls)
-        assertEquals(128, coordinator.dirtyRoomCount())
-    }
-
-    private fun waitUntil(
-        timeoutMs: Long,
-        condition: () -> Boolean,
-    ) = kotlinx.coroutines.runBlocking {
-        kotlinx.coroutines.withTimeout(timeoutMs) {
-            while (!condition()) {
-                kotlinx.coroutines.delay(10L)
+                assertTrue(diffEngine.diffCalls >= 1)
+                assertTrue(diffEngine.diffedChatIds.contains(100L))
+                assertTrue(snapshotReader.snapshotCalls.contains(200L))
+            } finally {
+                bus.close()
+                coordinatorScope.cancel()
             }
         }
-    }
-}
 
-private fun runBlockingSeed(coordinator: SnapshotCoordinator) {
-    kotlinx.coroutines.runBlocking {
-        coordinator.send(party.qwer.iris.snapshot.SnapshotCommand.SeedCache)
-    }
-}
+    @Test
+    fun `adaptive drain increases budget under backlog pressure`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val rooms =
+                (1L..256L).associateWith { chatId ->
+                    listOf(
+                        snapshotObserverTestSnapshot(chatId = chatId, members = setOf(chatId)),
+                        snapshotObserverTestSnapshot(chatId = chatId, members = setOf(chatId, chatId + 10_000L)),
+                    )
+                }
+            val diffEngine = SnapshotObserverTestDiffEngine()
+            val snapshotReader =
+                SnapshotObserverTestSnapshotReader(
+                    rooms = rooms.keys.toList(),
+                    snapshots = rooms,
+                )
+            val checkpointJournal =
+                BatchedCheckpointJournal(
+                    store = SnapshotObserverTestCheckpointStore(initial = mapOf("chat_logs" to 10L)),
+                    flushIntervalMs = Long.MAX_VALUE,
+                    clock = { testScheduler.currentTime },
+                )
+            val bus = SseEventBus(bufferSize = 512)
+            val coordinatorScope = CoroutineScope(SupervisorJob() + dispatcher)
+            val coordinator =
+                SnapshotCoordinator(
+                    scope = coordinatorScope,
+                    roomSnapshotReader = snapshotReader,
+                    diffEngine = diffEngine,
+                    emitter = SnapshotEventEmitter(bus, SnapshotObserverTestRoutingGateway()),
+                )
+            val observer =
+                SnapshotObserver(
+                    snapshotCoordinator = coordinator,
+                    checkpointJournal = checkpointJournal,
+                    intervalMs = 5_000L,
+                    maxRoomsPerTick = 32,
+                    fullReconcileIntervalMs = 60_000L,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
 
-private fun runBlockingFullReconcile(coordinator: SnapshotCoordinator) {
-    kotlinx.coroutines.runBlocking {
-        coordinator.send(party.qwer.iris.snapshot.SnapshotCommand.FullReconcile)
-    }
+            coordinator.send(party.qwer.iris.snapshot.SnapshotCommand.SeedCache)
+            coordinator.send(party.qwer.iris.snapshot.SnapshotCommand.FullReconcile)
+            runCurrent()
+            assertEquals(256, coordinator.dirtyRoomCount())
+
+            try {
+                observer.start()
+                runCurrent()
+                observer.stopSuspend()
+
+                assertEquals(128, diffEngine.diffCalls)
+                assertEquals(128, coordinator.dirtyRoomCount())
+            } finally {
+                bus.close()
+                coordinatorScope.cancel()
+            }
+        }
 }
 
 private fun snapshotObserverTestSnapshot(
@@ -180,7 +184,7 @@ private class SnapshotObserverTestDiffEngine : RoomDiffEngine {
     override fun diff(
         prev: RoomSnapshotData,
         curr: RoomSnapshotData,
-    ): List<Any> {
+    ): List<RoomEvent> {
         diffCallCounter.incrementAndGet()
         diffedChatIds += curr.chatId.value
         val joined = (curr.memberIds - prev.memberIds).firstOrNull() ?: return emptyList()
@@ -196,6 +200,10 @@ private class SnapshotObserverTestDiffEngine : RoomDiffEngine {
             ),
         )
     }
+
+    override fun diffMissing(prev: RoomSnapshotData): List<RoomEvent> = emptyList()
+
+    override fun diffRestored(curr: RoomSnapshotData): List<RoomEvent> = emptyList()
 }
 
 private class SnapshotObserverTestRoutingGateway : RoutingGateway {

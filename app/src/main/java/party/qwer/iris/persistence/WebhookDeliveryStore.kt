@@ -36,6 +36,13 @@ interface WebhookDeliveryStore : Closeable {
         reason: String?,
     )
 
+    fun releaseClaim(
+        id: Long,
+        claimToken: String,
+        nextAttemptAt: Long,
+        reason: String?,
+    )
+
     fun markDead(
         id: Long,
         claimToken: String,

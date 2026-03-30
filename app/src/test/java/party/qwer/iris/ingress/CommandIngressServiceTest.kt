@@ -1,10 +1,8 @@
 package party.qwer.iris.ingress
 
-import kotlinx.serialization.json.JsonElement
 import party.qwer.iris.ChatLogRepository
 import party.qwer.iris.ConfigProvider
 import party.qwer.iris.KakaoDB
-import party.qwer.iris.QueryExecutionResult
 import party.qwer.iris.delivery.webhook.RoutingCommand
 import party.qwer.iris.delivery.webhook.RoutingGateway
 import party.qwer.iris.delivery.webhook.RoutingResult
@@ -221,12 +219,6 @@ private class FakeChatLogRepository(
     override fun resolveRoomMetadata(chatId: Long): KakaoDB.RoomMetadata = roomMetadata
 
     override fun latestLogId(): Long = latestLogId
-
-    override fun executeQuery(
-        sqlQuery: String,
-        bindArgs: Array<String?>?,
-        maxRows: Int,
-    ): QueryExecutionResult = QueryExecutionResult(columns = emptyList(), rows = emptyList<List<JsonElement?>>())
 }
 
 private class FakeCheckpointStore(

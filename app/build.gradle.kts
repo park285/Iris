@@ -115,7 +115,9 @@ dependencies {
     implementation(libs.slf4j.nop)
 
     testImplementation(kotlin("test-junit"))
+    testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.org.json)
+    testImplementation(libs.ktor.server.test.host)
     testImplementation(libs.robolectric)
     testImplementation(libs.sqlite.jdbc)
 }

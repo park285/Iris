@@ -21,15 +21,15 @@ internal class ReplyCommandFactory {
 
     fun nativeImageReply(
         chatId: Long,
-        base64Images: List<String>,
+        imageCount: Int,
         threadId: Long?,
         threadScope: Int?,
         requestId: String?,
     ): NativeImageReplyCommand {
-        require(base64Images.isNotEmpty()) { "image list must not be empty" }
+        require(imageCount > 0) { "image list must not be empty" }
         return NativeImageReplyCommand(
             target = replyTarget(chatId, threadId),
-            base64Images = base64Images,
+            imageCount = imageCount,
             threadScope = threadScope,
             requestId = requestId,
         )

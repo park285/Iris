@@ -55,7 +55,7 @@ class ReplyCommandFactoryTest {
         val cmd =
             factory.nativeImageReply(
                 chatId = 200L,
-                base64Images = listOf("aW1hZ2U="),
+                imageCount = 1,
                 threadId = null,
                 threadScope = null,
                 requestId = "img-1",
@@ -64,25 +64,24 @@ class ReplyCommandFactoryTest {
         assertIs<NativeImageReplyCommand>(cmd)
         assertEquals(200L, cmd.chatId)
         assertEquals(200L, cmd.target.chatId.value)
-        assertEquals(listOf("aW1hZ2U="), cmd.base64Images)
+        assertEquals(1, cmd.imageCount)
         assertNull(cmd.threadId)
         assertEquals("img-1", cmd.requestId)
     }
 
     @Test
     fun `creates native image reply command with multiple images`() {
-        val images = listOf("aW1hZ2Ux", "aW1hZ2Uy", "aW1hZ2Uz")
         val cmd =
             factory.nativeImageReply(
                 chatId = 200L,
-                base64Images = images,
+                imageCount = 3,
                 threadId = 300L,
                 threadScope = 2,
                 requestId = "img-multi",
             )
 
         assertIs<NativeImageReplyCommand>(cmd)
-        assertEquals(3, cmd.base64Images.size)
+        assertEquals(3, cmd.imageCount)
         assertEquals(300L, cmd.threadId)
         assertEquals(ReplyThreadId(300L), cmd.target.threadId)
     }
@@ -127,7 +126,7 @@ class ReplyCommandFactoryTest {
         assertFailsWith<IllegalArgumentException> {
             factory.nativeImageReply(
                 chatId = 200L,
-                base64Images = emptyList(),
+                imageCount = 0,
                 threadId = null,
                 threadScope = null,
                 requestId = null,

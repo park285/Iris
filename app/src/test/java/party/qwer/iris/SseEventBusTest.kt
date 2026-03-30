@@ -1,11 +1,13 @@
 package party.qwer.iris
 
+import kotlinx.coroutines.DelicateCoroutinesApi
 import party.qwer.iris.http.SseEventEnvelope
 import party.qwer.iris.http.initialSseFrames
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
+@OptIn(DelicateCoroutinesApi::class)
 class SseEventBusTest {
     @Test
     fun `initialSseFrames includes event type field`() {
@@ -57,5 +59,31 @@ class SseEventBusTest {
         val all = bus.replayFrom(0)
         assertEquals(1L, all[0].first)
         assertEquals(2L, all[1].first)
+    }
+
+    @Test
+    fun `close closes open subscriber channels`() {
+        val bus = SseEventBus(bufferSize = 10)
+        val channel = bus.openSubscriberChannel()
+
+        bus.close()
+
+        assertTrue(channel.isClosedForSend)
+        assertEquals(0, bus.subscriberCount())
+    }
+
+    @Test
+    fun `listeners receive typed event envelopes`() {
+        val bus = SseEventBus(bufferSize = 10)
+        val received = mutableListOf<SseEventEnvelope>()
+        val listener: (SseEventEnvelope) -> Unit = { envelope -> received += envelope }
+
+        val listenerId = bus.addListener(listener)
+        bus.emit("{}", "snapshot")
+        bus.removeListener(listenerId)
+
+        assertEquals(1, received.size)
+        assertEquals("snapshot", received.single().eventType)
+        assertEquals("{}", received.single().payload)
     }
 }

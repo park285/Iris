@@ -1,15 +1,18 @@
 package party.qwer.iris.reply
 
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
 import party.qwer.iris.ReplyAdmissionStatus
 import party.qwer.iris.ReplyQueueKey
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class ReplyAdmissionServiceTest {
     @Test
     fun `exposes explicit lifecycle ownership`() {
@@ -120,30 +123,38 @@ class ReplyAdmissionServiceTest {
 
     @Test
     fun `rejects when per-worker queue is full`() {
-        val service =
-            ReplyAdmissionService(
-                maxWorkers = 16,
-                perWorkerQueueCapacity = 1,
-                workerIdleTimeoutMs = 60_000L,
-            )
-        service.start()
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val service =
+                ReplyAdmissionService(
+                    maxWorkers = 16,
+                    perWorkerQueueCapacity = 1,
+                    workerIdleTimeoutMs = 60_000L,
+                    dispatcher = dispatcher,
+                )
+            service.startSuspend()
 
-        val key = ReplyQueueKey(chatId = 1L, threadId = null)
-        val started = CountDownLatch(1)
-        val release = CountDownLatch(1)
-        val blockingRequest = controlledPipelineRequest(started, release)
-        val r1 = service.enqueue(key, blockingRequest)
-        assertEquals(ReplyAdmissionStatus.ACCEPTED, r1.status)
+            val key = ReplyQueueKey(chatId = 1L, threadId = null)
+            val started = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val blockingRequest = controlledPipelineRequest(started, release)
+            val r1 = service.enqueueSuspend(key, blockingRequest)
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, r1.status)
 
-        assertTrue(started.await(1, TimeUnit.SECONDS), "expected worker to start processing")
-        waitUntil("expected one active worker") { service.debugSnapshot().activeWorkers == 1 }
-        val r2 = service.enqueue(key, stubPipelineRequest())
-        assertEquals(ReplyAdmissionStatus.ACCEPTED, r2.status)
+            advanceUntilIdle()
+            started.await()
+            assertEquals(1, service.debugSnapshotSuspend().activeWorkers)
 
-        val r3 = service.enqueue(key, stubPipelineRequest())
-        assertEquals(ReplyAdmissionStatus.QUEUE_FULL, r3.status)
-        release.countDown()
-        service.shutdown()
+            val r2 = service.enqueueSuspend(key, stubPipelineRequest())
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, r2.status)
+
+            val r3 = service.enqueueSuspend(key, stubPipelineRequest())
+            assertEquals(ReplyAdmissionStatus.QUEUE_FULL, r3.status)
+
+            release.complete(Unit)
+            advanceUntilIdle()
+            service.shutdownSuspend()
+        }
     }
 
     @Test
@@ -167,44 +178,58 @@ class ReplyAdmissionServiceTest {
 
     @Test
     fun `stale worker retry creates new worker`() {
-        val service =
-            ReplyAdmissionService(
-                maxWorkers = 16,
-                perWorkerQueueCapacity = 16,
-                workerIdleTimeoutMs = 50L,
-            )
-        service.start()
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val service =
+                ReplyAdmissionService(
+                    maxWorkers = 16,
+                    perWorkerQueueCapacity = 16,
+                    workerIdleTimeoutMs = 50L,
+                    dispatcher = dispatcher,
+                )
+            service.startSuspend()
 
-        val key = ReplyQueueKey(chatId = 1L, threadId = null)
-        val r1 = service.enqueue(key, stubPipelineRequest())
-        assertEquals(ReplyAdmissionStatus.ACCEPTED, r1.status)
+            val key = ReplyQueueKey(chatId = 1L, threadId = null)
+            val r1 = service.enqueueSuspend(key, stubPipelineRequest())
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, r1.status)
 
-        waitUntil("expected idle worker cleanup") { service.debugSnapshot().activeWorkers == 0 }
+            advanceUntilIdle()
+            advanceTimeBy(50L)
+            advanceUntilIdle()
+            assertEquals(0, service.debugSnapshotSuspend().activeWorkers)
 
-        val r2 = service.enqueue(key, stubPipelineRequest())
-        assertEquals(ReplyAdmissionStatus.ACCEPTED, r2.status)
-        service.shutdown()
+            val r2 = service.enqueueSuspend(key, stubPipelineRequest())
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, r2.status)
+            service.shutdownSuspend()
+        }
     }
 
     @Test
     fun `idle worker release frees worker slot for a different key`() {
-        val service =
-            ReplyAdmissionService(
-                maxWorkers = 1,
-                perWorkerQueueCapacity = 16,
-                workerIdleTimeoutMs = 50L,
-            )
-        service.start()
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val service =
+                ReplyAdmissionService(
+                    maxWorkers = 1,
+                    perWorkerQueueCapacity = 16,
+                    workerIdleTimeoutMs = 50L,
+                    dispatcher = dispatcher,
+                )
+            service.startSuspend()
 
-        val firstKey = ReplyQueueKey(chatId = 1L, threadId = null)
-        val secondKey = ReplyQueueKey(chatId = 2L, threadId = null)
+            val firstKey = ReplyQueueKey(chatId = 1L, threadId = null)
+            val secondKey = ReplyQueueKey(chatId = 2L, threadId = null)
 
-        assertEquals(ReplyAdmissionStatus.ACCEPTED, service.enqueue(firstKey, stubPipelineRequest()).status)
-        waitUntil("expected idle worker cleanup") { service.debugSnapshot().activeWorkers == 0 }
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, service.enqueueSuspend(firstKey, stubPipelineRequest()).status)
+            advanceUntilIdle()
+            advanceTimeBy(50L)
+            advanceUntilIdle()
+            assertEquals(0, service.debugSnapshotSuspend().activeWorkers)
 
-        assertEquals(ReplyAdmissionStatus.ACCEPTED, service.enqueue(secondKey, stubPipelineRequest()).status)
-        assertEquals(1, service.debugSnapshot().activeWorkers)
-        service.shutdown()
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, service.enqueueSuspend(secondKey, stubPipelineRequest()).status)
+            assertEquals(1, service.debugSnapshotSuspend().activeWorkers)
+            service.shutdownSuspend()
+        }
     }
 
     @Test
@@ -268,30 +293,45 @@ class ReplyAdmissionServiceTest {
         }
 
     private fun controlledPipelineRequest(
-        started: CountDownLatch,
-        release: CountDownLatch,
+        started: CompletableDeferred<Unit>,
+        release: CompletableDeferred<Unit>,
     ): PipelineRequest =
         object : PipelineRequest {
             override val requestId: String? = null
 
             override suspend fun prepare() {
-                started.countDown()
-                release.await(1, TimeUnit.SECONDS)
+                started.complete(Unit)
+                release.await()
             }
 
             override suspend fun send() {}
         }
-
-    private fun waitUntil(
-        message: String,
-        condition: () -> Boolean,
-    ) = runBlocking {
-        var satisfied = condition()
-        repeat(100) {
-            if (satisfied) return@repeat
-            delay(5L)
-            satisfied = condition()
-        }
-        assertTrue(satisfied, message)
-    }
 }
+
+private fun ReplyAdmissionService.start() =
+    runBlocking {
+        startSuspend()
+    }
+
+private fun ReplyAdmissionService.restart() =
+    runBlocking {
+        restartSuspend()
+    }
+
+private fun ReplyAdmissionService.shutdown() =
+    runBlocking {
+        shutdownSuspend()
+    }
+
+private fun ReplyAdmissionService.enqueue(
+    key: ReplyQueueKey,
+    request: PipelineRequest,
+): party.qwer.iris.ReplyAdmissionResult =
+    runBlocking {
+        enqueueSuspend(key, request)
+    }
+
+private fun ReplyAdmissionService.debugSnapshot(): ReplyAdmissionDebugSnapshot =
+    runBlocking {
+        debugSnapshotSuspend()
+    }

@@ -10,7 +10,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
-class DBObserver(
+internal class DBObserver(
     private val observerHelper: ObserverHelper,
     private val config: ConfigProvider,
 ) {

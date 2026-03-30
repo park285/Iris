@@ -40,7 +40,6 @@ internal fun enforceNettyNioTransport(): Boolean {
 }
 
 internal class IrisServer(
-    private val chatLogRepo: ChatLogRepository,
     private val configManager: ConfigManager,
     private val notificationReferer: String,
     private val messageSender: MessageSender,
@@ -172,7 +171,7 @@ internal class IrisServer(
             installHealthRoutes(authSupport, bridgeHealthProvider, chatRoomIntrospectProvider)
             installConfigRoutes(authSupport, configManager, serverJson)
             installReplyRoutes(authSupport, serverJson, notificationReferer, messageSender, replyStatusProvider)
-            installQueryRoutes(authSupport, serverJson, chatLogRepo, configManager)
+            installQueryRoutes(authSupport, serverJson, memberRepo)
             installMemberRoutes(authSupport, memberRepo, sseEventBus)
         }
     }

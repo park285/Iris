@@ -17,7 +17,7 @@ class SnapshotEventEmitterTest {
         val gateway = RecordingGateway()
         val emitter = SnapshotEventEmitter(bus, gateway)
 
-        val event =
+        val event: party.qwer.iris.model.RoomEvent =
             MemberEvent(
                 event = "join",
                 chatId = 100L,
@@ -63,15 +63,19 @@ class SnapshotEventEmitterTest {
     }
 
     @Test
-    fun `skips unknown event types`() {
-        val bus = SseEventBus(bufferSize = 10)
-        val gateway = RecordingGateway()
-        val emitter = SnapshotEventEmitter(bus, gateway)
+    fun `typed room events expose common chat id contract`() {
+        val event =
+            MemberEvent(
+                event = "join",
+                chatId = 100L,
+                linkId = 1100L,
+                userId = 1L,
+                nickname = "Alice",
+                estimated = false,
+                timestamp = 1L,
+            )
 
-        emitter.emit(listOf("not-an-event"))
-
-        assertEquals(0, bus.replayFrom(0).size)
-        assertEquals(0, gateway.commands.size)
+        assertEquals(100L, event.chatId)
     }
 
     @Test

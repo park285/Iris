@@ -26,7 +26,6 @@ internal object ReplyRuntimeFactory {
                     startService = startService,
                     startActivityAs = startActivityAs,
                     mediaScanner = { file -> broadcastMediaScan(Uri.fromFile(file)) },
-                    imageDecoder = ::decodeBase64Image,
                     imageDir = imageDir,
                 ),
         )

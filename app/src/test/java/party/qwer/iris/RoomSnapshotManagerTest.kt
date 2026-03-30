@@ -102,6 +102,42 @@ class RoomSnapshotManagerTest {
     }
 
     @Test
+    fun `diffMissing emits leave events for every previous member`() {
+        val manager = RoomSnapshotManager()
+        val prev =
+            snap(
+                memberIds = setOf(1L, 2L),
+                nicknames = mapOf(1L to "Alice", 2L to "Bob"),
+            )
+
+        val events = manager.diffMissing(prev)
+
+        assertEquals(2, events.size)
+        val memberEvents = events.filterIsInstance<MemberEvent>()
+        assertEquals(listOf("leave", "leave"), memberEvents.map { it.event })
+        assertEquals(setOf(1L, 2L), memberEvents.map { it.userId }.toSet())
+        assertTrue(memberEvents.all { it.estimated })
+    }
+
+    @Test
+    fun `diffRestored emits join events for every current member`() {
+        val manager = RoomSnapshotManager()
+        val curr =
+            snap(
+                memberIds = setOf(3L, 4L),
+                nicknames = mapOf(3L to "Carol", 4L to "Dave"),
+            )
+
+        val events = manager.diffRestored(curr)
+
+        assertEquals(2, events.size)
+        val memberEvents = events.filterIsInstance<MemberEvent>()
+        assertEquals(listOf("join", "join"), memberEvents.map { it.event })
+        assertEquals(setOf(3L, 4L), memberEvents.map { it.userId }.toSet())
+        assertTrue(memberEvents.all { !it.estimated })
+    }
+
+    @Test
     fun `no events when nothing changed`() {
         val manager = RoomSnapshotManager()
         val snap = snap(memberIds = setOf(1L), nicknames = mapOf(1L to "닉"), roles = mapOf(1L to 2))

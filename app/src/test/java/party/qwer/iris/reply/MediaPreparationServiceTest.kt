@@ -1,9 +1,7 @@
 package party.qwer.iris.reply
 
-import party.qwer.iris.ImagePayloadMetadata
 import java.io.File
 import java.nio.file.Files
-import java.util.Base64
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -13,8 +11,11 @@ import kotlin.test.assertTrue
 
 class MediaPreparationServiceTest {
     private companion object {
-        private const val VALID_TEST_PNG_BASE64 =
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+cq1cAAAAASUVORK5CYII="
+        private val VALID_TEST_PNG_BYTES =
+            byteArrayOf(
+                0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+                0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+            )
     }
 
     @Test
@@ -22,18 +23,12 @@ class MediaPreparationServiceTest {
         val imageDir = Files.createTempDirectory("iris-media-prep").toFile()
         val service =
             MediaPreparationService(
-                imageDecoder = { Base64.getMimeDecoder().decode(it) },
                 mediaScanner = {},
                 imageDir = imageDir,
                 imageMediaScanEnabled = false,
             )
 
-        val metadata =
-            listOf(
-                ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
-            )
-
-        val result = service.prepare(room = 100L, payloadMetadata = metadata)
+        val result = service.prepare(room = 100L, imageBytesList = listOf(VALID_TEST_PNG_BYTES))
 
         assertEquals(100L, result.room)
         assertEquals(1, result.imagePaths.size)
@@ -47,30 +42,19 @@ class MediaPreparationServiceTest {
     @Test
     fun `prepares multiple images preserving order`() {
         val imageDir = Files.createTempDirectory("iris-media-prep-multi").toFile()
-        val decodeOrder = AtomicInteger(0)
+        val scannedCount = AtomicInteger(0)
         val service =
             MediaPreparationService(
-                imageDecoder = { payload ->
-                    decodeOrder.incrementAndGet()
-                    Base64.getMimeDecoder().decode(payload)
-                },
-                mediaScanner = {},
+                mediaScanner = { scannedCount.incrementAndGet() },
                 imageDir = imageDir,
                 imageMediaScanEnabled = false,
             )
 
-        val metadata =
-            listOf(
-                ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
-                ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
-                ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
-            )
-
-        val result = service.prepare(room = 200L, payloadMetadata = metadata)
+        val result = service.prepare(room = 200L, imageBytesList = List(3) { VALID_TEST_PNG_BYTES })
 
         assertEquals(3, result.imagePaths.size)
         assertEquals(3, result.files.size)
-        assertEquals(3, decodeOrder.get())
+        assertEquals(0, scannedCount.get())
         result.files.forEach { assertTrue(it.exists()) }
         service.cleanup(result)
         result.files.forEach { assertFalse(it.exists()) }
@@ -83,18 +67,12 @@ class MediaPreparationServiceTest {
         val scannedFiles = mutableListOf<File>()
         val service =
             MediaPreparationService(
-                imageDecoder = { Base64.getMimeDecoder().decode(it) },
                 mediaScanner = { file -> scannedFiles.add(file) },
                 imageDir = imageDir,
                 imageMediaScanEnabled = true,
             )
 
-        val metadata =
-            listOf(
-                ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
-            )
-
-        val result = service.prepare(room = 300L, payloadMetadata = metadata)
+        val result = service.prepare(room = 300L, imageBytesList = listOf(VALID_TEST_PNG_BYTES))
 
         assertEquals(1, scannedFiles.size)
         service.cleanup(result)
@@ -107,18 +85,12 @@ class MediaPreparationServiceTest {
         val scannedFiles = mutableListOf<File>()
         val service =
             MediaPreparationService(
-                imageDecoder = { Base64.getMimeDecoder().decode(it) },
                 mediaScanner = { file -> scannedFiles.add(file) },
                 imageDir = imageDir,
                 imageMediaScanEnabled = false,
             )
 
-        val metadata =
-            listOf(
-                ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
-            )
-
-        val result = service.prepare(room = 400L, payloadMetadata = metadata)
+        val result = service.prepare(room = 400L, imageBytesList = listOf(VALID_TEST_PNG_BYTES))
 
         assertEquals(0, scannedFiles.size)
         service.cleanup(result)
@@ -126,35 +98,21 @@ class MediaPreparationServiceTest {
     }
 
     @Test
-    fun `cleans up partial files on decode failure`() {
-        val imageDir = Files.createTempDirectory("iris-media-fail").toFile()
-        var callCount = 0
+    fun `rejects empty payload before preparing files`() {
+        val imageDir = Files.createTempDirectory("iris-media-empty").toFile()
         val service =
             MediaPreparationService(
-                imageDecoder = { payload ->
-                    callCount++
-                    if (callCount == 2) {
-                        throw RuntimeException("decode fail")
-                    }
-                    Base64.getMimeDecoder().decode(payload)
-                },
                 mediaScanner = {},
                 imageDir = imageDir,
                 imageMediaScanEnabled = false,
             )
 
-        val metadata =
-            listOf(
-                ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
-                ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
-            )
-
-        assertFailsWith<RuntimeException> {
-            service.prepare(room = 500L, payloadMetadata = metadata)
+        assertFailsWith<IllegalArgumentException> {
+            service.prepare(room = 500L, imageBytesList = listOf(ByteArray(0)))
         }
 
         val remaining = imageDir.listFiles()?.filter { !it.name.endsWith(".tmp") } ?: emptyList()
-        assertEquals(0, remaining.size, "partial files should be cleaned up on failure")
+        assertEquals(0, remaining.size)
         imageDir.deleteRecursively()
     }
 
@@ -166,18 +124,12 @@ class MediaPreparationServiceTest {
 
         val service =
             MediaPreparationService(
-                imageDecoder = { Base64.getMimeDecoder().decode(it) },
                 mediaScanner = {},
                 imageDir = imageDir,
                 imageMediaScanEnabled = false,
             )
 
-        val metadata =
-            listOf(
-                ImagePayloadMetadata(base64 = VALID_TEST_PNG_BASE64, estimatedDecodedBytes = 67),
-            )
-
-        val result = service.prepare(room = 600L, payloadMetadata = metadata)
+        val result = service.prepare(room = 600L, imageBytesList = listOf(VALID_TEST_PNG_BYTES))
 
         assertTrue(imageDir.exists())
         service.cleanup(result)

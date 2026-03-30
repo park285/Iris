@@ -9,14 +9,17 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 class AuthSupportTest {
-    private fun config(secret: String): ConfigProvider =
+    private fun config(
+        inboundSecret: String = "",
+        botControlSecret: String = "",
+    ): ConfigProvider =
         object : ConfigProvider {
             override val botId = 0L
             override val botName = ""
             override val botSocketPort = 0
-            override val inboundSigningSecret = secret
+            override val inboundSigningSecret = inboundSecret
             override val outboundWebhookToken = ""
-            override val botControlToken = ""
+            override val botControlToken = botControlSecret
             override val dbPollingRate = 1000L
             override val messageSendRate = 0L
             override val messageSendJitterMax = 0L
@@ -29,7 +32,7 @@ class AuthSupportTest {
         val authSupport =
             AuthSupport(
                 authenticator = RequestAuthenticator(nowEpochMs = { 1_000L }),
-                config = config(secret = "secret"),
+                config = config(inboundSecret = "secret"),
             )
         val body = """{"endpoint":"http://example"}"""
         val timestamp = "1000"
@@ -46,6 +49,7 @@ class AuthSupportTest {
 
         val result =
             authSupport.authenticateRequest(
+                role = AuthSupport.SecretRole.INBOUND,
                 method = "POST",
                 path = "/config/endpoint",
                 bodySha256Hex = sha256Hex(body.toByteArray()),
@@ -62,12 +66,13 @@ class AuthSupportTest {
         val authSupport =
             AuthSupport(
                 authenticator = RequestAuthenticator(nowEpochMs = { 1_000L }),
-                config = config(secret = "secret"),
+                config = config(inboundSecret = "secret"),
             )
         val body = """{"endpoint":"http://example"}"""
 
         val result =
             authSupport.authenticateRequest(
+                role = AuthSupport.SecretRole.INBOUND,
                 method = "POST",
                 path = "/config/endpoint",
                 bodySha256Hex = sha256Hex(body.toByteArray()),
@@ -80,15 +85,16 @@ class AuthSupportTest {
     }
 
     @Test
-    fun `authenticateRequest returns SERVICE_UNAVAILABLE when secret is blank`() {
+    fun `authenticateRequest returns SERVICE_UNAVAILABLE when selected secret is blank`() {
         val authSupport =
             AuthSupport(
                 authenticator = RequestAuthenticator(nowEpochMs = { 1_000L }),
-                config = config(secret = ""),
+                config = config(inboundSecret = "inbound-only"),
             )
 
         val result =
             authSupport.authenticateRequest(
+                role = AuthSupport.SecretRole.BOT_CONTROL,
                 method = "GET",
                 path = "/config",
                 bodySha256Hex = sha256Hex(ByteArray(0)),
@@ -105,7 +111,7 @@ class AuthSupportTest {
         val authSupport =
             AuthSupport(
                 authenticator = RequestAuthenticator(nowEpochMs = { 1_000L }),
-                config = config(secret = "secret"),
+                config = config(botControlSecret = "secret"),
             )
         val body = ""
         val timestamp = "1000"
@@ -123,6 +129,7 @@ class AuthSupportTest {
 
         val result =
             authSupport.authenticateRequest(
+                role = AuthSupport.SecretRole.BOT_CONTROL,
                 method = "GET",
                 path = canonicalPath,
                 bodySha256Hex = sha256Hex(body.toByteArray()),
@@ -132,5 +139,52 @@ class AuthSupportTest {
             )
 
         assertEquals(AuthResult.AUTHORIZED, result)
+    }
+
+    @Test
+    fun `authenticateRequest distinguishes inbound and bot control secrets`() {
+        val authSupport =
+            AuthSupport(
+                authenticator = RequestAuthenticator(nowEpochMs = { 1_000L }),
+                config = config(inboundSecret = "inbound-secret", botControlSecret = "control-secret"),
+            )
+        val body = ""
+        val timestamp = "1000"
+        val nonce = "nonce-control"
+        val path = "/reply-status/req-1"
+
+        val botControlSignature =
+            signIrisRequest(
+                secret = "control-secret",
+                method = "GET",
+                path = path,
+                timestamp = timestamp,
+                nonce = nonce,
+                body = body,
+            )
+
+        val inboundResult =
+            authSupport.authenticateRequest(
+                role = AuthSupport.SecretRole.INBOUND,
+                method = "GET",
+                path = path,
+                bodySha256Hex = sha256Hex(body.toByteArray()),
+                timestampHeader = timestamp,
+                nonceHeader = nonce,
+                signatureHeader = botControlSignature,
+            )
+        val controlResult =
+            authSupport.authenticateRequest(
+                role = AuthSupport.SecretRole.BOT_CONTROL,
+                method = "GET",
+                path = path,
+                bodySha256Hex = sha256Hex(body.toByteArray()),
+                timestampHeader = timestamp,
+                nonceHeader = nonce,
+                signatureHeader = botControlSignature,
+            )
+
+        assertEquals(AuthResult.UNAUTHORIZED, inboundResult)
+        assertEquals(AuthResult.AUTHORIZED, controlResult)
     }
 }

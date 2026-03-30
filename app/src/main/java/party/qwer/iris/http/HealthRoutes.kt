@@ -52,12 +52,12 @@ internal fun Route.installHealthRoutes(
         }
     }
     get("/diagnostics/bridge") {
-        if (!authSupport.requireBotToken(call, method = "GET")) return@get
+        if (!authSupport.requireBotControlSignature(call, method = "GET")) return@get
         val bridgeHealth = bridgeHealthProvider?.invoke() ?: invalidRequest("bridge health unavailable")
         call.respond(bridgeHealth)
     }
     get("/diagnostics/chatroom-fields/{chatId}") {
-        if (!authSupport.requireBotToken(call, method = "GET")) return@get
+        if (!authSupport.requireBotControlSignature(call, method = "GET")) return@get
         val chatId = call.parameters["chatId"]?.toLongOrNull() ?: invalidRequest("chatId must be a number")
         val result = chatRoomIntrospectProvider?.invoke(chatId) ?: invalidRequest("bridge introspection unavailable")
         call.respondText(result, ContentType.Application.Json)

@@ -31,7 +31,7 @@ internal data class TextReplyCommand(
 
 internal data class NativeImageReplyCommand(
     override val target: ReplyTarget,
-    val base64Images: List<String>,
+    val imageCount: Int,
     val threadScope: Int?,
     override val requestId: String?,
 ) : ReplyCommand

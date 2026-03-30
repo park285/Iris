@@ -1,9 +1,11 @@
 package party.qwer.iris.delivery.webhook
 
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -38,13 +40,15 @@ internal class WebhookOutboxDispatcher(
     private val claimRecoveryIntervalMs: Long = 30_000L,
     private val claimExpirationMs: Long = 60_000L,
     private val clock: () -> Long = System::currentTimeMillis,
+    dispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : Closeable {
     private val scopeJob = SupervisorJob()
-    private val coroutineScope = CoroutineScope(scopeJob + Dispatchers.IO)
+    private val coroutineScope = CoroutineScope(scopeJob + dispatcher)
     private val clientFactory = WebhookHttpClientFactory(resolveWebhookTransport(transportOverride), okhttp3.Dispatcher(), okhttp3.ConnectionPool())
     private val requestFactory = WebhookRequestFactory(config)
     private val deliveryClient = WebhookDeliveryClient(clientFactory)
     private val routePartitions = ConcurrentHashMap<String, RoutePartitions>()
+    private val outstandingClaims = ConcurrentHashMap<Long, ClaimedDelivery>()
 
     @Volatile
     private var pollingJob: Job? = null
@@ -52,14 +56,21 @@ internal class WebhookOutboxDispatcher(
     @Volatile
     private var nextClaimRecoveryAtMs: Long = 0L
 
+    @Volatile
+    private var shuttingDown: Boolean = false
+
     fun start() {
         if (pollingJob?.isActive == true) {
             return
         }
+        shuttingDown = false
         recoverExpiredClaimsNow()
         pollingJob =
             coroutineScope.launch {
                 while (isActive) {
+                    if (shuttingDown) {
+                        break
+                    }
                     recoverExpiredClaimsIfDue()
                     pumpReadyEntries()
                     delay(pollIntervalMs)
@@ -83,16 +94,16 @@ internal class WebhookOutboxDispatcher(
     private suspend fun pumpReadyEntries() {
         val claimed = store.claimReady(maxClaimBatchSize)
         claimed.forEach { entry ->
+            outstandingClaims[entry.id] = entry
             val partition =
                 routePartitions
                     .computeIfAbsent(entry.route, ::createRoutePartitions)
                     .partitions[partitionIndexForRoom(entry.roomId, partitionCount)]
             val sendResult = partition.channel.trySend(entry)
             if (sendResult.isFailure) {
-                store.markRetry(
-                    id = entry.id,
-                    claimToken = entry.claimToken,
-                    nextAttemptAt = System.currentTimeMillis() + pollIntervalMs,
+                releaseClaimIfOutstanding(
+                    entry = entry,
+                    nextAttemptAt = clock() + pollIntervalMs,
                     reason = "partition queue saturated: route=${entry.route}, partition=${partition.index}",
                 )
             }
@@ -116,35 +127,51 @@ internal class WebhookOutboxDispatcher(
         )
 
     private suspend fun processEntry(entry: ClaimedDelivery) {
-        val url = config.webhookEndpointFor(entry.route).takeIf { it.isNotBlank() }
-        if (url.isNullOrBlank()) {
-            store.markDead(entry.id, entry.claimToken, "no webhook URL configured for route=${entry.route}")
-            return
-        }
-
-        val request =
-            requestFactory.create(
-                WebhookDelivery(
-                    url = url,
-                    messageId = entry.messageId,
-                    route = entry.route,
-                    payloadJson = entry.payloadJson,
-                    attempt = entry.attemptCount,
-                ),
-            )
-
-        val statusCode =
-            try {
-                deliveryClient.execute(request, url)
-            } catch (error: Exception) {
-                scheduleRetryOrDead(entry, error.message)
+        try {
+            val url = config.webhookEndpointFor(entry.route).takeIf { it.isNotBlank() }
+            if (url.isNullOrBlank()) {
+                store.markDead(entry.id, entry.claimToken, "no webhook URL configured for route=${entry.route}")
                 return
             }
 
-        when {
-            statusCode in 200..299 -> store.markSent(entry.id, entry.claimToken)
-            shouldRetryStatus(statusCode) -> scheduleRetryOrDead(entry, "status=$statusCode")
-            else -> store.markDead(entry.id, entry.claimToken, "status=$statusCode")
+            val request =
+                requestFactory.create(
+                    WebhookDelivery(
+                        url = url,
+                        messageId = entry.messageId,
+                        route = entry.route,
+                        payloadJson = entry.payloadJson,
+                        attempt = entry.attemptCount,
+                    ),
+                )
+
+            val statusCode =
+                try {
+                    deliveryClient.execute(request, url)
+                } catch (error: Exception) {
+                    if (shuttingDown) {
+                        releaseClaimIfOutstanding(entry = entry, nextAttemptAt = clock(), reason = "dispatcher shutdown")
+                        return
+                    }
+                    scheduleRetryOrDead(entry, error.message)
+                    return
+                }
+
+            if (shuttingDown) {
+                releaseClaimIfOutstanding(entry = entry, nextAttemptAt = clock(), reason = "dispatcher shutdown")
+                return
+            }
+
+            when {
+                statusCode in 200..299 -> store.markSent(entry.id, entry.claimToken)
+                shouldRetryStatus(statusCode) -> scheduleRetryOrDead(entry, "status=$statusCode")
+                else -> store.markDead(entry.id, entry.claimToken, "status=$statusCode")
+            }
+        } catch (cancelled: CancellationException) {
+            releaseClaimIfOutstanding(entry = entry, nextAttemptAt = clock(), reason = "dispatcher shutdown")
+            throw cancelled
+        } finally {
+            outstandingClaims.remove(entry.id, entry)
         }
     }
 
@@ -164,7 +191,7 @@ internal class WebhookOutboxDispatcher(
                 store.markRetry(
                     id = entry.id,
                     claimToken = entry.claimToken,
-                    nextAttemptAt = System.currentTimeMillis() + retrySchedule.delayMs,
+                    nextAttemptAt = clock() + retrySchedule.delayMs,
                     reason = reason,
                 )
 
@@ -178,24 +205,55 @@ internal class WebhookOutboxDispatcher(
     }
 
     override fun close() {
+        runBlocking { closeSuspend() }
+    }
+
+    suspend fun closeSuspend() {
+        shuttingDown = true
         val job = pollingJob
         pollingJob = null
-        runBlocking {
-            job?.cancelAndJoin()
-            routePartitions.values.forEach { route ->
-                route.partitions.forEach { partition ->
-                    partition.channel.close()
-                    partition.job.cancelAndJoin()
-                }
+        job?.cancelAndJoin()
+        routePartitions.values.forEach { route ->
+            route.partitions.forEach { partition ->
+                partition.channel.close()
             }
-            scopeJob.cancelAndJoin()
         }
+        releaseOutstandingClaims()
+        routePartitions.values.forEach { route ->
+            route.partitions.forEach { partition ->
+                partition.job.cancelAndJoin()
+            }
+        }
+        scopeJob.cancelAndJoin()
         clientFactory
             .clientFor("http://127.0.0.1")
             .dispatcher.executorService
             .shutdownNow()
         clientFactory.clientFor("http://127.0.0.1").connectionPool.evictAll()
         store.close()
+    }
+
+    private fun releaseOutstandingClaims() {
+        outstandingClaims.values.toList().forEach { entry ->
+            releaseClaimIfOutstanding(entry = entry, nextAttemptAt = clock(), reason = "dispatcher shutdown")
+        }
+    }
+
+    private fun releaseClaimIfOutstanding(
+        entry: ClaimedDelivery,
+        nextAttemptAt: Long,
+        reason: String,
+    ): Boolean {
+        if (!outstandingClaims.remove(entry.id, entry)) {
+            return false
+        }
+        store.releaseClaim(
+            id = entry.id,
+            claimToken = entry.claimToken,
+            nextAttemptAt = nextAttemptAt,
+            reason = reason,
+        )
+        return true
     }
 
     private data class RoutePartitions(

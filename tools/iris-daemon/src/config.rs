@@ -172,7 +172,7 @@ fn default_config_template() -> String {
 }
 
 fn default_config_dest() -> String {
-    "/data/local/tmp/config.json".to_string()
+    "/data/iris/config.json".to_string()
 }
 
 fn default_apk_dest() -> String {

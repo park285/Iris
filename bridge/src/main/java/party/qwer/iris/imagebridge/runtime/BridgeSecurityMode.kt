@@ -8,8 +8,8 @@ internal enum class BridgeSecurityMode {
     companion object {
         fun fromEnv(raw: String? = System.getenv("IRIS_BRIDGE_SECURITY_MODE")): BridgeSecurityMode =
             when (raw?.trim()?.lowercase()) {
-                "production", "prod" -> PRODUCTION
-                else -> DEVELOPMENT
+                "development", "dev" -> DEVELOPMENT
+                else -> PRODUCTION
             }
     }
 }

@@ -6,7 +6,6 @@ import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.writeFully
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.supervisorScope
@@ -19,9 +18,39 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
-import kotlin.test.fail
 
 class RequestBodyReaderTest {
+    @Test
+    fun `buffering policy reads runtime overrides from env`() {
+        val policy =
+            RequestBodyBufferingPolicy.fromEnv(
+                env =
+                    mapOf(
+                        "IRIS_REQUEST_BODY_MAX_IN_MEMORY_BYTES" to "8192",
+                        "IRIS_REQUEST_BODY_SPILL_DIR" to "/tmp/iris-request-bodies",
+                    ),
+                defaultTmpDir = "/tmp/default",
+            )
+
+        assertEquals(8192, policy.maxInMemoryBytes)
+        assertEquals(Path.of("/tmp/iris-request-bodies"), policy.spillDirectory)
+    }
+
+    @Test
+    fun `buffering policy falls back to defaults when env is absent or invalid`() {
+        val policy =
+            RequestBodyBufferingPolicy.fromEnv(
+                env =
+                    mapOf(
+                        "IRIS_REQUEST_BODY_MAX_IN_MEMORY_BYTES" to "0",
+                    ),
+                defaultTmpDir = "/tmp/default",
+            )
+
+        assertEquals(64 * 1024, policy.maxInMemoryBytes)
+        assertEquals(Path.of("/tmp/default"), policy.spillDirectory)
+    }
+
     @Test
     fun `rejects when Content-Length exceeds limit`() =
         runBlocking {
@@ -62,6 +91,7 @@ class RequestBodyReaderTest {
             ).use { result ->
                 assertEquals(payload, result.readUtf8Body())
                 assertEquals(sha256Hex(payload.toByteArray()), result.sha256Hex)
+                assertEquals(payload.toByteArray().size.toLong(), result.sizeBytes)
             }
         }
 
@@ -114,6 +144,7 @@ class RequestBodyReaderTest {
                     val bodyChannel = ByteChannel(autoFlush = true)
                     val firstChunkWritten = CompletableDeferred<Unit>()
                     val continueWriting = CompletableDeferred<Unit>()
+                    val spillPathReady = CompletableDeferred<Path>()
 
                     val writer =
                         launch {
@@ -130,22 +161,31 @@ class RequestBodyReaderTest {
                                 bodyChannel = bodyChannel,
                                 declaredContentLength = (firstChunk.length + secondChunk.length).toLong(),
                                 maxBodyBytes = 256 * 1024,
+                                bufferingPolicy =
+                                    RequestBodyBufferingPolicy(
+                                        maxInMemoryBytes = 64 * 1024,
+                                        spillDirectory = tempDir,
+                                        spillStorageFactory = { path -> ObservingSpillStorage(path, spillPathReady) },
+                                    ),
                             )
                         }
 
                     firstChunkWritten.await()
-                    waitForAnyFile(tempDir)
+                    val spillPath = spillPathReady.await()
+                    assertTrue(Files.exists(spillPath), "expected spill file to exist before read completes")
 
                     continueWriting.complete(Unit)
                     val result = reader.await()
                     writer.join()
 
                     result.use {
+                        assertTrue(it is SpillFileRequestBodyHandle)
                         assertEquals(firstChunk + secondChunk, it.readUtf8Body())
                         assertEquals(
                             sha256Hex((firstChunk + secondChunk).toByteArray()),
                             it.sha256Hex,
                         )
+                        assertEquals((firstChunk.length + secondChunk.length).toLong(), it.sizeBytes)
                     }
                     assertTrue(tempDir.isEmptyDirectory(), "expected spill file to be removed after success")
                 }
@@ -182,6 +222,7 @@ class RequestBodyReaderTest {
                     val bodyChannel = ByteChannel(autoFlush = true)
                     val firstChunkWritten = CompletableDeferred<Unit>()
                     val continueWriting = CompletableDeferred<Unit>()
+                    val spillPathReady = CompletableDeferred<Path>()
 
                     val writer =
                         launch {
@@ -198,11 +239,18 @@ class RequestBodyReaderTest {
                                 bodyChannel = bodyChannel,
                                 declaredContentLength = null,
                                 maxBodyBytes = 100 * 1024,
+                                bufferingPolicy =
+                                    RequestBodyBufferingPolicy(
+                                        maxInMemoryBytes = 64 * 1024,
+                                        spillDirectory = tempDir,
+                                        spillStorageFactory = { path -> ObservingSpillStorage(path, spillPathReady) },
+                                    ),
                             )
                         }
 
                     firstChunkWritten.await()
-                    waitForAnyFile(tempDir)
+                    val spillPath = spillPathReady.await()
+                    assertTrue(Files.exists(spillPath), "expected spill file to exist before overflow failure")
 
                     continueWriting.complete(Unit)
                     val error = assertFailsWith<ApiRequestException> { reader.await() }
@@ -240,13 +288,30 @@ class RequestBodyReaderTest {
             }
         }
 
-    private suspend fun waitForAnyFile(tempDir: Path): Path {
-        repeat(50) {
-            tempDir.firstRegularFileOrNull()?.let { return it }
-            delay(20)
+    @Test
+    fun `spill path is created on demand when configured directory does not exist`() =
+        runBlocking {
+            val baseDir = Files.createTempDirectory("request-body-spill-parent-")
+            val missingSpillDir = baseDir.resolve("nested").resolve("spill")
+            try {
+                readBodyWithStreamingDigest(
+                    bodyChannel = ByteReadChannel("z".repeat(96 * 1024)),
+                    declaredContentLength = null,
+                    maxBodyBytes = 256 * 1024,
+                    bufferingPolicy =
+                        RequestBodyBufferingPolicy(
+                            maxInMemoryBytes = 64,
+                            spillDirectory = missingSpillDir,
+                        ),
+                ).use { result ->
+                    assertTrue(result is SpillFileRequestBodyHandle)
+                }
+
+                assertTrue(Files.isDirectory(missingSpillDir), "expected spill directory to be created automatically")
+            } finally {
+                baseDir.deleteRecursively()
+            }
         }
-        fail("expected a spill file to appear in $tempDir")
-    }
 
     private suspend fun withIsolatedJvmTempDir(block: suspend (Path) -> Unit) {
         val previous = System.getProperty("java.io.tmpdir")
@@ -259,11 +324,6 @@ class RequestBodyReaderTest {
             tempDir.deleteRecursively()
         }
     }
-
-    private fun Path.firstRegularFileOrNull(): Path? =
-        Files.list(this).use { paths ->
-            paths.filter(Files::isRegularFile).findFirst().orElse(null)
-        }
 
     private fun Path.isEmptyDirectory(): Boolean =
         Files.list(this).use { paths ->
@@ -286,9 +346,10 @@ private class FailingSpillStorage(
         length: Int,
     ): Unit = throw IllegalStateException("spill write failed")
 
-    override fun readUtf8Body(): String = error("unused")
-
-    override fun openInputStream() = error("unused")
+    override fun toHandle(
+        sha256Hex: String,
+        sizeBytes: Long,
+    ): RequestBodyHandle = error("unused")
 
     override fun close() {
         Files.deleteIfExists(path)
@@ -309,13 +370,61 @@ private class NoStringReadSpillStorage(
         delegate.write(bytes, offset, length)
     }
 
-    override fun readUtf8Body(): String = error("string rematerialization should not be used in this test")
+    override fun toHandle(
+        sha256Hex: String,
+        sizeBytes: Long,
+    ): RequestBodyHandle =
+        SpillFileRequestBodyHandle(
+            path =
+                path.also {
+                    closeWriter()
+                },
+            sizeBytes = sizeBytes,
+            sha256Hex = sha256Hex,
+        )
 
-    override fun openInputStream() =
-        Files.newInputStream(
-            path.also {
-                closeWriter()
-            },
+    override fun close() {
+        closeWriter()
+        Files.deleteIfExists(path)
+    }
+
+    private fun closeWriter() {
+        if (!writerClosed) {
+            delegate.close()
+            writerClosed = true
+        }
+    }
+}
+
+private class ObservingSpillStorage(
+    private val path: Path,
+    private val spillPathReady: CompletableDeferred<Path>,
+) : RequestBodyStorage {
+    private val delegate = Files.newOutputStream(path)
+    private var writerClosed = false
+
+    override fun write(
+        bytes: ByteArray,
+        offset: Int,
+        length: Int,
+    ) {
+        if (!spillPathReady.isCompleted) {
+            spillPathReady.complete(path)
+        }
+        delegate.write(bytes, offset, length)
+    }
+
+    override fun toHandle(
+        sha256Hex: String,
+        sizeBytes: Long,
+    ): RequestBodyHandle =
+        SpillFileRequestBodyHandle(
+            path =
+                path.also {
+                    closeWriter()
+                },
+            sizeBytes = sizeBytes,
+            sha256Hex = sha256Hex,
         )
 
     override fun close() {

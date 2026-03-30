@@ -1,8 +1,13 @@
 package party.qwer.iris
 
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import party.qwer.iris.http.SseEventEnvelope
 import party.qwer.iris.http.SseSubscriberPolicy
@@ -10,6 +15,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
+@OptIn(ExperimentalCoroutinesApi::class, DelicateCoroutinesApi::class)
 class SseEventBusBackpressureTest {
     @Test
     fun `openSubscriberChannel creates channel with policy capacity`() {
@@ -78,32 +84,39 @@ class SseEventBusBackpressureTest {
     @Test
     fun `envelope stores eventType and createdAtMs`() {
         val policy = SseSubscriberPolicy(bufferCapacity = 10, replayWindowSize = 10)
-        val bus = SseEventBus(policy)
-        val beforeMs = System.currentTimeMillis()
+        val bus = SseEventBus(policy, clock = { 1234L })
         bus.emit("payload", "member_event")
 
         val envelope = bus.replayEnvelopes(0).single()
         assertEquals("member_event", envelope.eventType)
         assertEquals("payload", envelope.payload)
-        assertTrue(envelope.createdAtMs >= beforeMs)
+        assertEquals(1234L, envelope.createdAtMs)
         assertTrue(envelope.id > 0)
     }
 
     @Test
     fun `slow subscriber channel gets closed on overflow`() =
-        runBlocking {
+        runTest {
             val policy = SseSubscriberPolicy(bufferCapacity = 4, replayWindowSize = 2, slowSubscriberTimeoutMs = 100)
-            val bus = SseEventBus(policy)
+            val bus =
+                SseEventBus(
+                    policy = policy,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = StandardTestDispatcher(testScheduler),
+                )
             val subscriberChannel = Channel<SseEventEnvelope>(policy.bufferCapacity)
-            bus.addSubscriber(subscriberChannel)
+            bus.addSubscriberSuspend(subscriberChannel)
 
             repeat(policy.bufferCapacity + 2) {
-                bus.emit("event-$it", "test")
+                bus.emitSuspend("event-$it", "test")
             }
 
-            delay(policy.slowSubscriberTimeoutMs + 50)
+            advanceTimeBy(policy.slowSubscriberTimeoutMs)
+            advanceUntilIdle()
 
-            assertTrue(bus.subscriberCount() == 0)
+            assertEquals(0, bus.subscriberCountSuspend())
+            assertTrue(subscriberChannel.isClosedForSend)
+            bus.closeSuspend()
         }
 
     @Test
