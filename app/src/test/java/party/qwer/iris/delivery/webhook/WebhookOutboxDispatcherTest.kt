@@ -15,12 +15,15 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class WebhookOutboxDispatcherTest {
+    private val fakeClock = AtomicLong(1_000_000L)
+
     @Test
     fun `dispatcher retries claims when partition queue is saturated`() {
         val configPath = Files.createTempFile("iris-outbox-dispatcher", ".json").toFile().absolutePath
@@ -60,6 +63,7 @@ class WebhookOutboxDispatcherTest {
                 partitionQueueCapacity = 1,
                 pollIntervalMs = 25L,
                 maxClaimBatchSize = 10,
+                clock = fakeClock::get,
             ).use { dispatcher ->
                 dispatcher.start()
                 assertTrue(retryLatch.await(5, TimeUnit.SECONDS))
@@ -81,6 +85,7 @@ class WebhookOutboxDispatcherTest {
         val configPath = Files.createTempFile("iris-outbox-dispatcher", ".json").toFile().absolutePath
         val config = ConfigManager(configPath = configPath)
         val store = RecordingWebhookDeliveryStore(claimedEntries = emptyList())
+        val recoveryInterval = 10_000L
 
         try {
             WebhookOutboxDispatcher(
@@ -88,10 +93,15 @@ class WebhookOutboxDispatcherTest {
                 store = store,
                 pollIntervalMs = 25L,
                 maxClaimBatchSize = 1,
-                claimRecoveryIntervalMs = 50L,
+                claimRecoveryIntervalMs = recoveryInterval,
+                clock = fakeClock::get,
             ).use { dispatcher ->
                 dispatcher.start()
-                assertTrue(store.awaitRecoveries(expectedCalls = 2, timeoutMs = 1_000L))
+                // start()에서 즉시 1회 회수 완료, 폴링 루프가 clock 기반으로 다음 회수를 결정
+                assertTrue(store.awaitRecoveries(expectedCalls = 1, timeoutMs = 500L))
+                // 시계를 recoveryInterval 이상으로 전진시켜 두 번째 회수를 유발
+                fakeClock.addAndGet(recoveryInterval + 1)
+                assertTrue(store.awaitRecoveries(expectedCalls = 2, timeoutMs = 500L))
             }
         } finally {
             Files.deleteIfExists(Path.of(configPath))
@@ -114,6 +124,7 @@ class WebhookOutboxDispatcherTest {
                 pollIntervalMs = 1_000L,
                 maxClaimBatchSize = 1,
                 claimRecoveryIntervalMs = 30_000L,
+                clock = fakeClock::get,
             ).use { dispatcher ->
                 dispatcher.start()
                 assertEquals(1, store.recoverCallCount.get())
