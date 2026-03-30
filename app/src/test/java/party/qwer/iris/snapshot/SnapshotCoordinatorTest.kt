@@ -355,6 +355,67 @@ class SnapshotCoordinatorTest {
         }
 
     @Test
+    fun `resurrected room emits join events on reappearance`() =
+        runBlocking {
+            val rooms = mutableListOf(100L, 200L)
+            val reader =
+                StubSnapshotReader(
+                    roomsProvider = { rooms.map(::ChatId) },
+                    snapshots =
+                        mapOf(
+                            100L to
+                                listOf(
+                                    // 시드 시점의 스냅샷
+                                    snapshot(100L, setOf(1L), nicknames = mapOf(1L to "Alice")),
+                                    // 삭제 이후 빈 스냅샷
+                                    deletedSnapshot(100L),
+                                    // 부활 후 새 멤버 스냅샷
+                                    snapshot(100L, setOf(5L, 6L), nicknames = mapOf(5L to "Eve", 6L to "Frank")),
+                                ),
+                            200L to
+                                listOf(
+                                    snapshot(200L, setOf(2L)),
+                                    snapshot(200L, setOf(2L)),
+                                    snapshot(200L, setOf(2L)),
+                                ),
+                        ),
+                )
+            val emitter = RecordingEmitter()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            val coordinator = SnapshotCoordinator(scope, reader, RoomSnapshotManager(), emitter)
+
+            // 1단계: 시드
+            coordinator.send(SnapshotCommand.SeedCache)
+            yield()
+
+            // 2단계: 방 100 삭제 → FullReconcile + Drain → leave 이벤트 확인
+            rooms.remove(100L)
+            coordinator.send(SnapshotCommand.FullReconcile)
+            yield()
+            coordinator.send(SnapshotCommand.Drain(budget = 10))
+            yield()
+
+            val leaveEvents = emitter.emittedEvents.filterIsInstance<MemberEvent>()
+            assertEquals(listOf("leave"), leaveEvents.map { it.event })
+            assertEquals(listOf(100L), leaveEvents.map { it.chatId })
+            emitter.emittedEvents.clear()
+
+            // 3단계: 방 100 부활 (새 멤버) → FullReconcile + Drain → join 이벤트 확인
+            rooms.add(100L)
+            coordinator.send(SnapshotCommand.FullReconcile)
+            yield()
+            coordinator.send(SnapshotCommand.Drain(budget = 10))
+            yield()
+
+            val joinEvents = emitter.emittedEvents.filterIsInstance<MemberEvent>()
+            assertEquals(2, joinEvents.size)
+            assertEquals(listOf("join", "join"), joinEvents.map { it.event })
+            assertEquals(setOf(5L, 6L), joinEvents.map { it.userId }.toSet())
+            assertEquals(listOf(100L, 100L), joinEvents.map { it.chatId })
+            scope.cancel()
+        }
+
+    @Test
     fun `enqueue accepts non suspending commands and updates dirty room count`() =
         runBlocking {
             val reader =
