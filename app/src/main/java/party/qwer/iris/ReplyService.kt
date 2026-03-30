@@ -10,16 +10,13 @@ import party.qwer.iris.reply.PipelineRequest
 import party.qwer.iris.reply.ReplyAdmissionService
 import party.qwer.iris.reply.ReplyCommandFactory
 import party.qwer.iris.reply.ReplyStatusTracker
+import party.qwer.iris.reply.ReplyThreadId
 import party.qwer.iris.reply.ReplyTransitionEvent
 import party.qwer.iris.reply.ReplyTransport
 import party.qwer.iris.reply.ShareReplyCommand
 import party.qwer.iris.reply.TextReplyCommand
+import party.qwer.iris.storage.ChatId
 import java.io.File
-
-internal data class ReplyQueueKey(
-    val chatId: Long,
-    val threadId: Long?,
-)
 
 internal enum class ReplySendLane {
     TEXT,
@@ -258,7 +255,14 @@ internal class ReplyService(
         pipelineRequest: ReplyPipelineRequest,
     ): ReplyAdmissionResult {
         statusTracker.onQueued(requestId)
-        val result = admissionService.enqueue(ReplyQueueKey(chatId, threadId), pipelineRequest)
+        val result =
+            admissionService.enqueue(
+                ReplyQueueKey(
+                    chatId = ChatId(chatId),
+                    threadId = threadId?.let(::ReplyThreadId),
+                ),
+                pipelineRequest,
+            )
         return if (result.status == ReplyAdmissionStatus.ACCEPTED) {
             result
         } else {

@@ -2,6 +2,8 @@ package party.qwer.iris
 
 import kotlinx.coroutines.delay
 import party.qwer.iris.model.ReplyLifecycleState
+import party.qwer.iris.reply.ReplyThreadId
+import party.qwer.iris.storage.ChatId
 import java.io.File
 import java.nio.file.Files
 import java.util.Base64
@@ -10,6 +12,8 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -44,6 +48,10 @@ class ReplyServiceTest {
         val key3 = ReplyQueueKey(chatId = 1L, threadId = 200L)
         val key4 = ReplyQueueKey(chatId = 1L, threadId = null)
 
+        assertTrue(key1.chatId == ChatId(1L))
+        assertTrue(key1.threadId == ReplyThreadId(100L))
+        assertTrue(key4.chatId == ChatId(1L))
+        assertEquals(null, key4.threadId)
         assertEquals(key1, key2)
         assertNotEquals(key1, key3)
         assertNotEquals(key1, key4)
@@ -343,8 +351,11 @@ class ReplyServiceTest {
         }
         assertTrue(firstDone.await(5, TimeUnit.SECONDS), "first send should complete")
 
-        service.enqueueAction(chatId = 1L, threadId = null) {}
-        Thread.sleep(100)
+        val blockedRequestId = "gate-blocked"
+        service.enqueueAction(chatId = 1L, threadId = null, requestId = blockedRequestId) {}
+        waitUntil("second action should reach dispatch gate") {
+            service.replyStatusOrNull(blockedRequestId)?.state == ReplyLifecycleState.PREPARED
+        }
 
         val start = System.currentTimeMillis()
         service.shutdown()
@@ -585,15 +596,10 @@ class ReplyServiceTest {
 
         assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
         assertTrue(latch.await(5, TimeUnit.SECONDS))
-        var finalState = service.replyStatusOrNull(requestId)?.state
-        repeat(20) {
-            if (finalState == ReplyLifecycleState.HANDOFF_COMPLETED) {
-                return@repeat
-            }
-            Thread.sleep(50)
-            finalState = service.replyStatusOrNull(requestId)?.state
+        waitUntil("request should reach handoff completed") {
+            service.replyStatusOrNull(requestId)?.state == ReplyLifecycleState.HANDOFF_COMPLETED
         }
-        assertEquals(ReplyLifecycleState.HANDOFF_COMPLETED, finalState)
+        assertEquals(ReplyLifecycleState.HANDOFF_COMPLETED, service.replyStatusOrNull(requestId)?.state)
         service.shutdown()
     }
 
@@ -723,5 +729,18 @@ class ReplyServiceTest {
         assertEquals(1, shareStarts.get())
         assertEquals(2, capturedScope.get())
         service.shutdown()
+    }
+
+    private fun waitUntil(
+        message: String,
+        condition: () -> Boolean,
+    ) = runBlocking {
+        var satisfied = condition()
+        repeat(100) {
+            if (satisfied) return@repeat
+            delay(10L)
+            satisfied = condition()
+        }
+        assertTrue(satisfied, message)
     }
 }

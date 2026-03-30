@@ -2,6 +2,7 @@ package party.qwer.iris.reply
 
 import party.qwer.iris.NativeImageReplySender
 import party.qwer.iris.PreparedImages
+import party.qwer.iris.storage.ChatId
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -30,10 +31,9 @@ class ReplyTransportTest {
 
         val cmd =
             TextReplyCommand(
-                chatId = 100L,
+                target = ReplyTarget(chatId = ChatId(100L), threadId = null),
                 referer = "Iris",
                 message = "hello",
-                threadId = null,
                 threadScope = null,
                 requestId = null,
             )
@@ -67,10 +67,9 @@ class ReplyTransportTest {
 
         val cmd =
             TextReplyCommand(
-                chatId = 100L,
+                target = ReplyTarget(chatId = ChatId(100L), threadId = ReplyThreadId(500L)),
                 referer = "Iris",
                 message = "threaded text",
-                threadId = 500L,
                 threadScope = 2,
                 requestId = null,
             )
@@ -97,10 +96,9 @@ class ReplyTransportTest {
 
         val cmd =
             TextReplyCommand(
-                chatId = 100L,
+                target = ReplyTarget(chatId = ChatId(100L), threadId = ReplyThreadId(500L)),
                 referer = "Iris",
                 message = "default scope",
-                threadId = 500L,
                 threadScope = null,
                 requestId = null,
             )
@@ -127,9 +125,8 @@ class ReplyTransportTest {
 
         val cmd =
             ShareReplyCommand(
-                chatId = 200L,
+                target = ReplyTarget(chatId = ChatId(200L), threadId = null),
                 message = "shared text",
-                threadId = null,
                 threadScope = null,
                 requestId = null,
             )
@@ -180,14 +177,13 @@ class ReplyTransportTest {
             )
 
         transport.sendNativeImages(
-            command =
-                NativeImageReplyCommand(
-                    chatId = 300L,
-                    base64Images = listOf("base64"),
-                    threadId = null,
-                    threadScope = null,
-                    requestId = "img-1",
-                ),
+                command =
+                    NativeImageReplyCommand(
+                        target = ReplyTarget(chatId = ChatId(300L), threadId = null),
+                        base64Images = listOf("base64"),
+                        threadScope = null,
+                        requestId = "img-1",
+                    ),
             preparedImages = preparedImages,
         )
 
@@ -235,9 +231,8 @@ class ReplyTransportTest {
             transport.sendNativeImages(
                 command =
                     NativeImageReplyCommand(
-                        chatId = 400L,
+                        target = ReplyTarget(chatId = ChatId(400L), threadId = null),
                         base64Images = listOf("base64"),
-                        threadId = null,
                         threadScope = null,
                         requestId = null,
                     ),
@@ -266,10 +261,9 @@ class ReplyTransportTest {
 
         val cmd =
             TextReplyCommand(
-                chatId = 100L,
+                target = ReplyTarget(chatId = ChatId(100L), threadId = null),
                 referer = "Iris",
                 message = "a\u200Bb",
-                threadId = null,
                 threadScope = null,
                 requestId = null,
             )

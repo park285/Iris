@@ -1,5 +1,7 @@
 package party.qwer.iris.reply
 
+import party.qwer.iris.storage.ChatId
+
 internal class ReplyCommandFactory {
     fun textReply(
         referer: String,
@@ -10,10 +12,9 @@ internal class ReplyCommandFactory {
         requestId: String?,
     ): TextReplyCommand =
         TextReplyCommand(
-            chatId = chatId,
+            target = replyTarget(chatId, threadId),
             referer = referer,
             message = message,
-            threadId = threadId,
             threadScope = threadScope,
             requestId = requestId,
         )
@@ -27,9 +28,8 @@ internal class ReplyCommandFactory {
     ): NativeImageReplyCommand {
         require(base64Images.isNotEmpty()) { "image list must not be empty" }
         return NativeImageReplyCommand(
-            chatId = chatId,
+            target = replyTarget(chatId, threadId),
             base64Images = base64Images,
-            threadId = threadId,
             threadScope = threadScope,
             requestId = requestId,
         )
@@ -43,10 +43,18 @@ internal class ReplyCommandFactory {
         requestId: String?,
     ): ShareReplyCommand =
         ShareReplyCommand(
-            chatId = chatId,
+            target = replyTarget(chatId, threadId),
             message = message,
-            threadId = threadId,
             threadScope = threadScope,
             requestId = requestId,
+        )
+
+    private fun replyTarget(
+        chatId: Long,
+        threadId: Long?,
+    ): ReplyTarget =
+        ReplyTarget(
+            chatId = ChatId(chatId),
+            threadId = threadId?.let(::ReplyThreadId),
         )
 }

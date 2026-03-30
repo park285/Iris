@@ -23,8 +23,10 @@ class ReplyCommandFactoryTest {
 
         assertIs<TextReplyCommand>(cmd)
         assertEquals(100L, cmd.chatId)
+        assertEquals(100L, cmd.target.chatId.value)
         assertEquals("hello", cmd.message)
         assertNull(cmd.threadId)
+        assertNull(cmd.target.threadId)
         assertNull(cmd.threadScope)
         assertEquals("req-1", cmd.requestId)
         assertEquals("Iris", cmd.referer)
@@ -44,6 +46,7 @@ class ReplyCommandFactoryTest {
 
         assertIs<TextReplyCommand>(cmd)
         assertEquals(500L, cmd.threadId)
+        assertEquals(ReplyThreadId(500L), cmd.target.threadId)
         assertEquals(2, cmd.threadScope)
     }
 
@@ -60,6 +63,7 @@ class ReplyCommandFactoryTest {
 
         assertIs<NativeImageReplyCommand>(cmd)
         assertEquals(200L, cmd.chatId)
+        assertEquals(200L, cmd.target.chatId.value)
         assertEquals(listOf("aW1hZ2U="), cmd.base64Images)
         assertNull(cmd.threadId)
         assertEquals("img-1", cmd.requestId)
@@ -80,6 +84,7 @@ class ReplyCommandFactoryTest {
         assertIs<NativeImageReplyCommand>(cmd)
         assertEquals(3, cmd.base64Images.size)
         assertEquals(300L, cmd.threadId)
+        assertEquals(ReplyThreadId(300L), cmd.target.threadId)
     }
 
     @Test
@@ -95,6 +100,7 @@ class ReplyCommandFactoryTest {
 
         assertIs<ShareReplyCommand>(cmd)
         assertEquals(300L, cmd.chatId)
+        assertEquals(300L, cmd.target.chatId.value)
         assertEquals("shared", cmd.message)
         assertNull(cmd.threadId)
     }
@@ -112,6 +118,7 @@ class ReplyCommandFactoryTest {
 
         assertIs<ShareReplyCommand>(cmd)
         assertEquals(400L, cmd.threadId)
+        assertEquals(ReplyThreadId(400L), cmd.target.threadId)
         assertEquals(2, cmd.threadScope)
     }
 
