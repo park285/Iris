@@ -1,7 +1,21 @@
 package party.qwer.iris.config
 
+import party.qwer.iris.ApiRequestException
+import party.qwer.iris.ConfigManager
+import party.qwer.iris.ConfigUpdateOutcome
+import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
 import party.qwer.iris.UserConfigState
+import party.qwer.iris.canonicalWebhookRoute
+import party.qwer.iris.model.ConfigRequest
 import party.qwer.iris.model.ConfigValues
+
+internal fun interface ConfigMutator {
+    fun apply(
+        configManager: ConfigManager,
+        name: String,
+        request: ConfigRequest,
+    ): ConfigUpdateOutcome
+}
 
 internal data class ConfigValidationError(
     val field: ConfigField,
@@ -149,6 +163,99 @@ internal object ConfigPolicy {
         } else {
             "route must contain only letters, digits, '-' or '_'"
         }
+
+    // 설정 이름 → 변경 로직 매핑 테이블
+    private val endpointMutator =
+        ConfigMutator { configManager, name, request ->
+            val route = resolveEndpointRoute(request.route)
+            val value =
+                request.endpoint?.trim()
+                    ?: throw ApiRequestException("missing endpoint value")
+            validateWebhookEndpoint(value)?.let { throw ApiRequestException(it) }
+            configManager.setWebhookEndpoint(route, value)
+            ConfigUpdateOutcome(
+                name = if (route == DEFAULT_WEBHOOK_ROUTE) name else "$name.$route",
+                applied = true,
+                requiresRestart = false,
+            )
+        }
+
+    private val dbRateMutator =
+        ConfigMutator { configManager, name, request ->
+            val value =
+                request.rate
+                    ?: throw ApiRequestException("missing or invalid rate")
+            requireValidState(
+                field = ConfigField.DB_POLLING_RATE,
+                state = configManager.snapshotUserState().copy(dbPollingRate = value),
+            )
+            configManager.dbPollingRate = value
+            ConfigUpdateOutcome(
+                name = name,
+                applied = true,
+                requiresRestart = requiresRestart(ConfigField.DB_POLLING_RATE),
+            )
+        }
+
+    private val sendRateMutator =
+        ConfigMutator { configManager, name, request ->
+            val value =
+                request.rate
+                    ?: throw ApiRequestException("missing or invalid rate")
+            requireValidState(
+                field = ConfigField.MESSAGE_SEND_RATE,
+                state = configManager.snapshotUserState().copy(messageSendRate = value),
+            )
+            configManager.messageSendRate = value
+            ConfigUpdateOutcome(
+                name = name,
+                applied = true,
+                requiresRestart = requiresRestart(ConfigField.MESSAGE_SEND_RATE),
+            )
+        }
+
+    private val botPortMutator =
+        ConfigMutator { configManager, name, request ->
+            val value =
+                request.port
+                    ?: throw ApiRequestException("missing or invalid port")
+            requireValidState(
+                field = ConfigField.BOT_SOCKET_PORT,
+                state = configManager.snapshotUserState().copy(botHttpPort = value),
+            )
+            configManager.botSocketPort = value
+            ConfigUpdateOutcome(
+                name = name,
+                applied = false,
+                requiresRestart = requiresRestart(ConfigField.BOT_SOCKET_PORT),
+            )
+        }
+
+    private val mutationRegistry: Map<String, ConfigMutator> =
+        mapOf(
+            "endpoint" to endpointMutator,
+            "dbrate" to dbRateMutator,
+            "sendrate" to sendRateMutator,
+            "botport" to botPortMutator,
+        )
+
+    fun findMutator(name: String): ConfigMutator? = mutationRegistry[name]
+
+    private fun resolveEndpointRoute(rawRoute: String?): String {
+        val normalized = canonicalWebhookRoute(rawRoute)
+        if (normalized.isEmpty()) return DEFAULT_WEBHOOK_ROUTE
+        validateWebhookRoute(normalized)?.let { throw ApiRequestException(it) }
+        return normalized
+    }
+
+    private fun requireValidState(
+        field: ConfigField,
+        state: UserConfigState,
+    ) {
+        validateField(field, state)?.let { error ->
+            throw ApiRequestException(error.message)
+        }
+    }
 
     private fun fieldPolicy(field: ConfigField): ConfigFieldPolicy = fieldPolicies.first { it.field == field }
 }

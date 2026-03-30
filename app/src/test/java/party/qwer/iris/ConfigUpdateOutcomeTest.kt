@@ -3,6 +3,7 @@ package party.qwer.iris
 import party.qwer.iris.model.ConfigRequest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 
 class ConfigUpdateOutcomeTest {
@@ -21,5 +22,21 @@ class ConfigUpdateOutcomeTest {
         assertEquals("sendrate", outcome.name)
         assertEquals(true, outcome.applied)
         assertFalse(outcome.requiresRestart)
+    }
+
+    @Test
+    fun `unknown config name throws ApiRequestException`() {
+        val configManager = ConfigManager(configPath = "/tmp/iris-config-update-outcome-test.json")
+
+        val exception =
+            assertFailsWith<ApiRequestException> {
+                applyConfigUpdate(
+                    configManager = configManager,
+                    name = "nonexistent",
+                    request = ConfigRequest(),
+                )
+            }
+
+        assertEquals("unknown config 'nonexistent'", exception.message)
     }
 }
