@@ -1,39 +1,15 @@
 package party.qwer.iris
 
-import android.database.sqlite.SQLiteDatabase
-import android.net.Uri
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.withContext
-import party.qwer.iris.delivery.webhook.OutboxRoutingGateway
 import party.qwer.iris.delivery.webhook.WebhookOutboxDispatcher
 import party.qwer.iris.ingress.CommandIngressService
-import party.qwer.iris.persistence.AndroidSqliteDriver
 import party.qwer.iris.persistence.CheckpointJournal
-import party.qwer.iris.persistence.IrisDatabaseSchema
-import party.qwer.iris.persistence.SqliteCheckpointJournal
-import party.qwer.iris.persistence.SqliteWebhookDeliveryStore
+import party.qwer.iris.persistence.SqliteDriver
 import party.qwer.iris.persistence.WebhookDeliveryStore
-import party.qwer.iris.reply.DispatchScheduler
-import party.qwer.iris.reply.MediaPreparationService
-import party.qwer.iris.reply.ReplyAdmissionService
-import party.qwer.iris.reply.ReplyCommandFactory
-import party.qwer.iris.reply.ReplyStatusTracker
-import party.qwer.iris.reply.ReplyTransport
-import party.qwer.iris.snapshot.RoomSnapshotAssembler
-import party.qwer.iris.snapshot.RoomSnapshotReader
-import party.qwer.iris.snapshot.SnapshotCommand
 import party.qwer.iris.snapshot.SnapshotCoordinator
-import party.qwer.iris.snapshot.SnapshotEventEmitter
-import party.qwer.iris.storage.KakaoDbSqlClient
-import party.qwer.iris.storage.MemberIdentityQueries
-import party.qwer.iris.storage.ObservedProfileQueries
-import party.qwer.iris.storage.RoomDirectoryQueries
-import party.qwer.iris.storage.RoomStatsQueries
-import party.qwer.iris.storage.ThreadQueries
-import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal class AppRuntime(
@@ -50,7 +26,7 @@ internal class AppRuntime(
     private lateinit var memberRepo: MemberRepository
     private lateinit var webhookOutboxStore: WebhookDeliveryStore
     private lateinit var webhookOutboxDispatcher: WebhookOutboxDispatcher
-    private lateinit var persistenceDriver: AndroidSqliteDriver
+    private lateinit var persistenceDriver: SqliteDriver
     private lateinit var sseEventBus: SseEventBus
     private lateinit var checkpointJournal: CheckpointJournal
     private lateinit var snapshotCoordinator: SnapshotCoordinator
@@ -71,148 +47,45 @@ internal class AppRuntime(
         configManager = ConfigManager()
         bridgeClient = UdsImageBridgeClient()
 
-        val replyCommandFactory = ReplyCommandFactory()
-        val replyStatusStore = ReplyStatusStore()
-        val replyStatusTracker = ReplyStatusTracker(replyStatusStore)
-        val mediaPreparationService =
-            MediaPreparationService(
-                imageDecoder = ::decodeBase64Image,
-                mediaScanner = { file -> broadcastMediaScan(Uri.fromFile(file)) },
-                imageDir = File(IRIS_IMAGE_DIR_PATH),
-                imageMediaScanEnabled =
-                    System
-                        .getenv("IRIS_IMAGE_MEDIA_SCAN")
-                        ?.trim()
-                        ?.lowercase()
-                        ?.let { raw -> raw != "0" && raw != "false" && raw != "off" }
-                        ?: true,
-            )
-        val replyTransport =
-            ReplyTransport(
-                notificationReplySender = { referer, chatId, preparedMessage, threadId, threadScope ->
-                    dispatchNotificationReply(
-                        startService = { intent -> AndroidHiddenApi.startService(intent) },
-                        referer = referer,
-                        chatId = chatId,
-                        preparedMessage = preparedMessage,
-                        threadId = threadId,
-                        threadScope = threadScope,
-                    )
-                },
-                sharedTextReplySender = { room, preparedMessage, threadId, threadScope ->
-                    dispatchSharedTextReply(
-                        startActivityAs = { callerPackage, intent -> AndroidHiddenApi.startActivityAs(callerPackage, intent) },
-                        room = room,
-                        preparedMessage = preparedMessage,
-                        threadId = threadId,
-                        threadScope = threadScope,
-                    )
-                },
-                nativeImageReplySender = UdsImageReplySender(bridgeClient),
-                mediaPreparationService = mediaPreparationService,
-            )
-        val dispatchScheduler =
-            DispatchScheduler(
-                baseIntervalMs = { configManager.messageSendRate },
-                jitterMaxMs = { configManager.messageSendJitterMax },
-            )
-        val replyAdmissionService = ReplyAdmissionService()
-        replyService =
-            ReplyService(
-                admissionService = replyAdmissionService,
-                commandFactory = replyCommandFactory,
-                mediaPreparationService = mediaPreparationService,
-                transport = replyTransport,
-                dispatchScheduler = dispatchScheduler,
-                statusTracker = replyStatusTracker,
-            )
+        replyService = ReplyRuntimeFactory.create(configManager, bridgeClient).replyService
         replyService.start()
         IrisLogger.info("Message sender thread started")
 
-        kakaoDb = KakaoDB(configManager)
-        val sqlClient = KakaoDbSqlClient(kakaoDb::executeQuery)
-        val roomDirectoryQueries = RoomDirectoryQueries(sqlClient)
-        val memberIdentityQueries =
-            MemberIdentityQueries(
-                sqlClient,
-                KakaoDecrypt.Companion::decrypt,
-                configManager.botId,
+        val storageRuntime = RuntimeBuilders.createStorageRuntime(configManager)
+        kakaoDb = storageRuntime.kakaoDb
+        memberRepo = storageRuntime.memberRepository
+
+        val persistenceRuntime =
+            PersistenceFactory.createSqliteRuntime(
+                driver = PersistenceFactory.openAndroidDriver(),
             )
-        val observedProfileQueries = ObservedProfileQueries(sqlClient)
-        val roomStatsQueries = RoomStatsQueries(sqlClient)
-        val threadQueries = ThreadQueries(sqlClient)
-        val roomSnapshotAssembler = RoomSnapshotAssembler
-        memberRepo =
-            MemberRepository(
-                roomDirectory = roomDirectoryQueries,
-                memberIdentity = memberIdentityQueries,
-                observedProfile = observedProfileQueries,
-                roomStats = roomStatsQueries,
-                threadQueries = threadQueries,
-                snapshotAssembler = roomSnapshotAssembler,
-                decrypt = KakaoDecrypt.Companion::decrypt,
-                botId = configManager.botId,
-                learnObservedProfileUserMappings = kakaoDb::learnObservedProfileUserMappings,
-            )
-        val persistenceDbPath = "${PathUtils.getAppPath()}databases/iris.db"
-        val persistenceDbFile = File(persistenceDbPath)
-        persistenceDbFile.parentFile?.mkdirs()
-        persistenceDriver =
-            AndroidSqliteDriver(
-                SQLiteDatabase.openDatabase(
-                    persistenceDbFile.absolutePath,
-                    null,
-                    SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.CREATE_IF_NECESSARY,
-                ),
-            )
-        IrisDatabaseSchema.createAll(persistenceDriver)
-        webhookOutboxStore = SqliteWebhookDeliveryStore(persistenceDriver)
+        persistenceDriver = persistenceRuntime.driver
+        webhookOutboxStore = persistenceRuntime.webhookOutboxStore
+        checkpointJournal = persistenceRuntime.checkpointJournal
         webhookOutboxDispatcher = WebhookOutboxDispatcher(configManager, webhookOutboxStore)
         webhookOutboxDispatcher.start()
         sseEventBus = SseEventBus(bufferSize = 100)
-        checkpointJournal = SqliteCheckpointJournal(persistenceDriver)
-
-        val routingGateway = OutboxRoutingGateway(configManager, webhookOutboxStore)
-        val roomSnapshotReader =
-            object : RoomSnapshotReader {
-                override fun listRoomChatIds(): List<Long> = memberRepo.listRooms().rooms.map { it.chatId }
-
-                override fun snapshot(chatId: Long): RoomSnapshotData = memberRepo.snapshot(chatId)
-            }
-        val snapshotEventEmitter = SnapshotEventEmitter(sseEventBus, routingGateway)
-        snapshotScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        snapshotCoordinator =
-            SnapshotCoordinator(
-                scope = snapshotScope,
-                roomSnapshotReader = roomSnapshotReader,
-                diffEngine = RoomSnapshotManager(),
-                emitter = snapshotEventEmitter,
-            )
-        ingressService =
-            CommandIngressService(
-                db = kakaoDb,
-                config = configManager,
+        val snapshotRuntime =
+            SnapshotRuntimeFactory.create(
+                configManager = configManager,
+                kakaoDb = kakaoDb,
                 checkpointJournal = checkpointJournal,
-                memberRepo = memberRepo,
-                routingGateway = routingGateway,
-                learnFromTimestampCorrelation = kakaoDb::learnFromTimestampCorrelation,
-                onMarkDirty = { chatId ->
-                    snapshotCoordinator.enqueue(SnapshotCommand.MarkDirty(chatId))
-                },
+                memberRepository = memberRepo,
+                roomDirectoryQueries = storageRuntime.roomDirectoryQueries,
+                webhookOutboxStore = webhookOutboxStore,
+                sseEventBus = sseEventBus,
             )
-        observerHelper =
-            ObserverHelper(
-                ingressService = ingressService,
-                snapshotCoordinator = snapshotCoordinator,
-                checkpointJournal = checkpointJournal,
-            )
+        snapshotScope = snapshotRuntime.snapshotScope
+        snapshotCoordinator = snapshotRuntime.snapshotCoordinator
+        ingressService = snapshotRuntime.ingressService
+        observerHelper = snapshotRuntime.observerHelper
         observerHelper.seedSnapshotCache()
 
-        dbObserver = DBObserver(observerHelper, configManager)
+        dbObserver = snapshotRuntime.dbObserver
         dbObserver.startPolling()
         IrisLogger.info("DBObserver started")
 
-        snapshotObserver = SnapshotObserver(snapshotCoordinator, checkpointJournal)
+        snapshotObserver = snapshotRuntime.snapshotObserver
         snapshotObserver.start()
         IrisLogger.info("SnapshotObserver started")
 
@@ -271,22 +144,30 @@ internal class AppRuntime(
         }
         withContext(Dispatchers.IO) {
             IrisLogger.info("[AppRuntime] Shutdown signal received, cleaning up...")
-            irisServer?.stopServer()
-            dbObserver.stopPolling()
-            snapshotObserver.stop()
-            kakaoProfileIndexer.stop()
-            imageDeleter.stopDeletion()
-            webhookOutboxDispatcher.close()
-            observerHelper.close()
-            snapshotScope.cancel()
-            replyService.shutdown()
-            bridgeHealthCache.stop()
-            if (!configManager.saveConfigNow()) {
-                IrisLogger.error("[AppRuntime] Failed to save config during shutdown")
-            }
-            checkpointJournal.flushNow()
-            persistenceDriver.close()
-            kakaoDb.closeConnection()
+            RuntimeBuilders.runShutdownPlan(
+                RuntimeBuilders.buildShutdownPlan(
+                    RuntimeBuilders.ShutdownHooks(
+                        stopServer = { irisServer?.stopServer() },
+                        stopDbObserver = dbObserver::stopPolling,
+                        stopSnapshotObserver = snapshotObserver::stop,
+                        stopProfileIndexer = kakaoProfileIndexer::stop,
+                        stopImageDeleter = imageDeleter::stopDeletion,
+                        closeWebhookOutbox = webhookOutboxDispatcher::close,
+                        closeIngress = observerHelper::close,
+                        cancelSnapshotScope = snapshotScope::cancel,
+                        shutdownReplyService = replyService::shutdown,
+                        stopBridgeHealthCache = bridgeHealthCache::stop,
+                        persistConfig = {
+                            if (!configManager.saveConfigNow()) {
+                                IrisLogger.error("[AppRuntime] Failed to save config during shutdown")
+                            }
+                        },
+                        flushCheckpointJournal = checkpointJournal::flushNow,
+                        closePersistenceDriver = persistenceDriver::close,
+                        closeKakaoDb = kakaoDb::closeConnection,
+                    ),
+                ),
+            )
             IrisLogger.info("[AppRuntime] Cleanup completed")
         }
     }
