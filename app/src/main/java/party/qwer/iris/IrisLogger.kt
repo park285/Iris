@@ -31,6 +31,12 @@ object IrisLogger {
         }
     }
 
+    fun warn(message: String) {
+        if (currentLevel.priority <= Level.ERROR.priority) {
+            System.err.println(formatLogLine(level = "WARN", message = message))
+        }
+    }
+
     fun info(message: String) {
         if (currentLevel.priority <= Level.INFO.priority) {
             println(formatLogLine(level = "INFO", message = message))

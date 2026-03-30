@@ -4,8 +4,13 @@ import android.os.Process
 import java.io.File
 
 internal class BridgePeerIdentityValidator(
-    private val allowedUids: Set<Int> = defaultAllowedUids(System.getenv("IRIS_BRIDGE_ALLOWED_UIDS")),
+    private val allowedUids: Set<Int>,
 ) {
+    constructor(
+        securityMode: BridgeSecurityMode = BridgeSecurityMode.fromEnv(),
+        extraUidsRaw: String? = System.getenv("IRIS_BRIDGE_ALLOWED_UIDS"),
+    ) : this(buildAllowedUids(securityMode, extraUidsRaw))
+
     fun validate(peerUid: Int?) {
         require(peerUid != null && peerUid in allowedUids) {
             "unauthorized bridge client uid=${peerUid ?: -1}"
@@ -13,16 +18,29 @@ internal class BridgePeerIdentityValidator(
     }
 
     companion object {
-        internal fun defaultAllowedUids(raw: String?): Set<Int> {
-            val defaults = linkedSetOf(Process.ROOT_UID, Process.SHELL_UID)
+        private fun buildAllowedUids(
+            securityMode: BridgeSecurityMode,
+            extraUidsRaw: String?,
+        ): Set<Int> {
+            val defaults =
+                when (securityMode) {
+                    BridgeSecurityMode.PRODUCTION -> linkedSetOf<Int>()
+                    BridgeSecurityMode.DEVELOPMENT ->
+                        linkedSetOf(
+                            Process.ROOT_UID,
+                            Process.SHELL_UID,
+                        )
+                }
             val configured =
-                raw
+                extraUidsRaw
                     ?.split(',')
                     ?.mapNotNull { token -> token.trim().toIntOrNull() }
                     ?.toSet()
                     .orEmpty()
             return defaults + configured
         }
+
+        internal fun defaultAllowedUids(raw: String?): Set<Int> = buildAllowedUids(BridgeSecurityMode.DEVELOPMENT, raw)
     }
 }
 

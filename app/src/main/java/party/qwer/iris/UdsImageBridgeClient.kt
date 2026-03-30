@@ -84,6 +84,12 @@ internal class UdsImageBridgeClient(
     private val bridgeToken: String = System.getenv("IRIS_BRIDGE_TOKEN") ?: "",
     private val socketFactory: () -> BridgeSocket = { AndroidBridgeSocket() },
 ) {
+    init {
+        if (bridgeToken.isBlank()) {
+            IrisLogger.warn("[UdsImageBridgeClient] IRIS_BRIDGE_TOKEN is not configured; bridge requests will be unauthenticated")
+        }
+    }
+
     fun sendImage(
         roomId: Long,
         imagePaths: List<String>,

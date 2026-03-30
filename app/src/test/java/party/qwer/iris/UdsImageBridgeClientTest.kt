@@ -3,12 +3,33 @@ package party.qwer.iris
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.io.PrintStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class UdsImageBridgeClientTest {
+    @Test
+    fun `warns when bridge token is blank`() {
+        val originalErr = System.err
+        val capturedErr = ByteArrayOutputStream()
+        try {
+            System.setErr(PrintStream(capturedErr, true, Charsets.UTF_8.name()))
+
+            UdsImageBridgeClient(
+                bridgeToken = "",
+                socketFactory = { FakeBridgeSocket() },
+            )
+
+            val output = capturedErr.toString(Charsets.UTF_8.name())
+            assertTrue(output.contains("IRIS_BRIDGE_TOKEN is not configured; bridge requests will be unauthenticated"))
+            assertTrue(output.contains("level=WARN"))
+        } finally {
+            System.setErr(originalErr)
+        }
+    }
+
     @Test
     fun `falls back to connect without timeout when timed connect is unsupported`() {
         val responseBuffer = ByteArrayOutputStream()

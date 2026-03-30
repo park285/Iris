@@ -685,11 +685,121 @@ class BridgeSecurityTest {
     }
 
     @Test
-    fun `default allowed uids include configured values in addition to defaults`() {
+    fun `production mode requires configured token`() {
+        val validator =
+            BridgeHandshakeValidator(
+                expectedToken = "",
+                securityMode = BridgeSecurityMode.PRODUCTION,
+            )
+
+        val error =
+            assertFailsWith<IllegalArgumentException> {
+                validator.validate(healthRequest(token = ""))
+            }
+
+        assertEquals("bridge token must be configured in production mode", error.message)
+    }
+
+    @Test
+    fun `production mode rejects mismatched token`() {
+        val validator =
+            BridgeHandshakeValidator(
+                expectedToken = "secret",
+                securityMode = BridgeSecurityMode.PRODUCTION,
+            )
+
+        val error =
+            assertFailsWith<IllegalArgumentException> {
+                validator.validate(healthRequest(token = "wrong"))
+            }
+
+        assertEquals("unauthorized bridge token", error.message)
+    }
+
+    @Test
+    fun `production mode accepts matching token`() {
+        val validator =
+            BridgeHandshakeValidator(
+                expectedToken = "secret",
+                securityMode = BridgeSecurityMode.PRODUCTION,
+            )
+
+        validator.validate(healthRequest(token = "secret"))
+    }
+
+    @Test
+    fun `development mode skips token check when blank`() {
+        val validator =
+            BridgeHandshakeValidator(
+                expectedToken = "",
+                securityMode = BridgeSecurityMode.DEVELOPMENT,
+            )
+
+        validator.validate(healthRequest(token = ""))
+    }
+
+    @Test
+    fun `development mode checks token when configured`() {
+        val validator =
+            BridgeHandshakeValidator(
+                expectedToken = "secret",
+                securityMode = BridgeSecurityMode.DEVELOPMENT,
+            )
+
+        val error =
+            assertFailsWith<IllegalArgumentException> {
+                validator.validate(healthRequest(token = "wrong"))
+            }
+
+        assertEquals("unauthorized bridge token", error.message)
+    }
+
+    @Test
+    fun `default allowed uids include configured values in addition to development defaults`() {
         val allowed = BridgePeerIdentityValidator.defaultAllowedUids("2000, 3000")
 
+        assertTrue(allowed.contains(0))
         assertTrue(allowed.contains(2000))
         assertTrue(allowed.contains(3000))
+    }
+
+    @Test
+    fun `production mode rejects root uid without explicit allowlist`() {
+        val validator =
+            BridgePeerIdentityValidator(
+                securityMode = BridgeSecurityMode.PRODUCTION,
+                extraUidsRaw = null,
+            )
+
+        val error =
+            assertFailsWith<IllegalArgumentException> {
+                validator.validate(0)
+            }
+
+        assertEquals("unauthorized bridge client uid=0", error.message)
+    }
+
+    @Test
+    fun `production mode accepts explicitly allowed uid`() {
+        val validator =
+            BridgePeerIdentityValidator(
+                securityMode = BridgeSecurityMode.PRODUCTION,
+                extraUidsRaw = "0,2000",
+            )
+
+        validator.validate(0)
+    }
+
+    @Test
+    fun `development mode allows root and shell by default`() {
+        val validator =
+            BridgePeerIdentityValidator(
+                securityMode = BridgeSecurityMode.DEVELOPMENT,
+                extraUidsRaw = null,
+            )
+
+        validator.validate(0)
+        validator.validate(2000)
     }
 
     @Test
