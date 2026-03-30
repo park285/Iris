@@ -184,7 +184,7 @@ class IrisServerNettyTransportTest {
             )
 
         assertTrue(frames.startsWith(": connected\n\n"))
-        assertTrue(frames.contains("id: 2\ndata: {\"type\":\"member_event\"}\n\n"))
+        assertTrue(frames.contains("id: 2\nevent: member_event\ndata: {\"type\":\"member_event\"}\n\n"))
     }
 
     private fun restoreProperty(previous: String?) {
