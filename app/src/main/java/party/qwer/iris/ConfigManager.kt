@@ -1,6 +1,7 @@
 package party.qwer.iris
 
 import kotlinx.serialization.json.Json
+import party.qwer.iris.config.ConfigPathPolicy
 import party.qwer.iris.config.ConfigPersistence
 import party.qwer.iris.config.ConfigStateStore
 import party.qwer.iris.model.ConfigResponse
@@ -8,7 +9,7 @@ import party.qwer.iris.model.ConfigUpdateResponse
 import party.qwer.iris.model.ConfigValues
 
 class ConfigManager(
-    private val configPath: String = System.getenv("IRIS_CONFIG_PATH") ?: "/data/local/tmp/config.json",
+    private val configPath: String = ConfigPathPolicy.resolveConfigPath(),
 ) : ConfigProvider {
     private val json =
         Json {
