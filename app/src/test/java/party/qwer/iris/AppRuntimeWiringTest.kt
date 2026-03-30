@@ -3,6 +3,7 @@ package party.qwer.iris
 import party.qwer.iris.persistence.IrisDatabaseSchema
 import party.qwer.iris.persistence.JdbcSqliteHelper
 import party.qwer.iris.persistence.PendingWebhookDelivery
+import party.qwer.iris.snapshot.RoomSnapshotReadResult
 import party.qwer.iris.storage.ChatId
 import party.qwer.iris.storage.UserId
 import kotlin.test.Test
@@ -72,12 +73,12 @@ class AppRuntimeWiringTest {
         val reader =
             SnapshotRuntimeFactory.createRoomSnapshotReader(
                 listRoomChatIds = { expectedRoomIds },
-                snapshot = { chatId -> snapshots.getValue(chatId) },
+                snapshot = { chatId -> RoomSnapshotReadResult.Present(snapshots.getValue(chatId)) },
             )
 
         assertEquals(expectedRoomIds, reader.listRoomChatIds())
-        assertEquals(snapshots.getValue(ChatId(11L)), reader.snapshot(ChatId(11L)))
-        assertEquals(snapshots.getValue(ChatId(22L)), reader.snapshot(ChatId(22L)))
+        assertEquals(RoomSnapshotReadResult.Present(snapshots.getValue(ChatId(11L))), reader.snapshot(ChatId(11L)))
+        assertEquals(RoomSnapshotReadResult.Present(snapshots.getValue(ChatId(22L))), reader.snapshot(ChatId(22L)))
     }
 
     @Test

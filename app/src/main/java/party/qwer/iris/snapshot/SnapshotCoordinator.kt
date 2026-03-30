@@ -56,7 +56,10 @@ class SnapshotCoordinator(
             .listRoomChatIds()
             .filter { it.value > 0L }
             .forEach { chatId ->
-                previousSnapshots[chatId] = roomSnapshotReader.snapshot(chatId)
+                when (val result = roomSnapshotReader.snapshot(chatId)) {
+                    is RoomSnapshotReadResult.Present -> previousSnapshots[chatId] = result.snapshot
+                    RoomSnapshotReadResult.Missing -> Unit
+                }
             }
     }
 
@@ -75,17 +78,25 @@ class SnapshotCoordinator(
                 dirtyRoomCountValue.decrementAndGet()
             }
 
-            val currentSnapshot = roomSnapshotReader.snapshot(chatId)
-            val previousSnapshot = previousSnapshots.put(chatId, currentSnapshot) ?: return@repeat
-
-            val events = diffEngine.diff(previousSnapshot, currentSnapshot)
-            if (events.isNotEmpty()) {
-                emitter.emit(events)
-            }
-            if (chatId in deletedRoomsPendingCleanup && currentSnapshot.isEmptySnapshot()) {
-                // 빈 베이스라인을 유지하여 부활 시 join 이벤트 발생
-                deletedRoomsPendingCleanup.remove(chatId)
-                cleanedUpRooms.add(chatId)
+            when (val result = roomSnapshotReader.snapshot(chatId)) {
+                is RoomSnapshotReadResult.Present -> {
+                    val previousSnapshot = previousSnapshots.put(chatId, result.snapshot) ?: return@repeat
+                    val events = diffEngine.diff(previousSnapshot, result.snapshot)
+                    if (events.isNotEmpty()) {
+                        emitter.emit(events)
+                    }
+                }
+                RoomSnapshotReadResult.Missing -> {
+                    val previousSnapshot = previousSnapshots[chatId] ?: return@repeat
+                    val empty = previousSnapshot.toEmptyBaseline()
+                    val events = diffEngine.diff(previousSnapshot, empty)
+                    if (events.isNotEmpty()) {
+                        emitter.emit(events)
+                    }
+                    previousSnapshots[chatId] = empty
+                    deletedRoomsPendingCleanup.remove(chatId)
+                    cleanedUpRooms.add(chatId)
+                }
             }
         }
     }
@@ -114,11 +125,14 @@ class SnapshotCoordinator(
         (activeRooms + currentRoomIds).forEach(::handleMarkDirty)
     }
 
-    private fun RoomSnapshotData.isEmptySnapshot(): Boolean =
-        linkId == null &&
-            memberIds.isEmpty() &&
-            blindedIds.isEmpty() &&
-            nicknames.isEmpty() &&
-            roles.isEmpty() &&
-            profileImages.isEmpty()
+    private fun RoomSnapshotData.toEmptyBaseline(): RoomSnapshotData =
+        RoomSnapshotData(
+            chatId = chatId,
+            linkId = null,
+            memberIds = emptySet(),
+            blindedIds = emptySet(),
+            nicknames = emptyMap(),
+            roles = emptyMap(),
+            profileImages = emptyMap(),
+        )
 }

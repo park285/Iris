@@ -1,6 +1,7 @@
 package party.qwer.iris
 
 import party.qwer.iris.snapshot.RoomSnapshotAssembler
+import party.qwer.iris.snapshot.RoomSnapshotReadResult
 import party.qwer.iris.snapshot.RoomSnapshotReader
 import party.qwer.iris.storage.ChatId
 import party.qwer.iris.storage.KakaoDbSqlClient
@@ -73,12 +74,12 @@ internal object RuntimeBuilders {
 
     fun buildRoomSnapshotReader(
         listRoomChatIds: () -> List<ChatId>,
-        snapshot: (ChatId) -> RoomSnapshotData,
+        snapshot: (ChatId) -> RoomSnapshotReadResult,
     ): RoomSnapshotReader =
         object : RoomSnapshotReader {
             override fun listRoomChatIds(): List<ChatId> = listRoomChatIds()
 
-            override fun snapshot(chatId: ChatId): RoomSnapshotData = snapshot(chatId)
+            override fun snapshot(chatId: ChatId): RoomSnapshotReadResult = snapshot(chatId)
         }
 
     fun buildShutdownPlan(hooks: ShutdownHooks): List<ShutdownStep> =

@@ -77,7 +77,7 @@ internal object SnapshotRuntimeFactory {
 
     fun createRoomSnapshotReader(
         listRoomChatIds: () -> List<ChatId>,
-        snapshot: (ChatId) -> RoomSnapshotData,
+        snapshot: (ChatId) -> party.qwer.iris.snapshot.RoomSnapshotReadResult,
     ): RoomSnapshotReader =
         RuntimeBuilders.buildRoomSnapshotReader(
             listRoomChatIds = listRoomChatIds,

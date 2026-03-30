@@ -357,6 +357,39 @@ class SnapshotCoordinatorTest {
         }
 
     @Test
+    fun `drain emits leave events when room becomes missing`() =
+        runBlocking {
+            val rooms = mutableListOf(100L, 200L)
+            val reader =
+                StubSnapshotReader(
+                    roomsProvider = { rooms.map(::ChatId) },
+                    snapshots =
+                        mapOf(
+                            100L to listOf(snapshot(100L, setOf(1L), nicknames = mapOf(1L to "Alice"))),
+                            200L to listOf(snapshot(200L, setOf(2L))),
+                        ),
+                )
+            val emitter = RecordingEmitter()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            val coordinator = SnapshotCoordinator(scope, reader, RoomSnapshotManager(), emitter)
+
+            coordinator.send(SnapshotCommand.SeedCache)
+            yield()
+
+            rooms.remove(100L)
+            coordinator.send(SnapshotCommand.FullReconcile)
+            yield()
+            coordinator.send(SnapshotCommand.Drain(budget = 10))
+            yield()
+
+            val events = emitter.emittedEvents.filterIsInstance<MemberEvent>()
+            assertEquals(listOf("leave"), events.map { it.event })
+            assertEquals(listOf(100L), events.map { it.chatId })
+            assertEquals(listOf(1L), events.map { it.userId })
+            scope.cancel()
+        }
+
+    @Test
     fun `resurrected room emits join events on reappearance`() =
         runBlocking {
             val rooms = mutableListOf(100L, 200L)
@@ -369,8 +402,6 @@ class SnapshotCoordinatorTest {
                                 listOf(
                                     // 시드 시점의 스냅샷
                                     snapshot(100L, setOf(1L), nicknames = mapOf(1L to "Alice")),
-                                    // 삭제 이후 빈 스냅샷
-                                    deletedSnapshot(100L),
                                     // 부활 후 새 멤버 스냅샷
                                     snapshot(100L, setOf(5L, 6L), nicknames = mapOf(5L to "Eve", 6L to "Frank")),
                                 ),
@@ -497,13 +528,16 @@ private class StubSnapshotReader(
 
     override fun listRoomChatIds(): List<ChatId> = roomsProvider()
 
-    override fun snapshot(chatId: ChatId): RoomSnapshotData {
+    override fun snapshot(chatId: ChatId): RoomSnapshotReadResult {
         snapshotCalls += chatId.value
-        val list = snapshots[chatId.value] ?: error("No snapshots for chatId=${chatId.value}")
+        if (chatId !in roomsProvider()) {
+            return RoomSnapshotReadResult.Missing
+        }
+        val list = snapshots[chatId.value] ?: return RoomSnapshotReadResult.Missing
         val idx = indexes[chatId.value] ?: 0
         val safeIdx = minOf(idx, list.lastIndex)
         indexes[chatId.value] = safeIdx + 1
-        return list[safeIdx]
+        return RoomSnapshotReadResult.Present(list[safeIdx])
     }
 }
 

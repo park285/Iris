@@ -22,6 +22,7 @@ import party.qwer.iris.model.ThreadListResponse
 import party.qwer.iris.model.ThreadSummary
 import party.qwer.iris.model.roleCodeToName
 import party.qwer.iris.snapshot.RoomSnapshotAssembler
+import party.qwer.iris.snapshot.RoomSnapshotReadResult
 import party.qwer.iris.storage.ChatId
 import party.qwer.iris.storage.LinkId
 import party.qwer.iris.storage.MemberActivityRow
@@ -540,12 +541,12 @@ class MemberRepository(
         return if (friendIds.isEmpty()) userDisplayNames else userDisplayNames.filterKeys { it !in friendIds }
     }
 
-    fun snapshot(chatId: Long): RoomSnapshotData {
+    fun snapshot(chatId: Long): RoomSnapshotReadResult {
         val roomId = ChatId(chatId)
-        val roomRow = roomDirectory.findRoomForSnapshot(roomId)
-        val linkId = roomRow?.linkId
-        val memberIds = parseJsonLongArray(roomRow?.members).map(::UserId)
-        val blindedIds = parseJsonLongArray(roomRow?.blindedMemberIds).map(::UserId)
+        val roomRow = roomDirectory.findRoomForSnapshot(roomId) ?: return RoomSnapshotReadResult.Missing
+        val linkId = roomRow.linkId
+        val memberIds = parseJsonLongArray(roomRow.members).map(::UserId)
+        val blindedIds = parseJsonLongArray(roomRow.blindedMemberIds).map(::UserId)
         val openMembers =
             if (linkId != null) {
                 memberIdentity.loadOpenMembers(linkId)
@@ -554,26 +555,28 @@ class MemberRepository(
             }
         val batchNicknames = resolveNicknamesBatch(memberIds, linkId = linkId, chatId = roomId)
 
-        return snapshotAssembler
-            .assemble(
-                chatId = roomId,
-                linkId = linkId,
-                memberIds = memberIds.toCollection(linkedSetOf()),
-                blindedIds = blindedIds.toCollection(linkedSetOf()),
-                openMembers = openMembers,
-                batchNicknames = batchNicknames,
-                decrypt = decrypt,
-                botId = UserId(botId),
-            ).also { snapshot ->
-                val longNicknames =
-                    snapshot.nicknames
-                        .filterValues { it.isNotBlank() }
-                        .mapKeys { (k, _) -> k.value }
-                val learnable = excludeFriendResolvedUsers(longNicknames)
-                if (learnable.isNotEmpty()) {
-                    learnObservedProfileUserMappings(chatId, learnable)
+        val snapshot =
+            snapshotAssembler
+                .assemble(
+                    chatId = roomId,
+                    linkId = linkId,
+                    memberIds = memberIds.toCollection(linkedSetOf()),
+                    blindedIds = blindedIds.toCollection(linkedSetOf()),
+                    openMembers = openMembers,
+                    batchNicknames = batchNicknames,
+                    decrypt = decrypt,
+                    botId = UserId(botId),
+                ).also { snapshot ->
+                    val longNicknames =
+                        snapshot.nicknames
+                            .filterValues { it.isNotBlank() }
+                            .mapKeys { (k, _) -> k.value }
+                    val learnable = excludeFriendResolvedUsers(longNicknames)
+                    if (learnable.isNotEmpty()) {
+                        learnObservedProfileUserMappings(chatId, learnable)
+                    }
                 }
-            }
+        return RoomSnapshotReadResult.Present(snapshot)
     }
 
     fun parseJsonLongArray(raw: String?): Set<Long> {

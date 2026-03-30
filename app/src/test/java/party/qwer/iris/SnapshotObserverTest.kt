@@ -9,6 +9,7 @@ import party.qwer.iris.delivery.webhook.RoutingResult
 import party.qwer.iris.model.MemberEvent
 import party.qwer.iris.persistence.BatchedCheckpointJournal
 import party.qwer.iris.snapshot.RoomDiffEngine
+import party.qwer.iris.snapshot.RoomSnapshotReadResult
 import party.qwer.iris.snapshot.RoomSnapshotReader
 import party.qwer.iris.snapshot.SnapshotCoordinator
 import party.qwer.iris.snapshot.SnapshotEventEmitter
@@ -232,12 +233,12 @@ private class SnapshotObserverTestSnapshotReader(
 
     override fun listRoomChatIds(): List<ChatId> = roomsProvider().map(::ChatId)
 
-    override fun snapshot(chatId: ChatId): RoomSnapshotData {
+    override fun snapshot(chatId: ChatId): RoomSnapshotReadResult {
         snapshotCalls += chatId.value
         val roomSnapshots = snapshots.getValue(chatId.value)
         val currentIndex = snapshotIndexes[chatId.value] ?: 0
         val safeIndex = minOf(currentIndex, roomSnapshots.lastIndex)
         snapshotIndexes[chatId.value] = safeIndex + 1
-        return roomSnapshots[safeIndex]
+        return RoomSnapshotReadResult.Present(roomSnapshots[safeIndex])
     }
 }

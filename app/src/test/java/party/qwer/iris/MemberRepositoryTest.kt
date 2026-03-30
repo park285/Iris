@@ -2,6 +2,7 @@ package party.qwer.iris
 
 import kotlinx.serialization.json.JsonPrimitive
 import party.qwer.iris.model.QueryColumn
+import party.qwer.iris.snapshot.RoomSnapshotReadResult
 import party.qwer.iris.storage.KakaoDbSqlClient
 import party.qwer.iris.storage.MemberIdentityQueries
 import party.qwer.iris.storage.ObservedProfileQueries
@@ -1098,7 +1099,22 @@ class MemberRepositoryTest {
 
         val snapshot = repo.snapshot(chatId = 366795577484293L)
 
-        assertEquals("재균", snapshot.nicknames[UserId(203887151L)])
-        assertEquals(null, snapshot.nicknames[UserId(243338321L)])
+        val present = snapshot as RoomSnapshotReadResult.Present
+        assertEquals("재균", present.snapshot.nicknames[UserId(203887151L)])
+        assertEquals(null, present.snapshot.nicknames[UserId(243338321L)])
+    }
+
+    @Test
+    fun `snapshot returns missing when room row is absent`() {
+        val repo =
+            buildRepoFromLegacy(
+                executeQueryTyped = legacyQuery { _, _, _ -> emptyList() },
+                decrypt = { _, raw, _ -> raw },
+                botId = 438562408L,
+            )
+
+        val snapshot = repo.snapshot(chatId = 999L)
+
+        assertEquals(RoomSnapshotReadResult.Missing, snapshot)
     }
 }
