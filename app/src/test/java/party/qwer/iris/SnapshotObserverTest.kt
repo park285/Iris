@@ -74,7 +74,7 @@ class SnapshotObserverTest {
         observer.start()
         rooms += 200L
         currentTimeMs.set(250L)
-        waitUntil(timeoutMs = 1_000L) { snapshotReader.snapshotCalls.contains(200L) }
+        waitUntil(timeoutMs = 300L) { snapshotReader.snapshotCalls.contains(200L) }
         observer.stop()
 
         assertTrue(diffEngine.diffCalls >= 1)
@@ -121,10 +121,10 @@ class SnapshotObserverTest {
 
         runBlockingSeed(coordinator)
         runBlockingFullReconcile(coordinator)
-        waitUntil(timeoutMs = 1_000L) { coordinator.dirtyRoomCount() == 256 }
+        waitUntil(timeoutMs = 300L) { coordinator.dirtyRoomCount() == 256 }
 
         observer.start()
-        waitUntil(timeoutMs = 1_000L) { diffEngine.diffCalls >= 128 }
+        waitUntil(timeoutMs = 300L) { diffEngine.diffCalls >= 128 }
         observer.stop()
 
         assertEquals(128, diffEngine.diffCalls)
