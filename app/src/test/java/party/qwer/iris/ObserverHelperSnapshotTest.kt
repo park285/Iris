@@ -13,6 +13,7 @@ import party.qwer.iris.snapshot.RoomDiffEngine
 import party.qwer.iris.snapshot.RoomSnapshotReader
 import party.qwer.iris.snapshot.SnapshotCoordinator
 import party.qwer.iris.snapshot.SnapshotEventEmitter
+import party.qwer.iris.storage.ChatId
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -269,12 +270,12 @@ class ObserverHelperSnapshotTest {
     private fun waitUntil(
         timeoutMs: Long = 1_000L,
         condition: () -> Boolean,
-    ) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!condition() && System.currentTimeMillis() < deadline) {
-            Thread.sleep(10L)
+    ) = kotlinx.coroutines.runBlocking {
+        kotlinx.coroutines.withTimeout(timeoutMs) {
+            while (!condition()) {
+                kotlinx.coroutines.delay(10L)
+            }
         }
-        assertTrue(condition(), "condition not met within ${timeoutMs}ms")
     }
 }
 
@@ -285,7 +286,7 @@ private fun snapshotCoordinatorMarkDirty(
     kotlinx.coroutines.runBlocking {
         coordinator.send(
             party.qwer.iris.snapshot.SnapshotCommand
-                .MarkDirty(chatId),
+                .MarkDirty(ChatId(chatId)),
         )
     }
 }
@@ -384,14 +385,14 @@ class SnapshotTestSnapshotReader(
     val snapshotCalls = CopyOnWriteArrayList<Long>()
     private val snapshotIndexes = mutableMapOf<Long, Int>()
 
-    override fun listRoomChatIds(): List<Long> = rooms
+    override fun listRoomChatIds(): List<ChatId> = rooms.map(::ChatId)
 
-    override fun snapshot(chatId: Long): RoomSnapshotData {
-        snapshotCalls += chatId
-        val roomSnapshots = snapshots.getValue(chatId)
-        val currentIndex = snapshotIndexes[chatId] ?: 0
+    override fun snapshot(chatId: ChatId): RoomSnapshotData {
+        snapshotCalls += chatId.value
+        val roomSnapshots = snapshots.getValue(chatId.value)
+        val currentIndex = snapshotIndexes[chatId.value] ?: 0
         val safeIndex = minOf(currentIndex, roomSnapshots.lastIndex)
-        snapshotIndexes[chatId] = safeIndex + 1
+        snapshotIndexes[chatId.value] = safeIndex + 1
         return roomSnapshots[safeIndex]
     }
 }

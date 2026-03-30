@@ -200,6 +200,39 @@ class ObservedProfileUserLinkingTest {
         assertEquals("Alice", store.resolveObservedDisplayName(7L, chatId))
     }
 
+    @Test
+    fun `skips timestamp correlation when other profiles exist nearby in window`() {
+        val store = createStore()
+        val chatId = 123L
+        val messageCreatedAtMs = 1_000_000L
+        // 유저 B의 알림 프로필 (윈도우 내, 아직 링크 안 됨)
+        store.upsertObservedProfile(
+            notificationIdentity(
+                stableId = "stable-b",
+                displayName = "Bob",
+                roomName = "Room A",
+                chatId = chatId,
+                postedAt = messageCreatedAtMs - 2_000L,
+            ),
+        )
+        // 유저 D의 알림 프로필 (윈도우 내, 이미 링크됨)
+        store.upsertObservedProfile(
+            notificationIdentity(
+                stableId = "stable-d",
+                displayName = "Dave",
+                roomName = "Room A",
+                chatId = chatId,
+                postedAt = messageCreatedAtMs + 1_000L,
+            ),
+        )
+        store.learnObservedProfileUserMappings(chatId, mapOf(99L to "Dave"))
+
+        // 유저 C의 메시지에 대해 상관 시도 — 윈도우 내 다른 프로필(stable-d)이 있어 스킵
+        store.learnFromTimestampCorrelation(chatId, 42L, messageCreatedAtMs)
+
+        assertEquals(null, store.resolveObservedDisplayName(42L, chatId))
+    }
+
     private fun createStore(): IrisMetadataStore {
         val path = "/tmp/iris-timestamp-correlation-test-${System.nanoTime()}.db"
         return IrisMetadataStore(databasePath = path).also { stores += it to path }

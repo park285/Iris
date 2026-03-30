@@ -4,6 +4,7 @@ import party.qwer.iris.ingress.CommandIngressService
 import party.qwer.iris.persistence.CheckpointJournal
 import party.qwer.iris.snapshot.SnapshotCommand
 import party.qwer.iris.snapshot.SnapshotCoordinator
+import party.qwer.iris.storage.ChatId
 import java.io.Closeable
 
 class ObserverHelper(
@@ -20,7 +21,7 @@ class ObserverHelper(
     }
 
     internal fun markRoomDirty(chatId: Long) {
-        snapshotCoordinator.enqueue(SnapshotCommand.MarkDirty(chatId))
+        snapshotCoordinator.enqueue(SnapshotCommand.MarkDirty(ChatId(chatId)))
     }
 
     internal fun markAllRoomsDirty() {

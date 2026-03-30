@@ -44,9 +44,9 @@ class MemberRepository(
     private val learnObservedProfileUserMappings: (Long, Map<Long, String>) -> Unit = { _, _ -> },
 ) {
     private data class MemberActivityCacheEntry(
-        val memberIds: Set<Long>,
+        val memberIds: Set<UserId>,
         val cachedAtMs: Long,
-        val activityByUser: Map<Long, MemberActivityRow>,
+        val activityByUser: Map<UserId, MemberActivityRow>,
     )
 
     companion object {
@@ -66,7 +66,7 @@ class MemberRepository(
             )
     }
 
-    private val memberActivityCache = mutableMapOf<Long, MemberActivityCacheEntry>()
+    private val memberActivityCache = mutableMapOf<ChatId, MemberActivityCacheEntry>()
 
     fun listRooms(): RoomListResponse {
         val roomRows = roomDirectory.listAllRooms()
@@ -109,7 +109,8 @@ class MemberRepository(
     }
 
     fun listMembers(chatId: Long): MemberListResponse {
-        val roomRow = roomDirectory.findRoomForListMembers(ChatId(chatId))
+        val roomId = ChatId(chatId)
+        val roomRow = roomDirectory.findRoomForListMembers(roomId)
         val linkId = roomRow?.linkId
         val roomType = roomRow?.type.orEmpty()
         if (roomRow == null) {
@@ -118,11 +119,11 @@ class MemberRepository(
 
         if (linkId != null) {
             val openMembers = memberIdentity.loadOpenMembers(LinkId(linkId))
-            val memberIds = openMembers.map { it.userId }.distinct()
-            val activityByUser = loadMemberActivityByUser(chatId, memberIds)
+            val memberIds = openMembers.map { UserId(it.userId) }.distinct()
+            val activityByUser = loadMemberActivityByUser(roomId, memberIds)
             val members =
                 openMembers.map { row ->
-                    val activity = activityByUser[row.userId]
+                    val activity = activityByUser[UserId(row.userId)]
                     MemberInfo(
                         userId = row.userId,
                         nickname = row.nickname?.let { memberIdentity.decryptNickname(row.enc, it) },
@@ -137,19 +138,19 @@ class MemberRepository(
             return MemberListResponse(chatId, linkId, members, members.size)
         }
 
-        val roomMemberIds = parseJsonLongArray(roomRow.members)
+        val roomMemberIds = parseJsonLongArray(roomRow.members).map(::UserId)
         val scopedMemberIds =
             buildSet {
                 addAll(roomMemberIds)
                 if (botId > 0L) {
-                    add(botId)
+                    add(UserId(botId))
                 }
             }.toList()
         val activityByUser =
             if (scopedMemberIds.isNotEmpty()) {
-                loadMemberActivityByUser(chatId, scopedMemberIds)
+                loadMemberActivityByUser(roomId, scopedMemberIds)
             } else {
-                roomStats.loadAllActivity(ChatId(chatId)).associateBy { it.userId }
+                roomStats.loadAllActivity(roomId).associateBy { UserId(it.userId) }
             }
         val userIds =
             ((if (scopedMemberIds.isNotEmpty()) scopedMemberIds else activityByUser.keys.toList()) + activityByUser.keys)
@@ -157,30 +158,31 @@ class MemberRepository(
                 .distinct()
         val directChatParticipantId =
             if (roomType == "DirectChat") {
-                userIds.filter { it != botId }.distinct().singleOrNull()
+                userIds.filter { it.value != botId }.distinct().singleOrNull()
             } else {
                 null
             }
-        val observedProfileHint = observedProfile.resolveProfileByChatId(ChatId(chatId))
+        val observedProfileHint = observedProfile.resolveProfileByChatId(roomId)
+        val nicknameByUser = prepareNicknameLookup(userIds, chatId = roomId)
         val members =
             userIds.map { userId ->
-                val roleCode = if (userId == botId) 8 else 2
+                val roleCode = if (userId.value == botId) 8 else 2
                 val activity = activityByUser[userId]
-                val resolvedNickname = resolveNickname(userId, chatId = chatId)
+                val resolvedNickname = nicknameByUser[userId] ?: userId.value.toString()
                 val nickname =
                     if (
                         roomType == "DirectChat" &&
                         userId == directChatParticipantId &&
-                        resolvedNickname == userId.toString()
+                        resolvedNickname == userId.value.toString()
                     ) {
                         observedProfileHint?.displayName ?: resolvedNickname
                     } else {
                         resolvedNickname
                     }
                 MemberInfo(
-                    userId = userId,
+                    userId = userId.value,
                     nickname = nickname,
-                    role = if (userId == botId) "bot" else roleCodeToName(roleCode),
+                    role = if (userId.value == botId) "bot" else roleCodeToName(roleCode),
                     roleCode = roleCode,
                     profileImageUrl = null,
                     messageCount = activity?.messageCount ?: 0,
@@ -237,8 +239,13 @@ class MemberRepository(
     fun resolveDisplayName(
         userId: Long,
         chatId: Long,
-        linkId: Long? = resolveLinkId(chatId),
-    ): String = resolveNickname(userId, linkId = linkId, chatId = chatId) ?: userId.toString()
+        linkId: Long? = resolveLinkId(ChatId(chatId))?.value,
+    ): String =
+        resolveNickname(
+            userId = UserId(userId),
+            linkId = linkId?.let(::LinkId),
+            chatId = ChatId(chatId),
+        ) ?: userId.toString()
 
     fun roomStats(
         chatId: Long,
@@ -249,19 +256,12 @@ class MemberRepository(
         val periodSecs = parsePeriodSeconds(period)
         val now = System.currentTimeMillis() / 1000
         val from = if (periodSecs != null) now - periodSecs else 0L
-        val linkId = resolveLinkId(chatId)
+        val roomId = ChatId(chatId)
+        val linkId = resolveLinkId(roomId)
 
-        val rows = roomStats.loadTypeCountStats(ChatId(chatId), from)
-        val byUser = rows.groupBy { it.userId }
-        val nicknameByUser =
-            if (linkId != null) {
-                memberIdentity
-                    .loadOpenNicknamesBatch(LinkId(linkId), byUser.keys.map { UserId(it) })
-                    .mapKeys { it.key.value }
-                    .mapValues { it.value ?: it.key.toString() }
-            } else {
-                emptyMap()
-            }
+        val rows = roomStats.loadTypeCountStats(roomId, from)
+        val byUser = rows.groupBy { UserId(it.userId) }
+        val nicknameByUser = prepareNicknameLookup(byUser.keys, linkId = linkId, chatId = roomId)
         val memberStats =
             byUser
                 .map { (userId, typeRows) ->
@@ -278,8 +278,8 @@ class MemberRepository(
                         }
                     }
                     MemberStats(
-                        userId = userId,
-                        nickname = nicknameByUser[userId] ?: resolveNickname(userId, linkId = linkId),
+                        userId = userId.value,
+                        nickname = nicknameByUser[userId] ?: userId.value.toString(),
                         messageCount = total,
                         lastActiveAt = lastActive,
                         messageTypes = types,
@@ -304,9 +304,10 @@ class MemberRepository(
         val periodSecs = parsePeriodSeconds(period)
         val now = System.currentTimeMillis() / 1000
         val from = if (periodSecs != null) now - periodSecs else 0L
-        val linkId = resolveLinkId(chatId)
+        val roomId = ChatId(chatId)
+        val linkId = resolveLinkId(roomId)
 
-        val rows = roomStats.loadMessageLog(ChatId(chatId), UserId(userId), from)
+        val rows = roomStats.loadMessageLog(roomId, UserId(userId), from)
         val types = mutableMapOf<String, Int>()
         val hours = IntArray(24)
         var firstAt: Long? = null
@@ -325,7 +326,7 @@ class MemberRepository(
 
         return MemberActivityResponse(
             userId = userId,
-            nickname = resolveNickname(userId, linkId = linkId),
+            nickname = resolveNickname(UserId(userId), linkId = linkId, chatId = roomId) ?: userId.toString(),
             messageCount = rows.size,
             firstMessageAt = firstAt,
             lastMessageAt = lastAt,
@@ -368,37 +369,36 @@ class MemberRepository(
     }
 
     private fun resolveNickname(
-        userId: Long,
-        linkId: Long? = null,
-        chatId: Long? = null,
+        userId: UserId,
+        linkId: LinkId? = null,
+        chatId: ChatId? = null,
     ): String? {
         if (linkId != null) {
-            val openNickname = memberIdentity.resolveOpenNickname(UserId(userId), LinkId(linkId))
+            val openNickname = memberIdentity.resolveOpenNickname(userId, linkId)
             if (openNickname != null) return openNickname
         }
 
-        val friendName = memberIdentity.resolveFriendName(UserId(userId))
+        val friendName = memberIdentity.resolveFriendName(userId)
         if (friendName != null) return friendName
 
-        return observedProfile.resolveDisplayNamesBatch(listOf(userId), chatId)[userId] ?: userId.toString()
+        return observedProfile.resolveDisplayNamesBatch(listOf(userId.value), chatId?.value)[userId.value] ?: userId.value.toString()
     }
 
     internal fun resolveNicknamesBatch(
-        userIds: Collection<Long>,
-        linkId: Long? = null,
-        chatId: Long? = null,
-    ): Map<Long, String> {
-        val orderedIds = userIds.distinct().filter { it > 0L }
+        userIds: Collection<UserId>,
+        linkId: LinkId? = null,
+        chatId: ChatId? = null,
+    ): Map<UserId, String> {
+        val orderedIds = userIds.distinct().filter { it.value > 0L }
         if (orderedIds.isEmpty()) return emptyMap()
 
-        val resolved = LinkedHashMap<Long, String>(orderedIds.size)
+        val resolved = LinkedHashMap<UserId, String>(orderedIds.size)
         var unresolved = orderedIds.toSet()
 
         if (linkId != null && unresolved.isNotEmpty()) {
             val openNicknames =
                 memberIdentity
-                    .loadOpenNicknamesBatch(LinkId(linkId), unresolved.map(::UserId))
-                    .mapKeys { it.key.value }
+                    .loadOpenNicknamesBatch(linkId, unresolved.toList())
 
             openNicknames.forEach { (userId, nickname) ->
                 if (!nickname.isNullOrBlank()) {
@@ -411,24 +411,43 @@ class MemberRepository(
         if (unresolved.isNotEmpty()) {
             val friendNames =
                 memberIdentity
-                    .loadFriendsBatch(unresolved.map(::UserId))
-                    .mapKeys { it.key.value }
+                    .loadFriendsBatch(unresolved.toList())
 
             resolved.putAll(friendNames)
             unresolved = unresolved - friendNames.keys
         }
 
         if (unresolved.isNotEmpty()) {
-            resolved.putAll(observedProfile.resolveDisplayNamesBatch(unresolved.toList(), chatId))
+            observedProfile
+                .resolveDisplayNamesBatch(unresolved.map(UserId::value), chatId?.value)
+                .forEach { (userId, displayName) ->
+                    resolved[UserId(userId)] = displayName
+                }
         }
 
-        return orderedIds.associateWith { userId -> resolved[userId] ?: userId.toString() }
+        return orderedIds.associateWith { userId -> resolved[userId] ?: userId.value.toString() }
+    }
+
+    private fun prepareNicknameLookup(
+        userIds: Collection<UserId>,
+        linkId: LinkId? = null,
+        chatId: ChatId? = null,
+    ): Map<UserId, String> {
+        val orderedIds = userIds.distinct().filter { it.value > 0L }
+        if (orderedIds.isEmpty()) return emptyMap()
+        return if (linkId != null) {
+            memberIdentity
+                .loadOpenNicknamesBatch(linkId, orderedIds)
+                .mapValues { (userId, nickname) -> nickname ?: userId.value.toString() }
+        } else {
+            resolveNicknamesBatch(orderedIds, chatId = chatId)
+        }
     }
 
     private fun loadMemberActivityByUser(
-        chatId: Long,
-        memberIds: List<Long>,
-    ): Map<Long, MemberActivityRow> {
+        chatId: ChatId,
+        memberIds: List<UserId>,
+    ): Map<UserId, MemberActivityRow> {
         val memberIdSet = memberIds.toSet()
         if (memberIds.isEmpty()) {
             return emptyMap()
@@ -443,7 +462,7 @@ class MemberRepository(
             }
         return cached?.activityByUser
             ?: run {
-                val activity = roomStats.loadMemberActivity(ChatId(chatId), memberIds).associateBy { it.userId }
+                val activity = roomStats.loadMemberActivity(chatId, memberIds.map(UserId::value)).associateBy { UserId(it.userId) }
                 synchronized(memberActivityCache) {
                     memberActivityCache[chatId] =
                         MemberActivityCacheEntry(
@@ -475,12 +494,12 @@ class MemberRepository(
         val memberIds =
             parseJsonLongArray(members)
                 .filter { it != botId }
-                .toList()
+                .map(::UserId)
         if (memberIds.isEmpty()) {
             return roomType
         }
         val names =
-            resolveNicknamesBatch(memberIds, chatId = chatId)
+            resolveNicknamesBatch(memberIds, chatId = ChatId(chatId))
                 .values
                 .filter { it.isNotBlank() }
         if (names.isEmpty()) {
@@ -493,10 +512,10 @@ class MemberRepository(
         chatId: Long,
         members: List<MemberInfo>,
     ) {
+        val nonBotMembers = members.filter { it.userId != botId }
         val visibleNames =
-            members
+            nonBotMembers
                 .asSequence()
-                .filter { it.userId != botId }
                 .mapNotNull { member ->
                     val nickname = member.nickname?.trim().orEmpty()
                     if (nickname.isBlank() || nickname == member.userId.toString()) {
@@ -505,40 +524,52 @@ class MemberRepository(
                         member.userId to nickname
                     }
                 }.toMap()
-        if (visibleNames.isNotEmpty()) {
-            learnObservedProfileUserMappings(chatId, visibleNames)
+        val learnable = excludeFriendResolvedUsers(visibleNames)
+        if (learnable.isNotEmpty()) {
+            learnObservedProfileUserMappings(chatId, learnable)
         }
     }
 
+    private fun excludeFriendResolvedUsers(userDisplayNames: Map<Long, String>): Map<Long, String> {
+        if (userDisplayNames.isEmpty()) return userDisplayNames
+        val friendIds =
+            memberIdentity
+                .loadFriendsBatch(userDisplayNames.keys.map(::UserId))
+                .keys
+                .mapTo(mutableSetOf()) { it.value }
+        return if (friendIds.isEmpty()) userDisplayNames else userDisplayNames.filterKeys { it !in friendIds }
+    }
+
     fun snapshot(chatId: Long): RoomSnapshotData {
-        val roomRow = roomDirectory.findRoomForSnapshot(ChatId(chatId))
-        val linkId = roomRow?.linkId
-        val memberIds = parseJsonLongArray(roomRow?.members)
-        val blindedIds = parseJsonLongArray(roomRow?.blindedMemberIds)
+        val roomId = ChatId(chatId)
+        val roomRow = roomDirectory.findRoomForSnapshot(roomId)
+        val linkId = roomRow?.linkId?.let(::LinkId)
+        val memberIds = parseJsonLongArray(roomRow?.members).map(::UserId)
+        val blindedIds = parseJsonLongArray(roomRow?.blindedMemberIds).map(::UserId)
         val openMembers =
             if (linkId != null) {
-                memberIdentity.loadOpenMembers(LinkId(linkId))
+                memberIdentity.loadOpenMembers(linkId)
             } else {
                 emptyList()
             }
-        val batchNicknames = resolveNicknamesBatch(memberIds, linkId = linkId, chatId = chatId)
+        val batchNicknames = resolveNicknamesBatch(memberIds, linkId = linkId, chatId = roomId)
 
         return snapshotAssembler
             .assemble(
-                chatId = chatId,
+                chatId = roomId,
                 linkId = linkId,
-                memberIds = memberIds,
-                blindedIds = blindedIds,
+                memberIds = memberIds.toCollection(linkedSetOf()),
+                blindedIds = blindedIds.toCollection(linkedSetOf()),
                 openMembers = openMembers,
                 batchNicknames = batchNicknames,
                 decrypt = decrypt,
-                botId = botId,
+                botId = UserId(botId),
             ).also { snapshot ->
-                if (snapshot.nicknames.isNotEmpty()) {
-                    learnObservedProfileUserMappings(
-                        chatId,
-                        snapshot.nicknames.filterValues { it.isNotBlank() },
-                    )
+                val learnable = excludeFriendResolvedUsers(
+                    snapshot.nicknames.filterValues { it.isNotBlank() },
+                )
+                if (learnable.isNotEmpty()) {
+                    learnObservedProfileUserMappings(chatId, learnable)
                 }
             }
     }
@@ -573,8 +604,8 @@ class MemberRepository(
     }
 
     private fun resolveLinkId(
-        chatId: Long,
-    ): Long? = roomDirectory.resolveLinkId(ChatId(chatId))?.value
+        chatId: ChatId,
+    ): LinkId? = roomDirectory.resolveLinkId(chatId)
 
     private fun parseRoomTitle(meta: String?): String? {
         if (meta.isNullOrBlank()) return null

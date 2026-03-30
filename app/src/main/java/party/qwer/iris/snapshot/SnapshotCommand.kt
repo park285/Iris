@@ -1,8 +1,10 @@
 package party.qwer.iris.snapshot
 
+import party.qwer.iris.storage.ChatId
+
 sealed interface SnapshotCommand {
     data class MarkDirty(
-        val chatId: Long,
+        val chatId: ChatId,
     ) : SnapshotCommand
 
     data class Drain(

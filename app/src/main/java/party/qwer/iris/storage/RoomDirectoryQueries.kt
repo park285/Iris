@@ -5,6 +5,7 @@ class RoomDirectoryQueries(
 ) {
     companion object {
         private const val MAX_ROWS = 2000
+        private const val MAX_ROOM_ID_ROWS = 10_000
     }
 
     data class OpenLinkRow(
@@ -31,6 +32,16 @@ class RoomDirectoryQueries(
                 bindArgs = emptyList(),
                 maxRows = MAX_ROWS,
                 mapper = ::mapRoomRow,
+            ),
+        )
+
+    fun listAllRoomIds(): List<ChatId> =
+        db.query(
+            QuerySpec(
+                sql = "SELECT id FROM chat_rooms WHERE id > 0 ORDER BY id",
+                bindArgs = emptyList(),
+                maxRows = MAX_ROOM_ID_ROWS,
+                mapper = { row -> ChatId(row.long("id") ?: 0L) },
             ),
         )
 

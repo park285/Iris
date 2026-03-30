@@ -1,6 +1,9 @@
 package party.qwer.iris.snapshot
 
 import party.qwer.iris.storage.OpenMemberRow
+import party.qwer.iris.storage.ChatId
+import party.qwer.iris.storage.LinkId
+import party.qwer.iris.storage.UserId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -17,14 +20,14 @@ class RoomSnapshotAssemblerTest {
 
         val snapshot =
             RoomSnapshotAssembler.assemble(
-                chatId = 42L,
-                linkId = 10L,
-                memberIds = setOf(1L, 2L, 3L),
-                blindedIds = setOf(99L),
+                chatId = ChatId(42L),
+                linkId = LinkId(10L),
+                memberIds = setOf(UserId(1L), UserId(2L), UserId(3L)),
+                blindedIds = setOf(UserId(99L)),
                 openMembers = openMembers,
-                batchNicknames = batchNicknames,
+                batchNicknames = batchNicknames.mapKeys { UserId(it.key) },
                 decrypt = { _, s, _ -> s },
-                botId = 1L,
+                botId = UserId(1L),
             )
 
         assertEquals(42L, snapshot.chatId)
@@ -50,14 +53,14 @@ class RoomSnapshotAssemblerTest {
 
         val snapshot =
             RoomSnapshotAssembler.assemble(
-                chatId = 42L,
-                linkId = 10L,
-                memberIds = setOf(1L),
+                chatId = ChatId(42L),
+                linkId = LinkId(10L),
+                memberIds = setOf(UserId(1L)),
                 blindedIds = emptySet(),
                 openMembers = openMembers,
-                batchNicknames = mapOf(1L to "dec(3:encrypted)"),
+                batchNicknames = mapOf(UserId(1L) to "dec(3:encrypted)"),
                 decrypt = decrypt,
-                botId = 1L,
+                botId = UserId(1L),
             )
 
         assertEquals("dec(3:encrypted)", snapshot.nicknames[1L])
@@ -67,14 +70,14 @@ class RoomSnapshotAssemblerTest {
     fun `assemble without open members uses batch nicknames only`() {
         val snapshot =
             RoomSnapshotAssembler.assemble(
-                chatId = 42L,
+                chatId = ChatId(42L),
                 linkId = null,
-                memberIds = setOf(1L, 2L),
+                memberIds = setOf(UserId(1L), UserId(2L)),
                 blindedIds = emptySet(),
                 openMembers = emptyList(),
-                batchNicknames = mapOf(1L to "Alice", 2L to "Bob"),
+                batchNicknames = mapOf(UserId(1L) to "Alice", UserId(2L) to "Bob"),
                 decrypt = { _, s, _ -> s },
-                botId = 1L,
+                botId = UserId(1L),
             )
 
         assertEquals("Alice", snapshot.nicknames[1L])
@@ -87,14 +90,14 @@ class RoomSnapshotAssemblerTest {
     fun `assemble skips string-userId nicknames from batch`() {
         val snapshot =
             RoomSnapshotAssembler.assemble(
-                chatId = 42L,
+                chatId = ChatId(42L),
                 linkId = null,
-                memberIds = setOf(1L, 2L),
+                memberIds = setOf(UserId(1L), UserId(2L)),
                 blindedIds = emptySet(),
                 openMembers = emptyList(),
-                batchNicknames = mapOf(1L to "Alice", 2L to "2"),
+                batchNicknames = mapOf(UserId(1L) to "Alice", UserId(2L) to "2"),
                 decrypt = { _, s, _ -> s },
-                botId = 1L,
+                botId = UserId(1L),
             )
 
         assertEquals("Alice", snapshot.nicknames[1L])

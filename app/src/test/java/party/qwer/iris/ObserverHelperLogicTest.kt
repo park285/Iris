@@ -12,6 +12,7 @@ import party.qwer.iris.persistence.CheckpointJournal
 import party.qwer.iris.snapshot.RoomSnapshotReader
 import party.qwer.iris.snapshot.SnapshotCoordinator
 import party.qwer.iris.snapshot.SnapshotEventEmitter
+import party.qwer.iris.storage.ChatId
 import party.qwer.iris.storage.KakaoDbSqlClient
 import party.qwer.iris.storage.MemberIdentityQueries
 import party.qwer.iris.storage.ObservedProfileQueries
@@ -332,7 +333,7 @@ class ObserverHelperLogicTest {
                     kotlinx.coroutines.runBlocking {
                         coordinator.send(
                             party.qwer.iris.snapshot.SnapshotCommand
-                                .MarkDirty(chatId),
+                                .MarkDirty(ChatId(chatId)),
                         )
                     }
                 },
@@ -364,12 +365,12 @@ class ObserverHelperLogicTest {
     private fun waitUntil(
         timeoutMs: Long = 1_000L,
         condition: () -> Boolean,
-    ) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!condition() && System.currentTimeMillis() < deadline) {
-            Thread.sleep(10L)
+    ) = kotlinx.coroutines.runBlocking {
+        kotlinx.coroutines.withTimeout(timeoutMs) {
+            while (!condition()) {
+                kotlinx.coroutines.delay(10L)
+            }
         }
-        assertTrue(condition(), "condition not met within ${timeoutMs}ms")
     }
 }
 
@@ -384,13 +385,13 @@ private class FakeRoomSnapshotReader(
 ) : RoomSnapshotReader {
     private val indexes = mutableMapOf<Long, Int>()
 
-    override fun listRoomChatIds(): List<Long> = rooms
+    override fun listRoomChatIds(): List<ChatId> = rooms.map(::ChatId)
 
-    override fun snapshot(chatId: Long): RoomSnapshotData {
-        val roomSnapshots = snapshots.getValue(chatId)
-        val currentIndex = indexes[chatId] ?: 0
+    override fun snapshot(chatId: ChatId): RoomSnapshotData {
+        val roomSnapshots = snapshots.getValue(chatId.value)
+        val currentIndex = indexes[chatId.value] ?: 0
         val safeIndex = minOf(currentIndex, roomSnapshots.lastIndex)
-        indexes[chatId] = safeIndex + 1
+        indexes[chatId.value] = safeIndex + 1
         return roomSnapshots[safeIndex]
     }
 }

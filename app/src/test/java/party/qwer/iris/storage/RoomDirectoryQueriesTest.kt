@@ -183,4 +183,27 @@ class RoomDirectoryQueriesTest {
         assertEquals("/help", commands[0].first)
         assertEquals(100L, commands[0].second)
     }
+
+    @Test
+    fun `listAllRoomIds uses dedicated id query`() {
+        var executedSql: String? = null
+        val queries =
+            RoomDirectoryQueries(
+                client { sql, _ ->
+                    executedSql = sql
+                    listOf(
+                        row("id" to "42"),
+                        row("id" to "77"),
+                    )
+                },
+            )
+
+        val roomIds = queries.listAllRoomIds()
+
+        assertEquals(listOf(ChatId(42L), ChatId(77L)), roomIds)
+        assertEquals(
+            "SELECT id FROM chat_rooms WHERE id > 0 ORDER BY id",
+            executedSql,
+        )
+    }
 }

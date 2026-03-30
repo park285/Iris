@@ -7,8 +7,10 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import party.qwer.iris.RoomSnapshotData
+import party.qwer.iris.RoomSnapshotManager
 import party.qwer.iris.SseEventBus
 import party.qwer.iris.model.MemberEvent
+import party.qwer.iris.storage.ChatId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -25,6 +27,17 @@ class SnapshotCoordinatorTest {
             blindedIds = emptySet(),
             nicknames = nicknames,
             roles = members.associateWith { 2 },
+            profileImages = emptyMap(),
+        )
+
+    private fun deletedSnapshot(chatId: Long): RoomSnapshotData =
+        RoomSnapshotData(
+            chatId = chatId,
+            linkId = null,
+            memberIds = emptySet(),
+            blindedIds = emptySet(),
+            nicknames = emptyMap(),
+            roles = emptyMap(),
             profileImages = emptyMap(),
         )
 
@@ -72,7 +85,7 @@ class SnapshotCoordinatorTest {
 
             coordinator.send(SnapshotCommand.SeedCache)
             yield()
-            coordinator.send(SnapshotCommand.MarkDirty(chatId = 100L))
+            coordinator.send(SnapshotCommand.MarkDirty(chatId = ChatId(100L)))
             yield()
             coordinator.send(SnapshotCommand.Drain(budget = 10))
             yield()
@@ -100,9 +113,9 @@ class SnapshotCoordinatorTest {
 
             coordinator.send(SnapshotCommand.SeedCache)
             yield()
-            coordinator.send(SnapshotCommand.MarkDirty(chatId = 100L))
-            coordinator.send(SnapshotCommand.MarkDirty(chatId = 100L))
-            coordinator.send(SnapshotCommand.MarkDirty(chatId = 100L))
+            coordinator.send(SnapshotCommand.MarkDirty(chatId = ChatId(100L)))
+            coordinator.send(SnapshotCommand.MarkDirty(chatId = ChatId(100L)))
+            coordinator.send(SnapshotCommand.MarkDirty(chatId = ChatId(100L)))
             yield()
             coordinator.send(SnapshotCommand.Drain(budget = 10))
             yield()
@@ -131,9 +144,9 @@ class SnapshotCoordinatorTest {
 
             coordinator.send(SnapshotCommand.SeedCache)
             yield()
-            coordinator.send(SnapshotCommand.MarkDirty(chatId = 100L))
-            coordinator.send(SnapshotCommand.MarkDirty(chatId = 200L))
-            coordinator.send(SnapshotCommand.MarkDirty(chatId = 300L))
+            coordinator.send(SnapshotCommand.MarkDirty(chatId = ChatId(100L)))
+            coordinator.send(SnapshotCommand.MarkDirty(chatId = ChatId(200L)))
+            coordinator.send(SnapshotCommand.MarkDirty(chatId = ChatId(300L)))
             yield()
 
             coordinator.send(SnapshotCommand.Drain(budget = 1))
@@ -177,6 +190,117 @@ class SnapshotCoordinatorTest {
         }
 
     @Test
+    fun `fullReconcile rereads current room ids and includes newly visible rooms`() =
+        runBlocking {
+            val rooms = mutableListOf(100L)
+            val reader =
+                StubSnapshotReader(
+                    roomsProvider = { rooms.map(::ChatId) },
+                    snapshots =
+                        mapOf(
+                            100L to listOf(snapshot(100L, setOf(1L)), snapshot(100L, setOf(1L, 10L))),
+                            200L to listOf(snapshot(200L, setOf(2L)), snapshot(200L, setOf(2L))),
+                        ),
+                )
+            val diffEngine = RecordingDiffEngine()
+            val emitter = RecordingEmitter()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            val coordinator = SnapshotCoordinator(scope, reader, diffEngine, emitter)
+
+            coordinator.send(SnapshotCommand.SeedCache)
+            yield()
+
+            rooms += 200L
+
+            coordinator.send(SnapshotCommand.FullReconcile)
+            yield()
+            assertEquals(2, coordinator.dirtyRoomCount())
+
+            coordinator.send(SnapshotCommand.Drain(budget = 10))
+            yield()
+
+            assertEquals(listOf(100L), diffEngine.diffedChatIds)
+            assertEquals(0, coordinator.dirtyRoomCount())
+            assertEquals(listOf(100L, 100L, 200L), reader.snapshotCalls)
+            scope.cancel()
+        }
+
+    @Test
+    fun `fullReconcile also drains rooms removed from current room source`() =
+        runBlocking {
+            val rooms = mutableListOf(100L, 200L)
+            val reader =
+                StubSnapshotReader(
+                    roomsProvider = { rooms.map(::ChatId) },
+                    snapshots =
+                        mapOf(
+                            100L to listOf(snapshot(100L, setOf(1L)), snapshot(100L, emptySet())),
+                            200L to listOf(snapshot(200L, setOf(2L)), snapshot(200L, setOf(2L, 20L))),
+                        ),
+                )
+            val diffEngine = RecordingDiffEngine()
+            val emitter = RecordingEmitter()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            val coordinator = SnapshotCoordinator(scope, reader, diffEngine, emitter)
+
+            coordinator.send(SnapshotCommand.SeedCache)
+            yield()
+
+            rooms.remove(100L)
+
+            coordinator.send(SnapshotCommand.FullReconcile)
+            yield()
+            coordinator.send(SnapshotCommand.Drain(budget = 10))
+            yield()
+
+            assertEquals(listOf(100L, 200L), diffEngine.diffedChatIds.sorted())
+            assertEquals(listOf(100L, 200L, 100L, 200L), reader.snapshotCalls)
+            scope.cancel()
+        }
+
+    @Test
+    fun `deleted room is diffed once and then dropped from future full reconcile passes`() =
+        runBlocking {
+            val rooms = mutableListOf(100L, 200L)
+            val reader =
+                StubSnapshotReader(
+                    roomsProvider = { rooms.map(::ChatId) },
+                    snapshots =
+                        mapOf(
+                            100L to listOf(snapshot(100L, setOf(1L), nicknames = mapOf(1L to "Alice")), deletedSnapshot(100L)),
+                            200L to listOf(snapshot(200L, setOf(2L)), snapshot(200L, setOf(2L))),
+                        ),
+                )
+            val emitter = RecordingEmitter()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            val coordinator = SnapshotCoordinator(scope, reader, RoomSnapshotManager(), emitter)
+
+            coordinator.send(SnapshotCommand.SeedCache)
+            yield()
+
+            rooms.remove(100L)
+
+            coordinator.send(SnapshotCommand.FullReconcile)
+            yield()
+            coordinator.send(SnapshotCommand.Drain(budget = 10))
+            yield()
+
+            val firstPassEvents = emitter.emittedEvents.toList()
+            emitter.emittedEvents.clear()
+
+            coordinator.send(SnapshotCommand.FullReconcile)
+            yield()
+            coordinator.send(SnapshotCommand.Drain(budget = 10))
+            yield()
+
+            assertEquals(listOf("leave"), firstPassEvents.filterIsInstance<MemberEvent>().map { it.event })
+            assertEquals(listOf(100L), firstPassEvents.filterIsInstance<MemberEvent>().map { it.chatId })
+            assertEquals(emptyList(), emitter.emittedEvents)
+            assertEquals(2, reader.snapshotCalls.count { it == 100L })
+            scope.cancel()
+        }
+
+    @Test
     fun `dirtyRoomCount reflects pending rooms`() =
         runBlocking {
             val reader =
@@ -195,8 +319,8 @@ class SnapshotCoordinatorTest {
 
             coordinator.send(SnapshotCommand.SeedCache)
             yield()
-            coordinator.send(SnapshotCommand.MarkDirty(chatId = 100L))
-            coordinator.send(SnapshotCommand.MarkDirty(chatId = 200L))
+            coordinator.send(SnapshotCommand.MarkDirty(chatId = ChatId(100L)))
+            coordinator.send(SnapshotCommand.MarkDirty(chatId = ChatId(200L)))
             yield()
 
             assertEquals(2, coordinator.dirtyRoomCount())
@@ -221,7 +345,7 @@ class SnapshotCoordinatorTest {
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
             val coordinator = SnapshotCoordinator(scope, reader, diffEngine, emitter)
 
-            coordinator.send(SnapshotCommand.MarkDirty(chatId = 100L))
+            coordinator.send(SnapshotCommand.MarkDirty(chatId = ChatId(100L)))
             yield()
             coordinator.send(SnapshotCommand.Drain(budget = 10))
             yield()
@@ -245,7 +369,7 @@ class SnapshotCoordinatorTest {
 
             coordinator.enqueue(SnapshotCommand.SeedCache)
             yield()
-            coordinator.enqueue(SnapshotCommand.MarkDirty(chatId = 100L))
+            coordinator.enqueue(SnapshotCommand.MarkDirty(chatId = ChatId(100L)))
             yield()
 
             assertEquals(1, coordinator.dirtyRoomCount())
@@ -260,18 +384,25 @@ class SnapshotCoordinatorTest {
 }
 
 private class StubSnapshotReader(
-    private val rooms: List<Long>,
+    private val roomsProvider: () -> List<ChatId>,
     private val snapshots: Map<Long, List<RoomSnapshotData>>,
 ) : RoomSnapshotReader {
+    constructor(
+        rooms: List<Long>,
+        snapshots: Map<Long, List<RoomSnapshotData>>,
+    ) : this({ rooms.map(::ChatId) }, snapshots)
+
     private val indexes = mutableMapOf<Long, Int>()
+    val snapshotCalls = mutableListOf<Long>()
 
-    override fun listRoomChatIds(): List<Long> = rooms
+    override fun listRoomChatIds(): List<ChatId> = roomsProvider()
 
-    override fun snapshot(chatId: Long): RoomSnapshotData {
-        val list = snapshots[chatId] ?: error("No snapshots for chatId=$chatId")
-        val idx = indexes[chatId] ?: 0
+    override fun snapshot(chatId: ChatId): RoomSnapshotData {
+        snapshotCalls += chatId.value
+        val list = snapshots[chatId.value] ?: error("No snapshots for chatId=${chatId.value}")
+        val idx = indexes[chatId.value] ?: 0
         val safeIdx = minOf(idx, list.lastIndex)
-        indexes[chatId] = safeIdx + 1
+        indexes[chatId.value] = safeIdx + 1
         return list[safeIdx]
     }
 }
@@ -307,9 +438,11 @@ private class RecordingEmitter :
         routingGateway = null,
     ) {
     var emitCalls = 0
+    val emittedEvents = mutableListOf<Any>()
 
     override fun emit(events: List<Any>) {
         emitCalls++
+        emittedEvents.addAll(events)
         super.emit(events)
     }
 }

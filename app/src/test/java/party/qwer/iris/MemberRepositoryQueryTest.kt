@@ -3,6 +3,7 @@ package party.qwer.iris
 import kotlinx.serialization.json.JsonPrimitive
 import party.qwer.iris.model.QueryColumn
 import party.qwer.iris.storage.KakaoDbSqlClient
+import party.qwer.iris.storage.LinkId
 import party.qwer.iris.storage.MemberIdentityQueries
 import party.qwer.iris.storage.ObservedProfileQueries
 import party.qwer.iris.storage.QuerySpec
@@ -10,6 +11,8 @@ import party.qwer.iris.storage.RoomDirectoryQueries
 import party.qwer.iris.storage.RoomStatsQueries
 import party.qwer.iris.storage.SqlClient
 import party.qwer.iris.storage.ThreadQueries
+import party.qwer.iris.storage.ChatId
+import party.qwer.iris.storage.UserId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -150,13 +153,13 @@ class MemberRepositoryQueryTest {
 
         val result =
             repo.resolveNicknamesBatch(
-                userIds = listOf(1L, 2L, 3L, 4L, 5L),
-                linkId = 10L,
-                chatId = 42L,
+                userIds = listOf(1L, 2L, 3L, 4L, 5L).map(::UserId),
+                linkId = LinkId(10L),
+                chatId = ChatId(42L),
             )
 
         assertEquals(5, result.size)
-        assertEquals("open-1", result[1L])
+        assertEquals("open-1", result[UserId(1L)])
         assertTrue(queryCount.get() <= 2, "Expected at most 2 queries, got ${queryCount.get()}")
     }
 
@@ -182,15 +185,15 @@ class MemberRepositoryQueryTest {
 
         val result =
             repo.resolveNicknamesBatch(
-                userIds = listOf(1L, 2L, 3L, 4L),
-                linkId = 10L,
-                chatId = 42L,
+                userIds = listOf(1L, 2L, 3L, 4L).map(::UserId),
+                linkId = LinkId(10L),
+                chatId = ChatId(42L),
             )
 
-        assertEquals("open-nick", result[1L])
-        assertEquals("friend-nick", result[2L])
-        assertEquals("observed-nick", result[3L])
-        assertEquals("4", result[4L], "Unresolved userId should fall back to string")
+        assertEquals("open-nick", result[UserId(1L)])
+        assertEquals("friend-nick", result[UserId(2L)])
+        assertEquals("observed-nick", result[UserId(3L)])
+        assertEquals("4", result[UserId(4L)], "Unresolved userId should fall back to string")
     }
 
     @Test

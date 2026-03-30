@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import party.qwer.iris.RoomSnapshotData
+import party.qwer.iris.storage.ChatId
 import java.util.concurrent.atomic.AtomicInteger
 
 class SnapshotCoordinator(
@@ -14,10 +15,11 @@ class SnapshotCoordinator(
 ) {
     private val commands = Channel<SnapshotCommand>(Channel.UNLIMITED)
 
-    private val previousSnapshots = mutableMapOf<Long, RoomSnapshotData>()
-    private val dirtyRoomSet = mutableSetOf<Long>()
-    private val dirtyRoomQueue = ArrayDeque<Long>()
+    private val previousSnapshots = mutableMapOf<ChatId, RoomSnapshotData>()
+    private val dirtyRoomSet = mutableSetOf<ChatId>()
+    private val dirtyRoomQueue = ArrayDeque<ChatId>()
     private val dirtyRoomCountValue = AtomicInteger(0)
+    private val deletedRoomsPendingCleanup = mutableSetOf<ChatId>()
 
     init {
         scope.launch {
@@ -49,14 +51,14 @@ class SnapshotCoordinator(
     private fun handleSeedCache() {
         roomSnapshotReader
             .listRoomChatIds()
-            .filter { it > 0L }
+            .filter { it.value > 0L }
             .forEach { chatId ->
                 previousSnapshots[chatId] = roomSnapshotReader.snapshot(chatId)
             }
     }
 
-    private fun handleMarkDirty(chatId: Long) {
-        if (chatId <= 0L) return
+    private fun handleMarkDirty(chatId: ChatId) {
+        if (chatId.value <= 0L) return
         if (dirtyRoomSet.add(chatId)) {
             dirtyRoomQueue.addLast(chatId)
             dirtyRoomCountValue.incrementAndGet()
@@ -77,13 +79,29 @@ class SnapshotCoordinator(
             if (events.isNotEmpty()) {
                 emitter.emit(events)
             }
+            if (chatId in deletedRoomsPendingCleanup && currentSnapshot.isEmptySnapshot()) {
+                previousSnapshots.remove(chatId)
+                deletedRoomsPendingCleanup.remove(chatId)
+            }
         }
     }
 
     private fun handleFullReconcile() {
-        previousSnapshots.keys.forEach { chatId ->
-            handleMarkDirty(chatId)
-        }
-        dirtyRoomCountValue.set(dirtyRoomSet.size)
+        val currentRoomIds =
+            roomSnapshotReader
+            .listRoomChatIds()
+            .filter { it.value > 0L }
+            .toSet()
+        deletedRoomsPendingCleanup.clear()
+        deletedRoomsPendingCleanup.addAll(previousSnapshots.keys - currentRoomIds)
+        (previousSnapshots.keys + currentRoomIds).forEach(::handleMarkDirty)
     }
+
+    private fun RoomSnapshotData.isEmptySnapshot(): Boolean =
+        linkId == null &&
+            memberIds.isEmpty() &&
+            blindedIds.isEmpty() &&
+            nicknames.isEmpty() &&
+            roles.isEmpty() &&
+            profileImages.isEmpty()
 }

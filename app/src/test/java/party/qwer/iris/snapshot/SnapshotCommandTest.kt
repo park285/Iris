@@ -1,27 +1,29 @@
 package party.qwer.iris.snapshot
 
+import party.qwer.iris.storage.ChatId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
+import kotlin.test.assertTrue
 
 class SnapshotCommandTest {
     @Test
     fun `MarkDirty carries chatId`() {
-        val cmd = SnapshotCommand.MarkDirty(chatId = 100L)
+        val cmd = SnapshotCommand.MarkDirty(chatId = ChatId(100L))
         assertIs<SnapshotCommand>(cmd)
-        assertEquals(100L, cmd.chatId)
+        assertTrue(cmd.chatId == ChatId(100L))
     }
 
     @Test
     fun `MarkDirty equality uses chatId`() {
         assertEquals(
-            SnapshotCommand.MarkDirty(chatId = 100L),
-            SnapshotCommand.MarkDirty(chatId = 100L),
+            SnapshotCommand.MarkDirty(chatId = ChatId(100L)),
+            SnapshotCommand.MarkDirty(chatId = ChatId(100L)),
         )
         assertNotEquals(
-            SnapshotCommand.MarkDirty(chatId = 100L),
-            SnapshotCommand.MarkDirty(chatId = 200L),
+            SnapshotCommand.MarkDirty(chatId = ChatId(100L)),
+            SnapshotCommand.MarkDirty(chatId = ChatId(200L)),
         )
     }
 
@@ -46,7 +48,7 @@ class SnapshotCommandTest {
     fun `all variants are SnapshotCommand subtypes`() {
         val commands: List<SnapshotCommand> =
             listOf(
-                SnapshotCommand.MarkDirty(chatId = 1L),
+                SnapshotCommand.MarkDirty(chatId = ChatId(1L)),
                 SnapshotCommand.Drain(budget = 32),
                 SnapshotCommand.FullReconcile,
                 SnapshotCommand.SeedCache,

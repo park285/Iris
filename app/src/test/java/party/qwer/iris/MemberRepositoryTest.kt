@@ -148,12 +148,13 @@ class MemberRepositoryTest {
                                     mapOf("user_id" to "2", "type" to "0", "cnt" to "7", "last_active" to "900"),
                                     mapOf("user_id" to "3", "type" to "0", "cnt" to "3", "last_active" to "800"),
                                 )
-                            sqlQuery == "SELECT nickname, enc FROM db2.open_chat_member WHERE user_id = ? AND link_id = ? LIMIT 1" ->
+                            sqlQuery.contains("FROM db2.open_chat_member") &&
+                                sqlQuery.contains("WHERE link_id = ? AND user_id IN (?, ?, ?)") &&
+                                bindArgs?.toList() == listOf("777", "1", "2", "3") ->
                                 listOf(
-                                    mapOf(
-                                        "nickname" to "user-${bindArgs?.get(0)}-link-${bindArgs?.get(1)}",
-                                        "enc" to "0",
-                                    ),
+                                    mapOf("user_id" to "1", "nickname" to "user-1-link-777", "enc" to "0"),
+                                    mapOf("user_id" to "2", "nickname" to "user-2-link-777", "enc" to "0"),
+                                    mapOf("user_id" to "3", "nickname" to "user-3-link-777", "enc" to "0"),
                                 )
                             else -> emptyList()
                         }
@@ -240,6 +241,46 @@ class MemberRepositoryTest {
 
         assertEquals(1, batchNicknameQueryCount)
         assertEquals(listOf("alice", "bob"), stats.topMembers.map { it.nickname })
+    }
+
+    @Test
+    fun `roomStats resolves non open member nicknames in batch ownership`() {
+        var friendBatchQueryCount = 0
+        val repo =
+            buildRepoFromLegacy(
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, bindArgs, _ ->
+                        when {
+                            sqlQuery == "SELECT link_id FROM chat_rooms WHERE id = ?" ->
+                                listOf(mapOf("link_id" to null))
+                            sqlQuery.contains("FROM chat_logs WHERE chat_id = ? AND created_at >= ?") ->
+                                listOf(
+                                    mapOf("user_id" to "203887151", "type" to "0", "cnt" to "10", "last_active" to "1002"),
+                                    mapOf("user_id" to "243338321", "type" to "0", "cnt" to "7", "last_active" to "1001"),
+                                    mapOf("user_id" to "438562408", "type" to "0", "cnt" to "3", "last_active" to "1000"),
+                                )
+                            sqlQuery == "SELECT id, name, enc FROM db2.friends WHERE id IN (?,?,?)" &&
+                                bindArgs?.toList() == listOf("203887151", "243338321", "438562408") -> {
+                                friendBatchQueryCount++
+                                listOf(
+                                    mapOf("id" to "203887151", "name" to "재균", "enc" to "0"),
+                                    mapOf("id" to "243338321", "name" to "서윤", "enc" to "0"),
+                                    mapOf("id" to "438562408", "name" to "봇", "enc" to "0"),
+                                )
+                            }
+                            sqlQuery == "SELECT name, enc FROM db2.friends WHERE id = ? LIMIT 1" ->
+                                error("roomStats should not resolve non open nicknames with per-user queries")
+                            else -> emptyList()
+                        }
+                    },
+                decrypt = { _, raw, _ -> raw },
+                botId = 438562408L,
+            )
+
+        val stats = repo.roomStats(chatId = 366795577484293L, period = "all", limit = 3)
+
+        assertEquals(1, friendBatchQueryCount)
+        assertEquals(listOf("재균", "서윤", "봇"), stats.topMembers.map { it.nickname })
     }
 
     @Test
@@ -504,10 +545,12 @@ class MemberRepositoryTest {
                                     mapOf("user_id" to "267947734", "message_count" to "1", "last_active" to "1000"),
                                     mapOf("user_id" to "438562408", "message_count" to "1", "last_active" to "1001"),
                                 )
-                            sqlQuery == "SELECT name, enc FROM db2.friends WHERE id = ? LIMIT 1" && bindArgs?.toList() == listOf("267947734") ->
-                                listOf(mapOf("name" to "카푸", "enc" to "0"))
-                            sqlQuery == "SELECT name, enc FROM db2.friends WHERE id = ? LIMIT 1" && bindArgs?.toList() == listOf("438562408") ->
-                                listOf(mapOf("name" to "봇", "enc" to "0"))
+                            sqlQuery == "SELECT id, name, enc FROM db2.friends WHERE id IN (?,?)" &&
+                                bindArgs?.toList() == listOf("438562408", "267947734") ->
+                                listOf(
+                                    mapOf("id" to "267947734", "name" to "카푸", "enc" to "0"),
+                                    mapOf("id" to "438562408", "name" to "봇", "enc" to "0"),
+                                )
                             else -> emptyList()
                         }
                     },
@@ -523,6 +566,59 @@ class MemberRepositoryTest {
         assertEquals("카푸", members.getValue(267947734L).nickname)
         assertEquals("member", members.getValue(267947734L).role)
         assertEquals("bot", members.getValue(438562408L).role)
+    }
+
+    @Test
+    fun `listMembers resolves non open nicknames in batch ownership`() {
+        var friendBatchQueryCount = 0
+        val repo =
+            buildRepoFromLegacy(
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, bindArgs, _ ->
+                        when {
+                            sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
+                                listOf(
+                                    mapOf(
+                                        "link_id" to null,
+                                        "type" to "MultiChat",
+                                        "members" to "[203887151,243338321]",
+                                        "active_members_count" to "3",
+                                    ),
+                                )
+                            sqlQuery.contains("FROM chat_logs") &&
+                                sqlQuery.contains("user_id IN (?, ?, ?)") &&
+                                bindArgs?.toList() == listOf("366795577484293", "203887151", "243338321", "438562408") ->
+                                listOf(
+                                    mapOf("user_id" to "203887151", "message_count" to "10", "last_active" to "1002"),
+                                    mapOf("user_id" to "243338321", "message_count" to "7", "last_active" to "1001"),
+                                    mapOf("user_id" to "438562408", "message_count" to "3", "last_active" to "1000"),
+                                )
+                            sqlQuery == "SELECT id, name, enc FROM db2.friends WHERE id IN (?,?,?)" &&
+                                bindArgs?.toList() == listOf("203887151", "243338321", "438562408") -> {
+                                friendBatchQueryCount++
+                                listOf(
+                                    mapOf("id" to "203887151", "name" to "재균", "enc" to "0"),
+                                    mapOf("id" to "243338321", "name" to "서윤", "enc" to "0"),
+                                    mapOf("id" to "438562408", "name" to "봇", "enc" to "0"),
+                                )
+                            }
+                            sqlQuery == "SELECT name, enc FROM db2.friends WHERE id = ? LIMIT 1" ->
+                                error("listMembers should not resolve non open nicknames with per-user queries")
+                            else -> emptyList()
+                        }
+                    },
+                decrypt = { _, raw, _ -> raw },
+                botId = 438562408L,
+                learnObservedProfileUserMappings = { _, _ -> },
+            )
+
+        val response = repo.listMembers(chatId = 366795577484293L)
+        val members = response.members.associateBy { it.userId }
+
+        assertEquals(1, friendBatchQueryCount)
+        assertEquals("재균", members.getValue(203887151L).nickname)
+        assertEquals("서윤", members.getValue(243338321L).nickname)
+        assertEquals("봇", members.getValue(438562408L).nickname)
     }
 
     @Test
@@ -702,8 +798,11 @@ class MemberRepositoryTest {
                                 listOf(
                                     mapOf("user_id" to "203887151", "message_count" to "1", "last_active" to "1000"),
                                 )
+                            sqlQuery == "SELECT id, name, enc FROM db2.friends WHERE id IN (?,?)" &&
+                                bindArgs?.toList() == listOf("203887151", "438562408") ->
+                                emptyList()
                             sqlQuery.contains("FROM db3.observed_profile_user_links") &&
-                                bindArgs?.toList() == listOf("366795577484293", "203887151") ->
+                                bindArgs?.toList() == listOf("366795577484293", "203887151", "438562408") ->
                                 listOf(mapOf("user_id" to "203887151", "display_name" to "재균"))
                             else -> emptyList()
                         }
@@ -868,6 +967,56 @@ class MemberRepositoryTest {
 
         assertEquals(18478615493603057L, learnedChatId)
         assertEquals(mapOf(6729110572752592365L to "박준우"), learnedNames)
+    }
+
+    @Test
+    fun `listMembers excludes friend resolved users from observed profile learning`() {
+        var learnedNames: Map<Long, String>? = null
+        val repo =
+            buildRepoFromLegacy(
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, bindArgs, _ ->
+                        when {
+                            sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
+                                listOf(
+                                    mapOf(
+                                        "link_id" to null,
+                                        "type" to "MultiChat",
+                                        "members" to "[203887151,243338321]",
+                                        "active_members_count" to "2",
+                                    ),
+                                )
+                            sqlQuery.contains("FROM chat_logs") && sqlQuery.contains("GROUP BY user_id") ->
+                                listOf(
+                                    mapOf("user_id" to "203887151", "message_count" to "5", "last_active" to "1001"),
+                                    mapOf("user_id" to "243338321", "message_count" to "3", "last_active" to "1000"),
+                                )
+                            sqlQuery.contains("SELECT id, name, enc FROM db2.friends WHERE id IN") ->
+                                if (bindArgs?.contains("203887151") == true) {
+                                    listOf(mapOf("id" to "203887151", "name" to "재균", "enc" to "0"))
+                                } else {
+                                    emptyList()
+                                }
+                            sqlQuery.contains("FROM db3.observed_profile_user_links") ->
+                                if (bindArgs?.contains("243338321") == true) {
+                                    listOf(mapOf("user_id" to "243338321", "display_name" to "서윤"))
+                                } else {
+                                    emptyList()
+                                }
+                            else -> emptyList()
+                        }
+                    },
+                decrypt = { _, raw, _ -> raw },
+                botId = 438562408L,
+                learnObservedProfileUserMappings = { _, names ->
+                    learnedNames = names
+                },
+            )
+
+        repo.listMembers(chatId = 366795577484293L)
+
+        // 친구 DB로 해석된 203887151("재균")은 제외, observed profile로 해석된 243338321만 학습
+        assertEquals(mapOf(243338321L to "서윤"), learnedNames)
     }
 
     @Test

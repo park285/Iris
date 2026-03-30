@@ -1,18 +1,21 @@
 package party.qwer.iris.snapshot
 
 import party.qwer.iris.RoomSnapshotData
+import party.qwer.iris.storage.ChatId
+import party.qwer.iris.storage.LinkId
 import party.qwer.iris.storage.OpenMemberRow
+import party.qwer.iris.storage.UserId
 
 object RoomSnapshotAssembler {
     fun assemble(
-        chatId: Long,
-        linkId: Long?,
-        memberIds: Set<Long>,
-        blindedIds: Set<Long>,
+        chatId: ChatId,
+        linkId: LinkId?,
+        memberIds: Set<UserId>,
+        blindedIds: Set<UserId>,
         openMembers: List<OpenMemberRow>,
-        batchNicknames: Map<Long, String>,
+        batchNicknames: Map<UserId, String>,
         decrypt: (Int, String, Long) -> String,
-        botId: Long,
+        botId: UserId,
     ): RoomSnapshotData {
         val nicknames = mutableMapOf<Long, String>()
         val roles = mutableMapOf<Long, Int>()
@@ -22,7 +25,7 @@ object RoomSnapshotAssembler {
             val rawNick = member.nickname
             nicknames[member.userId] =
                 if (rawNick != null && member.enc > 0) {
-                    decrypt(member.enc, rawNick, botId)
+                    decrypt(member.enc, rawNick, botId.value)
                 } else {
                     rawNick ?: ""
                 }
@@ -31,16 +34,16 @@ object RoomSnapshotAssembler {
         }
 
         batchNicknames.forEach { (userId, nickname) ->
-            if (nickname.isNotBlank() && nickname != userId.toString()) {
-                nicknames[userId] = nickname
+            if (nickname.isNotBlank() && nickname != userId.value.toString()) {
+                nicknames[userId.value] = nickname
             }
         }
 
         return RoomSnapshotData(
-            chatId = chatId,
-            linkId = linkId,
-            memberIds = memberIds,
-            blindedIds = blindedIds,
+            chatId = chatId.value,
+            linkId = linkId?.value,
+            memberIds = memberIds.mapTo(linkedSetOf()) { it.value },
+            blindedIds = blindedIds.mapTo(linkedSetOf()) { it.value },
             nicknames = nicknames,
             roles = roles,
             profileImages = profileImages,
