@@ -25,36 +25,37 @@ internal fun Route.installQueryRoutes(
     config: ConfigProvider,
 ) {
     post("/query") {
-        val rawBody = readProtectedBody(call, MAX_QUERY_REQUEST_BODY_BYTES)
-        if (!authSupport.requireBotToken(call, method = "POST", body = rawBody.body, bodySha256Hex = rawBody.sha256Hex)) {
-            return@post
-        }
-        val queryRequest = serverJson.decodeFromString<QueryRequest>(rawBody.body)
-        requireQueryText(queryRequest.query)
-        requireReadOnlyQuery(queryRequest.query)
-
-        try {
-            val queryResult =
-                chatLogRepo.executeQuery(
-                    queryRequest.query,
-                    (queryRequest.bind?.map { it.content } ?: listOf()).toTypedArray(),
-                    MAX_QUERY_ROWS + 1,
-                )
-            if (queryResult.rows.size > MAX_QUERY_ROWS) {
-                invalidRequest("query returned too many rows; limit is $MAX_QUERY_ROWS")
+        readProtectedBody(call, MAX_QUERY_REQUEST_BODY_BYTES).use { rawBody ->
+            if (!authSupport.requireBotToken(call, method = "POST", bodySha256Hex = rawBody.sha256Hex)) {
+                return@post
             }
-            call.respond(
-                buildQueryResponse(
-                    queryResult = queryResult,
-                    decrypt = queryRequest.decrypt,
-                    config = config,
-                ),
-            )
-        } catch (e: ApiRequestException) {
-            throw e
-        } catch (e: Exception) {
-            IrisLogger.error("[QueryRoutes] Query execution failed", e)
-            internalServerFailure("query execution failed")
+            val queryRequest = rawBody.decodeJson(serverJson, QueryRequest.serializer())
+            requireQueryText(queryRequest.query)
+            requireReadOnlyQuery(queryRequest.query)
+
+            try {
+                val queryResult =
+                    chatLogRepo.executeQuery(
+                        queryRequest.query,
+                        (queryRequest.bind?.map { it.content } ?: listOf()).toTypedArray(),
+                        MAX_QUERY_ROWS + 1,
+                    )
+                if (queryResult.rows.size > MAX_QUERY_ROWS) {
+                    invalidRequest("query returned too many rows; limit is $MAX_QUERY_ROWS")
+                }
+                call.respond(
+                    buildQueryResponse(
+                        queryResult = queryResult,
+                        decrypt = queryRequest.decrypt,
+                        config = config,
+                    ),
+                )
+            } catch (e: ApiRequestException) {
+                throw e
+            } catch (e: Exception) {
+                IrisLogger.error("[QueryRoutes] Query execution failed", e)
+                internalServerFailure("query execution failed")
+            }
         }
     }
 }

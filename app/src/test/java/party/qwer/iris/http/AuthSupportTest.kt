@@ -48,7 +48,6 @@ class AuthSupportTest {
             authSupport.authenticateRequest(
                 method = "POST",
                 path = "/config/endpoint",
-                body = body,
                 bodySha256Hex = sha256Hex(body.toByteArray()),
                 timestampHeader = timestamp,
                 nonceHeader = nonce,
@@ -71,7 +70,6 @@ class AuthSupportTest {
             authSupport.authenticateRequest(
                 method = "POST",
                 path = "/config/endpoint",
-                body = body,
                 bodySha256Hex = sha256Hex(body.toByteArray()),
                 timestampHeader = "1000",
                 nonceHeader = "nonce-1",
@@ -93,7 +91,6 @@ class AuthSupportTest {
             authSupport.authenticateRequest(
                 method = "GET",
                 path = "/config",
-                body = "",
                 bodySha256Hex = sha256Hex(ByteArray(0)),
                 timestampHeader = "1000",
                 nonceHeader = "nonce-1",
@@ -128,7 +125,6 @@ class AuthSupportTest {
             authSupport.authenticateRequest(
                 method = "GET",
                 path = canonicalPath,
-                body = body,
                 bodySha256Hex = sha256Hex(body.toByteArray()),
                 timestampHeader = timestamp,
                 nonceHeader = nonce,

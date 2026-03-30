@@ -3,7 +3,7 @@ package party.qwer.iris
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.time.Instant
-import java.util.concurrent.ConcurrentHashMap
+import java.util.LinkedHashMap
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
@@ -16,8 +16,10 @@ internal enum class AuthResult {
 internal class RequestAuthenticator(
     private val nowEpochMs: () -> Long = { Instant.now().toEpochMilli() },
     private val maxAgeMs: Long = 5 * 60 * 1000L,
+    private val maxNonceEntries: Int = 10_000,
+    private val purgeIntervalMs: Long = 5_000L,
 ) {
-    private val nonceTimestamps = ConcurrentHashMap<String, Long>()
+    private val nonceWindow = NonceWindow(maxAgeMs, maxNonceEntries, purgeIntervalMs)
 
     fun authenticate(
         method: String,
@@ -59,16 +61,56 @@ internal class RequestAuthenticator(
             return AuthResult.UNAUTHORIZED
         }
 
-        purgeExpiredNonces(now)
-        if (nonceTimestamps.putIfAbsent(nonce, now) != null) {
+        if (!nonceWindow.tryRecord(nonce, now)) {
             return AuthResult.UNAUTHORIZED
         }
         return AuthResult.AUTHORIZED
     }
 
-    private fun purgeExpiredNonces(now: Long) {
-        val cutoff = now - maxAgeMs
-        nonceTimestamps.entries.removeIf { (_, seenAt) -> seenAt < cutoff }
+    private class NonceWindow(
+        private val maxAgeMs: Long,
+        private val maxNonceEntries: Int,
+        private val purgeIntervalMs: Long,
+    ) {
+        private val nonceTimestamps = LinkedHashMap<String, Long>()
+        private var lastPurgeAt = 0L
+
+        init {
+            require(maxNonceEntries > 0) { "maxNonceEntries must be greater than zero" }
+            require(purgeIntervalMs >= 0L) { "purgeIntervalMs must be non-negative" }
+        }
+
+        fun tryRecord(nonce: String, now: Long): Boolean =
+            synchronized(this) {
+                maybePurge(now)
+                if (nonceTimestamps.containsKey(nonce)) {
+                    return false
+                }
+
+                if (nonceTimestamps.size >= maxNonceEntries) {
+                    purgeExpiredNonces(now)
+                    lastPurgeAt = now
+                    if (nonceTimestamps.size >= maxNonceEntries) {
+                        return false
+                    }
+                }
+
+                nonceTimestamps[nonce] = now
+                true
+            }
+
+        private fun maybePurge(now: Long) {
+            if (now - lastPurgeAt < purgeIntervalMs) {
+                return
+            }
+            purgeExpiredNonces(now)
+            lastPurgeAt = now
+        }
+
+        private fun purgeExpiredNonces(now: Long) {
+            val cutoff = now - maxAgeMs
+            nonceTimestamps.entries.removeIf { (_, seenAt) -> seenAt < cutoff }
+        }
     }
 }
 

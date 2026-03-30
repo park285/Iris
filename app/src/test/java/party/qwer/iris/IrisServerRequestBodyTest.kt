@@ -27,17 +27,16 @@ class IrisServerRequestBodyTest {
     @Test
     fun `read request body accepts payload within limit`() =
         runBlocking {
-            val result =
-                readBodyWithStreamingDigest(
+            readBodyWithStreamingDigest(
                     bodyChannel = ByteReadChannel("""{"ok":true}"""),
                     declaredContentLength = 11,
                     maxBodyBytes = 64,
-                )
-
-            assertEquals("""{"ok":true}""", result.body)
-            assertEquals(
-                sha256Hex("""{"ok":true}""".toByteArray()),
-                result.sha256Hex,
-            )
+                ).use { result ->
+                    assertEquals("""{"ok":true}""", result.readUtf8Body())
+                    assertEquals(
+                        sha256Hex("""{"ok":true}""".toByteArray()),
+                        result.sha256Hex,
+                    )
+                }
         }
 }

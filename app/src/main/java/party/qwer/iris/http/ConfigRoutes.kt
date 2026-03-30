@@ -25,24 +25,25 @@ internal fun Route.installConfigRoutes(
             call.respond(configManager.configResponse())
         }
         post("{name}") {
-            val bodyResult = readProtectedBody(call, MAX_CONFIG_REQUEST_BODY_BYTES)
-            if (!authSupport.requireBotToken(call, method = "POST", body = bodyResult.body, bodySha256Hex = bodyResult.sha256Hex)) {
-                return@post
+            readProtectedBody(call, MAX_CONFIG_REQUEST_BODY_BYTES).use { bodyResult ->
+                if (!authSupport.requireBotToken(call, method = "POST", bodySha256Hex = bodyResult.sha256Hex)) {
+                    return@post
+                }
+                val name = call.parameters["name"] ?: throw ApiRequestException("missing config name")
+                val request = bodyResult.decodeJson(serverJson, ConfigRequest.serializer())
+                val updateOutcome = applyConfigUpdate(configManager, name, request)
+                if (!configManager.saveConfigNow()) {
+                    throw ApiRequestException("failed to persist config update", HttpStatusCode.InternalServerError)
+                }
+                call.respond(
+                    configManager.configUpdateResponse(
+                        name = updateOutcome.name,
+                        persisted = true,
+                        applied = updateOutcome.applied,
+                        requiresRestart = updateOutcome.requiresRestart,
+                    ),
+                )
             }
-            val name = call.parameters["name"] ?: throw ApiRequestException("missing config name")
-            val request = serverJson.decodeFromString<ConfigRequest>(bodyResult.body)
-            val updateOutcome = applyConfigUpdate(configManager, name, request)
-            if (!configManager.saveConfigNow()) {
-                throw ApiRequestException("failed to persist config update", HttpStatusCode.InternalServerError)
-            }
-            call.respond(
-                configManager.configUpdateResponse(
-                    name = updateOutcome.name,
-                    persisted = true,
-                    applied = updateOutcome.applied,
-                    requiresRestart = updateOutcome.requiresRestart,
-                ),
-            )
         }
     }
 }

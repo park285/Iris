@@ -32,14 +32,15 @@ internal fun Route.installReplyRoutes(
     replyStatusProvider: ((String) -> ReplyStatusSnapshot?)?,
 ) {
     post("/reply") {
-        val rawBody = readProtectedBody(call, MAX_REPLY_REQUEST_BODY_BYTES)
-        if (!authSupport.requireBotToken(call, method = "POST", body = rawBody.body, bodySha256Hex = rawBody.sha256Hex)) {
-            return@post
-        }
+        readProtectedBody(call, MAX_REPLY_REQUEST_BODY_BYTES).use { rawBody ->
+            if (!authSupport.requireBotToken(call, method = "POST", bodySha256Hex = rawBody.sha256Hex)) {
+                return@post
+            }
 
-        val replyRequest = serverJson.decodeFromString<ReplyRequest>(rawBody.body)
-        val response = enqueueReply(replyRequest, notificationReferer, messageSender)
-        call.respond(HttpStatusCode.Accepted, response)
+            val replyRequest = rawBody.decodeJson(serverJson, ReplyRequest.serializer())
+            val response = enqueueReply(replyRequest, notificationReferer, messageSender)
+            call.respond(HttpStatusCode.Accepted, response)
+        }
     }
 
     get("/reply-status/{requestId}") {

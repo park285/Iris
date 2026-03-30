@@ -10,7 +10,6 @@ import party.qwer.iris.IrisLogger
 import party.qwer.iris.RequestAuthenticator
 import party.qwer.iris.canonicalRequestTarget
 import party.qwer.iris.model.CommonErrorResponse
-import party.qwer.iris.sha256Hex
 
 internal class AuthSupport(
     private val authenticator: RequestAuthenticator,
@@ -19,14 +18,12 @@ internal class AuthSupport(
     suspend fun requireBotToken(
         call: ApplicationCall,
         method: String,
-        body: String = "",
-        bodySha256Hex: String = sha256Hex(body.toByteArray()),
+        bodySha256Hex: String = party.qwer.iris.sha256Hex(ByteArray(0)),
     ): Boolean {
         val result =
             authenticateRequest(
                 method = method,
                 path = canonicalRequestTarget(call.request.path(), call.request.queryParameters),
-                body = body,
                 bodySha256Hex = bodySha256Hex,
                 timestampHeader = call.request.headers["X-Iris-Timestamp"],
                 nonceHeader = call.request.headers["X-Iris-Nonce"],
@@ -49,7 +46,6 @@ internal class AuthSupport(
     fun authenticateRequest(
         method: String,
         path: String,
-        body: String,
         bodySha256Hex: String,
         timestampHeader: String?,
         nonceHeader: String?,
@@ -58,7 +54,7 @@ internal class AuthSupport(
         authenticator.authenticate(
             method = method,
             path = path,
-            body = body,
+            body = "",
             bodySha256Hex = bodySha256Hex,
             expectedSecret = config.inboundSigningSecret,
             timestampHeader = timestampHeader,
