@@ -416,6 +416,43 @@ class SnapshotCoordinatorTest {
         }
 
     @Test
+    fun `fullReconcile skips when room source returns empty but snapshots exist`() =
+        runBlocking {
+            val rooms = mutableListOf(100L, 200L, 300L)
+            val reader =
+                StubSnapshotReader(
+                    roomsProvider = { rooms.map(::ChatId) },
+                    snapshots =
+                        mapOf(
+                            100L to listOf(snapshot(100L, setOf(1L))),
+                            200L to listOf(snapshot(200L, setOf(2L))),
+                            300L to listOf(snapshot(300L, setOf(3L))),
+                        ),
+                )
+            val diffEngine = RecordingDiffEngine()
+            val emitter = RecordingEmitter()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            val coordinator = SnapshotCoordinator(scope, reader, diffEngine, emitter)
+
+            // 시드: 3개 방
+            coordinator.send(SnapshotCommand.SeedCache)
+            yield()
+
+            // DB 장애 시뮬레이션 — 빈 목록 반환
+            rooms.clear()
+
+            coordinator.send(SnapshotCommand.FullReconcile)
+            yield()
+            coordinator.send(SnapshotCommand.Drain(budget = 10))
+            yield()
+
+            // 빈 결과일 때 reconcile 스킵 → diff/emit 호출 없음
+            assertEquals(0, diffEngine.calls)
+            assertEquals(0, emitter.emitCalls)
+            scope.cancel()
+        }
+
+    @Test
     fun `enqueue accepts non suspending commands and updates dirty room count`() =
         runBlocking {
             val reader =

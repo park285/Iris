@@ -96,6 +96,11 @@ class SnapshotCoordinator(
             .filter { it.value > 0L }
             .toSet()
 
+        // DB 장애로 빈 결과가 반환되면 대량 leave 이벤트 방지를 위해 스킵
+        if (currentRoomIds.isEmpty() && previousSnapshots.isNotEmpty()) {
+            return
+        }
+
         // 부활한 방: 이전에 클린업 완료되었으나 다시 나타난 방
         val resurrected = cleanedUpRooms.intersect(currentRoomIds)
         cleanedUpRooms.removeAll(resurrected)
