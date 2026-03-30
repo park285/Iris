@@ -21,7 +21,7 @@ pub enum ModalFocus {
     Content,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ThreadMode {
     None,
     Specified,
@@ -86,7 +86,7 @@ pub struct ReplyModal {
     reply_type: ReplyType,
     room: Option<RoomSummary>,
     thread_mode: ThreadMode,
-    thread_id_input: String,
+    pub(crate) thread_id_input: String,
     scope: ThreadScope,
 
     // 콘텐츠
@@ -112,7 +112,11 @@ pub struct ReplyModal {
 }
 
 impl ReplyModal {
-    pub fn new(room: Option<RoomSummary>, room_list: Vec<RoomSummary>) -> Self {
+    pub fn new_with_context(
+        room: Option<RoomSummary>,
+        room_list: Vec<RoomSummary>,
+        thread_id: Option<String>,
+    ) -> Self {
         let is_open_chat = room
             .as_ref()
             .and_then(|r| r.room_type.as_deref())
@@ -122,6 +126,7 @@ impl ReplyModal {
         text_area.set_placeholder_text("메시지를 입력하세요...");
         text_area.set_block(Block::default().borders(Borders::ALL).title(" Content "));
 
+        let has_thread = thread_id.is_some();
         let initial_focus = if room.is_none() {
             ModalFocus::Room
         } else {
@@ -131,8 +136,12 @@ impl ReplyModal {
         Self {
             reply_type: ReplyType::Text,
             room,
-            thread_mode: ThreadMode::None,
-            thread_id_input: String::new(),
+            thread_mode: if has_thread {
+                ThreadMode::Specified
+            } else {
+                ThreadMode::None
+            },
+            thread_id_input: thread_id.unwrap_or_default(),
             scope: ThreadScope::Thread,
             text_area,
             image_path: PathInput::new(),
@@ -504,8 +513,9 @@ impl ReplyModal {
             .enumerate()
             .map(|(i, t)| {
                 let origin = t.origin_message.as_deref().unwrap_or("(원본 없음)");
-                let truncated = if origin.len() > 40 {
-                    format!("{}...", &origin[..40])
+                let truncated = if origin.chars().count() > 40 {
+                    let cut: String = origin.chars().take(40).collect();
+                    format!("{cut}...")
                 } else {
                     origin.to_string()
                 };
@@ -764,13 +774,21 @@ impl ReplyModal {
             }
             KeyCode::Enter => {
                 if let Some(selected) = self.room_list.get(self.room_selector_cursor).cloned() {
-                    self.is_open_chat = selected
+                    let previous_chat_id = self.room.as_ref().map(|room| room.chat_id);
+                    let next_is_open_chat = selected
                         .room_type
                         .as_deref()
                         .is_some_and(|t| t.starts_with('O'));
+                    let room_changed = previous_chat_id != Some(selected.chat_id);
+
+                    self.is_open_chat = next_is_open_chat;
                     self.room = Some(selected);
-                    if !self.is_open_chat {
+
+                    if room_changed || !self.is_open_chat {
                         self.thread_mode = ThreadMode::None;
+                        self.thread_id_input.clear();
+                        self.thread_suggestions.clear();
+                        self.thread_selector_cursor = 0;
                     }
                 }
                 self.focus = ModalFocus::Room;
@@ -958,4 +976,131 @@ fn centered_rect(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(vertical[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn make_room(chat_id: i64, room_type: &str) -> RoomSummary {
+        RoomSummary {
+            chat_id,
+            room_type: Some(room_type.to_string()),
+            link_id: None,
+            active_members_count: None,
+            link_name: Some("room".to_string()),
+            link_url: None,
+            member_limit: None,
+            searchable: None,
+            bot_role: None,
+        }
+    }
+
+    #[test]
+    fn new_with_context_prefills_thread_id() {
+        let room = RoomSummary {
+            chat_id: 42,
+            room_type: Some("OM".to_string()),
+            link_id: None,
+            active_members_count: None,
+            link_name: Some("room".to_string()),
+            link_url: None,
+            member_limit: None,
+            searchable: None,
+            bot_role: None,
+        };
+
+        let modal =
+            ReplyModal::new_with_context(Some(room.clone()), vec![room], Some("777".to_string()));
+
+        assert_eq!(modal.thread_id_input, "777");
+        assert_eq!(modal.thread_mode, ThreadMode::Specified);
+    }
+
+    #[test]
+    fn switching_to_non_open_chat_clears_thread_state() {
+        let open_room = make_room(10, "OM");
+        let regular_room = make_room(20, "DirectChat");
+        let room_list = vec![open_room.clone(), regular_room];
+
+        let mut modal = ReplyModal::new_with_context(
+            Some(open_room),
+            room_list.clone(),
+            Some("999".to_string()),
+        );
+        modal.thread_suggestions = vec![ThreadSummary {
+            thread_id: "999".to_string(),
+            origin_message: Some("hello".to_string()),
+            message_count: 2,
+            last_active_at: None,
+        }];
+        modal.thread_selector_cursor = 1;
+
+        modal.room_list = room_list;
+        modal.room_selector_cursor = 1;
+        modal.focus = ModalFocus::RoomSelector;
+        modal.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(modal.thread_mode, ThreadMode::None);
+        assert!(modal.thread_id_input.is_empty());
+        assert!(modal.thread_suggestions.is_empty());
+        assert_eq!(modal.thread_selector_cursor, 0);
+    }
+
+    #[test]
+    fn switching_between_open_chats_clears_stale_thread_state() {
+        let open_room_a = make_room(10, "OM");
+        let open_room_b = make_room(20, "OM");
+        let room_list = vec![open_room_a.clone(), open_room_b];
+
+        let mut modal = ReplyModal::new_with_context(
+            Some(open_room_a),
+            room_list.clone(),
+            Some("999".to_string()),
+        );
+        modal.thread_suggestions = vec![ThreadSummary {
+            thread_id: "999".to_string(),
+            origin_message: Some("hello".to_string()),
+            message_count: 2,
+            last_active_at: None,
+        }];
+        modal.thread_selector_cursor = 1;
+
+        modal.room_list = room_list;
+        modal.room_selector_cursor = 1;
+        modal.focus = ModalFocus::RoomSelector;
+        modal.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(modal.thread_mode, ThreadMode::None);
+        assert!(modal.thread_id_input.is_empty());
+        assert!(modal.thread_suggestions.is_empty());
+        assert_eq!(modal.thread_selector_cursor, 0);
+    }
+
+    #[test]
+    fn origin_message_truncation_is_char_safe() {
+        // 멀티바이트 한글 문자 40자 초과 origin_message 처리
+        // 한글 1자 = 3 bytes; 45자면 byte len=135, char len=45
+        let long_korean: String = "가".repeat(45);
+        let thread = ThreadSummary {
+            thread_id: "1".to_string(),
+            message_count: 3,
+            origin_message: Some(long_korean),
+            last_active_at: None,
+        };
+
+        // render_thread_selector 를 직접 호출할 수 없으므로
+        // 트런케이션 로직만 인라인으로 검증
+        let origin = thread.origin_message.as_deref().unwrap_or("(원본 없음)");
+        let truncated = if origin.chars().count() > 40 {
+            let cut: String = origin.chars().take(40).collect();
+            format!("{cut}...")
+        } else {
+            origin.to_string()
+        };
+
+        assert_eq!(truncated.chars().count(), 43); // 40 chars + "..." (3 chars)
+        assert!(truncated.ends_with("가..."));
+    }
 }

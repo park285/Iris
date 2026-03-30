@@ -1,5 +1,6 @@
 pub mod events;
 pub mod members;
+pub mod messages;
 pub mod path_input;
 pub mod reply_modal;
 pub mod rooms;
@@ -12,11 +13,17 @@ use ratatui::Frame;
 pub trait View {
     fn render(&self, frame: &mut Frame<'_>, area: ratatui::layout::Rect);
     fn handle_key(&mut self, key: KeyEvent) -> ViewAction;
-    fn title(&self) -> &str;
+    fn title(&self) -> &'static str;
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReplyTarget {
+    pub chat_id: Option<i64>,
+    pub thread_id: Option<String>,
 }
 
 #[allow(dead_code)]
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub enum ViewAction {
     None,
     SwitchTo(TabId),
@@ -25,7 +32,7 @@ pub enum ViewAction {
     SelectMember(i64, i64),
     Quit,
     Back,
-    OpenReply(Option<i64>),
+    OpenReply(ReplyTarget),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -33,18 +40,26 @@ pub enum TabId {
     Rooms,
     Members,
     Stats,
+    Messages,
     Events,
 }
 
 impl TabId {
     pub const fn all() -> &'static [Self] {
-        &[Self::Rooms, Self::Members, Self::Stats, Self::Events]
+        &[
+            Self::Rooms,
+            Self::Members,
+            Self::Stats,
+            Self::Messages,
+            Self::Events,
+        ]
     }
     pub const fn label(&self) -> &str {
         match self {
             Self::Rooms => "Rooms",
             Self::Members => "Members",
             Self::Stats => "Stats",
+            Self::Messages => "Messages",
             Self::Events => "Events",
         }
     }
@@ -53,7 +68,8 @@ impl TabId {
             Self::Rooms => 0,
             Self::Members => 1,
             Self::Stats => 2,
-            Self::Events => 3,
+            Self::Messages => 3,
+            Self::Events => 4,
         }
     }
 }

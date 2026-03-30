@@ -3,7 +3,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
 
 use crate::views::reply_modal::{ModalAction, ReplyModal};
-use crate::views::{TabId, View, ViewAction, events, members, rooms, stats};
+use crate::views::{ReplyTarget, TabId, View, ViewAction, events, members, messages, rooms, stats};
 use iris_common::models::{ReplyRequest, SseEvent};
 use ratatui::widgets::{Block, Tabs};
 
@@ -19,6 +19,7 @@ pub struct App {
     pub rooms_view: rooms::RoomsView,
     pub members_view: members::MembersView,
     pub stats_view: stats::StatsView,
+    pub messages_view: messages::MessagesView,
     pub events_view: events::EventsView,
     pub status: String,
     pub reply_modal: Option<ReplyModal>,
@@ -33,6 +34,7 @@ impl App {
             rooms_view: rooms::RoomsView::new(),
             members_view: members::MembersView::new(),
             stats_view: stats::StatsView::new(),
+            messages_view: messages::MessagesView::new(),
             events_view: events::EventsView::new(),
             status: "Ready".to_string(),
             reply_modal: None,
@@ -58,6 +60,7 @@ impl App {
             TabId::Rooms => self.rooms_view.render(frame, chunks[1]),
             TabId::Members => self.members_view.render(frame, chunks[1]),
             TabId::Stats => self.stats_view.render(frame, chunks[1]),
+            TabId::Messages => self.messages_view.render(frame, chunks[1]),
             TabId::Events => self.events_view.render(frame, chunks[1]),
         }
         frame.render_widget(
@@ -72,6 +75,7 @@ impl App {
     fn bind_room_context(&mut self, chat_id: i64) {
         self.members_view.set_chat_id(chat_id);
         self.stats_view.select_room(chat_id);
+        self.messages_view.set_chat_id(chat_id);
     }
     fn apply_action(&mut self, action: ViewAction) -> bool {
         match action {
@@ -100,77 +104,116 @@ impl App {
                 self.active_tab = TabId::Rooms;
                 false
             }
-            ViewAction::OpenReply(chat_id) => {
-                let room = chat_id.and_then(|id| {
-                    self.rooms_view
-                        .rooms
-                        .iter()
-                        .find(|r| r.chat_id == id)
-                        .cloned()
-                });
-                self.reply_modal = Some(ReplyModal::new(room, self.rooms_view.rooms.clone()));
+            ViewAction::OpenReply(target) => {
+                self.open_reply_modal(target);
                 false
             }
             ViewAction::None => false,
         }
     }
+
+    fn open_reply_modal(&mut self, target: ReplyTarget) {
+        let room = target.chat_id.and_then(|id| {
+            self.rooms_view
+                .rooms
+                .iter()
+                .find(|r| r.chat_id == id)
+                .cloned()
+        });
+        self.reply_modal = Some(ReplyModal::new_with_context(
+            room,
+            self.rooms_view.rooms.clone(),
+            target.thread_id,
+        ));
+    }
+
+    fn handle_modal_action(&mut self, key: KeyEvent) -> Option<bool> {
+        let modal = self.reply_modal.as_mut()?;
+        let action = modal.handle_key(key);
+        Some(match action {
+            ModalAction::Close => {
+                self.reply_modal = None;
+                false
+            }
+            ModalAction::Send(req) => {
+                self.pending_reply = Some(req);
+                false
+            }
+            ModalAction::FetchThreads(chat_id) => {
+                self.pending_thread_fetch = Some(chat_id);
+                false
+            }
+            ModalAction::None => false,
+        })
+    }
+
+    fn handle_global_key(&mut self, key: KeyEvent) -> Option<bool> {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
+            return Some(true);
+        }
+        match key.code {
+            KeyCode::Char('q') => Some(true),
+            KeyCode::Char('r') if !matches!(self.active_tab, TabId::Messages) => {
+                Some(self.apply_action(ViewAction::OpenReply(ReplyTarget {
+                    chat_id: self.reply_chat_id(),
+                    thread_id: None,
+                })))
+            }
+            KeyCode::Tab => {
+                self.cycle_tab_forward();
+                Some(false)
+            }
+            KeyCode::BackTab => {
+                self.cycle_tab_backward();
+                Some(false)
+            }
+            _ => None,
+        }
+    }
+
+    fn reply_chat_id(&self) -> Option<i64> {
+        match self.active_tab {
+            TabId::Rooms => self.rooms_view.selected_chat_id(),
+            TabId::Members | TabId::Stats => self.members_view.chat_id,
+            TabId::Messages | TabId::Events => None,
+        }
+    }
+
+    fn cycle_tab_forward(&mut self) {
+        let tabs = TabId::all();
+        self.active_tab = tabs[(self.active_tab.index() + 1) % tabs.len()];
+    }
+
+    fn cycle_tab_backward(&mut self) {
+        let tabs = TabId::all();
+        self.active_tab = tabs[if self.active_tab.index() == 0 {
+            tabs.len() - 1
+        } else {
+            self.active_tab.index() - 1
+        }];
+    }
+
+    fn dispatch_active_view_key(&mut self, key: KeyEvent) -> ViewAction {
+        match self.active_tab {
+            TabId::Rooms => self.rooms_view.handle_key(key),
+            TabId::Members => self.members_view.handle_key(key),
+            TabId::Stats => self.stats_view.handle_key(key),
+            TabId::Messages => self.messages_view.handle_key(key),
+            TabId::Events => self.events_view.handle_key(key),
+        }
+    }
+
     fn handle_key_event(&mut self, key: KeyEvent) -> bool {
         if key.kind != KeyEventKind::Press {
             return false;
         }
-        if let Some(modal) = &mut self.reply_modal {
-            let action = modal.handle_key(key);
-            return match action {
-                ModalAction::Close => {
-                    self.reply_modal = None;
-                    false
-                }
-                ModalAction::Send(req) => {
-                    self.pending_reply = Some(req);
-                    false
-                }
-                ModalAction::FetchThreads(chat_id) => {
-                    self.pending_thread_fetch = Some(chat_id);
-                    false
-                }
-                ModalAction::None => false,
-            };
+        if let Some(result) = self.handle_modal_action(key) {
+            return result;
         }
-        if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
-            return true;
+        if let Some(result) = self.handle_global_key(key) {
+            return result;
         }
-        match key.code {
-            KeyCode::Char('q') => return true,
-            KeyCode::Char('r') => {
-                let chat_id = match self.active_tab {
-                    TabId::Rooms => self.rooms_view.selected_chat_id(),
-                    TabId::Members | TabId::Stats => self.members_view.chat_id,
-                    TabId::Events => None,
-                };
-                return self.apply_action(ViewAction::OpenReply(chat_id));
-            }
-            KeyCode::Tab => {
-                let tabs = TabId::all();
-                self.active_tab = tabs[(self.active_tab.index() + 1) % tabs.len()];
-                return false;
-            }
-            KeyCode::BackTab => {
-                let tabs = TabId::all();
-                self.active_tab = tabs[if self.active_tab.index() == 0 {
-                    tabs.len() - 1
-                } else {
-                    self.active_tab.index() - 1
-                }];
-                return false;
-            }
-            _ => {}
-        }
-        let action = match self.active_tab {
-            TabId::Rooms => self.rooms_view.handle_key(key),
-            TabId::Members => self.members_view.handle_key(key),
-            TabId::Stats => self.stats_view.handle_key(key),
-            TabId::Events => self.events_view.handle_key(key),
-        };
+        let action = self.dispatch_active_view_key(key);
         self.apply_action(action)
     }
 
@@ -254,5 +297,37 @@ mod tests {
             timestamp: Some(0),
         })));
         assert_eq!(app.events_view.event_count(), 1);
+    }
+
+    #[test]
+    fn messages_tab_reply_opens_modal_with_thread_prefilled() {
+        let mut app = App::new();
+        app.rooms_view
+            .set_rooms(vec![iris_common::models::RoomSummary {
+                chat_id: 1,
+                room_type: Some("OM".to_string()),
+                link_id: None,
+                active_members_count: Some(2),
+                link_name: Some("room".to_string()),
+                link_url: None,
+                member_limit: None,
+                searchable: None,
+                bot_role: None,
+            }]);
+        app.bind_room_context(1);
+        app.active_tab = TabId::Messages;
+        app.messages_view.set_messages(vec![messages::ChatMessage {
+            id: 10,
+            chat_id: 1,
+            user_id: 100,
+            message: "root".to_string(),
+            msg_type: 1,
+            created_at: 1000,
+            thread_id: Some(10),
+        }]);
+
+        assert!(!app.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)));
+        let modal = app.reply_modal.as_ref().expect("reply modal should open");
+        assert_eq!(modal.thread_id_input, "10");
     }
 }
