@@ -6,7 +6,6 @@ import io.ktor.server.response.respondBytesWriter
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.utils.io.writeStringUtf8
-import kotlinx.coroutines.channels.Channel
 import party.qwer.iris.MemberRepository
 import party.qwer.iris.SseEventBus
 import party.qwer.iris.invalidRequest
@@ -61,11 +60,10 @@ internal fun Route.installMemberRoutes(
             call.respondBytesWriter(contentType = ContentType.Text.EventStream) {
                 writeStringUtf8(initialSseFrames(bus.replayEnvelopes(lastEventId)))
                 flush()
-                val channel = Channel<SseEventEnvelope>(64)
-                bus.addSubscriber(channel)
+                val channel = bus.openSubscriberChannel()
                 try {
                     for (envelope in channel) {
-                        writeStringUtf8("id: ${envelope.id}\ndata: ${envelope.payload}\n\n")
+                        writeStringUtf8("id: ${envelope.id}\nevent: ${envelope.eventType}\ndata: ${envelope.payload}\n\n")
                         flush()
                     }
                 } finally {

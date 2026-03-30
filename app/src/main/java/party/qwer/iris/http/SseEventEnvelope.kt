@@ -13,6 +13,8 @@ internal fun initialSseFrames(replay: List<SseEventEnvelope>): String =
         for (event in replay) {
             append("id: ")
             append(event.id)
+            append("\nevent: ")
+            append(event.eventType)
             append("\ndata: ")
             append(event.payload)
             append("\n\n")

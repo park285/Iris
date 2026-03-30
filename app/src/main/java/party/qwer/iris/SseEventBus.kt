@@ -101,6 +101,12 @@ class SseEventBus(
 
     fun replayMissCount(): Long = replayMisses.get()
 
+    fun openSubscriberChannel(): Channel<SseEventEnvelope> {
+        val channel = Channel<SseEventEnvelope>(policy.bufferCapacity)
+        addSubscriber(channel)
+        return channel
+    }
+
     fun addSubscriber(channel: Channel<SseEventEnvelope>) {
         subscribers.add(Subscriber(channel))
     }

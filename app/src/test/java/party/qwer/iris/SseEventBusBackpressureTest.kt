@@ -12,6 +12,18 @@ import kotlin.test.assertTrue
 
 class SseEventBusBackpressureTest {
     @Test
+    fun `openSubscriberChannel creates channel with policy capacity`() {
+        val policy = SseSubscriberPolicy(bufferCapacity = 32, replayWindowSize = 32)
+        val bus = SseEventBus(policy)
+
+        val channel = bus.openSubscriberChannel()
+
+        assertEquals(1, bus.subscriberCount())
+        bus.removeSubscriber(channel)
+        assertEquals(0, bus.subscriberCount())
+    }
+
+    @Test
     fun `buffer overflow drops oldest events`() {
         val policy = SseSubscriberPolicy(bufferCapacity = 3, replayWindowSize = 3)
         val bus = SseEventBus(policy)

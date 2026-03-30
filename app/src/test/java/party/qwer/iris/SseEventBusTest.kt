@@ -1,10 +1,23 @@
 package party.qwer.iris
 
+import party.qwer.iris.http.SseEventEnvelope
+import party.qwer.iris.http.initialSseFrames
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class SseEventBusTest {
+    @Test
+    fun `initialSseFrames includes event type field`() {
+        val envelope = SseEventEnvelope(id = 1, eventType = "snapshot", payload = "{}", createdAtMs = 0)
+
+        val frame = initialSseFrames(listOf(envelope))
+
+        assertTrue(frame.contains("event: snapshot"))
+        assertTrue(frame.contains("id: 1"))
+        assertTrue(frame.contains("data: {}"))
+    }
+
     @Test
     fun `stores events in ring buffer`() {
         val bus = SseEventBus(bufferSize = 3)
