@@ -1,16 +1,20 @@
 package party.qwer.iris.persistence
 
+import party.qwer.iris.PersistenceFactory
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SqliteDurabilityTest {
+    private companion object {
+        private const val CHAT_LOGS_STREAM = "chat_logs"
+    }
+
     @Test
     fun `webhook delivery survives close and reopen`() {
-        val dbFile = File.createTempFile("iris-durability-webhook", ".db")
-        try {
-            // Write phase
+        withTempDatabase("iris-durability-webhook") { dbFile ->
             val helper1 = JdbcSqliteHelper.fileBacked(dbFile.absolutePath)
             IrisDatabaseSchema.createWebhookOutboxTable(helper1)
             val store1 = SqliteWebhookDeliveryStore(helper1)
@@ -26,7 +30,6 @@ class SqliteDurabilityTest {
             assertTrue(id > 0)
             helper1.close()
 
-            // Reopen phase
             val helper2 = JdbcSqliteHelper.fileBacked(dbFile.absolutePath)
             IrisDatabaseSchema.createWebhookOutboxTable(helper2)
             val store2 = SqliteWebhookDeliveryStore(helper2)
@@ -36,18 +39,12 @@ class SqliteDurabilityTest {
             assertEquals(42L, claimed.single().roomId)
             assertEquals("{\"test\":\"durability\"}", claimed.single().payloadJson)
             helper2.close()
-        } finally {
-            dbFile.delete()
-            File(dbFile.absolutePath + "-wal").delete()
-            File(dbFile.absolutePath + "-shm").delete()
         }
     }
 
     @Test
     fun `checkpoint cursor survives close and reopen`() {
-        val dbFile = File.createTempFile("iris-durability-checkpoint", ".db")
-        try {
-            // Write phase
+        withTempDatabase("iris-durability-checkpoint") { dbFile ->
             val helper1 = JdbcSqliteHelper.fileBacked(dbFile.absolutePath)
             IrisDatabaseSchema.createCheckpointTable(helper1)
             val journal1 = SqliteCheckpointJournal(helper1)
@@ -56,25 +53,18 @@ class SqliteDurabilityTest {
             journal1.flushNow()
             helper1.close()
 
-            // Reopen phase
             val helper2 = JdbcSqliteHelper.fileBacked(dbFile.absolutePath)
             IrisDatabaseSchema.createCheckpointTable(helper2)
             val journal2 = SqliteCheckpointJournal(helper2)
             assertEquals(999L, journal2.load("chat_logs"))
             assertEquals(500L, journal2.load("snapshots"))
             helper2.close()
-        } finally {
-            dbFile.delete()
-            File(dbFile.absolutePath + "-wal").delete()
-            File(dbFile.absolutePath + "-shm").delete()
         }
     }
 
     @Test
     fun `claimed delivery recovery after crash simulation`() {
-        val dbFile = File.createTempFile("iris-durability-crash", ".db")
-        try {
-            // Pre-crash: enqueue and claim
+        withTempDatabase("iris-durability-crash") { dbFile ->
             val helper1 = JdbcSqliteHelper.fileBacked(dbFile.absolutePath)
             IrisDatabaseSchema.createWebhookOutboxTable(helper1)
             var now = 1000L
@@ -85,7 +75,6 @@ class SqliteDurabilityTest {
             store1.claimReady(limit = 10)
             helper1.close()
 
-            // Post-crash: reopen and recover
             now = 62_000L
             val helper2 = JdbcSqliteHelper.fileBacked(dbFile.absolutePath)
             IrisDatabaseSchema.createWebhookOutboxTable(helper2)
@@ -97,6 +86,58 @@ class SqliteDurabilityTest {
             assertEquals(1, reclaimed.size)
             assertEquals("crash-msg-1", reclaimed.single().messageId)
             helper2.close()
+        }
+    }
+
+    @Test
+    fun `batched checkpoint persists only after flushed write across reopen`() {
+        withTempDatabase("iris-durability-batched-checkpoint") { dbFile ->
+            var currentTime = 1_000L
+
+            val helper1 = JdbcSqliteHelper.fileBacked(dbFile.absolutePath)
+            val runtime1 =
+                PersistenceFactory.createSqliteRuntime(
+                    driver = helper1,
+                    checkpointFlushIntervalMs = 5_000L,
+                    clock = { currentTime },
+                )
+            runtime1.checkpointJournal.advance(CHAT_LOGS_STREAM, 111L)
+            helper1.close()
+
+            val helper2 = JdbcSqliteHelper.fileBacked(dbFile.absolutePath)
+            IrisDatabaseSchema.createCheckpointTable(helper2)
+            val journalAfterUnflushedClose = SqliteCheckpointJournal(helper2)
+            assertNull(journalAfterUnflushedClose.load(CHAT_LOGS_STREAM))
+            helper2.close()
+
+            currentTime = 2_000L
+            val helper3 = JdbcSqliteHelper.fileBacked(dbFile.absolutePath)
+            val runtime2 =
+                PersistenceFactory.createSqliteRuntime(
+                    driver = helper3,
+                    checkpointFlushIntervalMs = 5_000L,
+                    clock = { currentTime },
+                )
+            runtime2.checkpointJournal.advance(CHAT_LOGS_STREAM, 222L)
+            currentTime = 7_000L
+            runtime2.checkpointJournal.flushIfDirty()
+            helper3.close()
+
+            val helper4 = JdbcSqliteHelper.fileBacked(dbFile.absolutePath)
+            IrisDatabaseSchema.createCheckpointTable(helper4)
+            val journalAfterFlushedClose = SqliteCheckpointJournal(helper4)
+            assertEquals(222L, journalAfterFlushedClose.load(CHAT_LOGS_STREAM))
+            helper4.close()
+        }
+    }
+
+    private fun withTempDatabase(
+        prefix: String,
+        block: (File) -> Unit,
+    ) {
+        val dbFile = File.createTempFile(prefix, ".db")
+        try {
+            block(dbFile)
         } finally {
             dbFile.delete()
             File(dbFile.absolutePath + "-wal").delete()

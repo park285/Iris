@@ -146,6 +146,30 @@ class BatchedCheckpointJournalTest {
 
         assertNull(store.load("chat_logs"))
     }
+
+    @Test
+    fun `delegate-backed journal defers flush until interval elapses`() {
+        var currentTime = 1000L
+        val delegate = RecordingCheckpointJournal()
+        val journal =
+            BatchedCheckpointJournal(
+                delegate = delegate,
+                flushIntervalMs = 5000L,
+                clock = { currentTime },
+            )
+
+        journal.advance("chat_logs", 100L)
+        journal.flushIfDirty()
+
+        assertEquals(0, delegate.flushIfDirtyCalls)
+        assertEquals(100L, journal.load("chat_logs"))
+
+        currentTime = 7000L
+        journal.flushIfDirty()
+
+        assertEquals(1, delegate.flushIfDirtyCalls)
+        assertEquals(100L, delegate.persisted["chat_logs"])
+    }
 }
 
 private class InMemoryCheckpointStore : CheckpointStore {
@@ -159,4 +183,31 @@ private class InMemoryCheckpointStore : CheckpointStore {
     ) {
         data[streamName] = lastLogId
     }
+}
+
+private class RecordingCheckpointJournal : CheckpointJournal {
+    val persisted = mutableMapOf<String, Long>()
+    private val pending = mutableMapOf<String, Long>()
+    var flushIfDirtyCalls = 0
+        private set
+
+    override fun advance(
+        stream: String,
+        cursor: Long,
+    ) {
+        pending[stream] = cursor
+    }
+
+    override fun flushIfDirty() {
+        flushIfDirtyCalls += 1
+        persisted.putAll(pending)
+        pending.clear()
+    }
+
+    override fun flushNow() {
+        persisted.putAll(pending)
+        pending.clear()
+    }
+
+    override fun load(stream: String): Long? = pending[stream] ?: persisted[stream]
 }

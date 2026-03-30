@@ -16,12 +16,57 @@ interface CheckpointJournal {
 }
 
 class BatchedCheckpointJournal(
-    private val store: CheckpointStore,
+    private val delegate: CheckpointJournal,
     private val flushIntervalMs: Long = 5_000L,
     private val clock: () -> Long = System::currentTimeMillis,
 ) : CheckpointJournal {
-    private val pending = mutableMapOf<String, Long>()
+    constructor(
+        store: CheckpointStore,
+        flushIntervalMs: Long = 5_000L,
+        clock: () -> Long = System::currentTimeMillis,
+    ) : this(
+        delegate = StoreBackedCheckpointJournal(store),
+        flushIntervalMs = flushIntervalMs,
+        clock = clock,
+    )
+
+    private var dirty = false
     private var lastFlushAtMs: Long = clock()
+
+    @Synchronized
+    override fun advance(
+        stream: String,
+        cursor: Long,
+    ) {
+        delegate.advance(stream, cursor)
+        dirty = true
+    }
+
+    @Synchronized
+    override fun flushIfDirty() {
+        val now = clock()
+        if (!dirty) return
+        if (now - lastFlushAtMs < flushIntervalMs) return
+        delegate.flushIfDirty()
+        dirty = false
+        lastFlushAtMs = now
+    }
+
+    @Synchronized
+    override fun flushNow() {
+        delegate.flushNow()
+        dirty = false
+        lastFlushAtMs = clock()
+    }
+
+    @Synchronized
+    override fun load(stream: String): Long? = delegate.load(stream)
+}
+
+private class StoreBackedCheckpointJournal(
+    private val store: CheckpointStore,
+) : CheckpointJournal {
+    private val pending = mutableMapOf<String, Long>()
 
     @Synchronized
     override fun advance(
@@ -33,9 +78,6 @@ class BatchedCheckpointJournal(
 
     @Synchronized
     override fun flushIfDirty() {
-        val now = clock()
-        if (pending.isEmpty()) return
-        if (now - lastFlushAtMs < flushIntervalMs) return
         flushInternal()
     }
 
@@ -53,6 +95,5 @@ class BatchedCheckpointJournal(
             store.save(stream, cursor)
         }
         pending.clear()
-        lastFlushAtMs = clock()
     }
 }

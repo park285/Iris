@@ -74,6 +74,39 @@ class CommandIngressServiceTest {
     }
 
     @Test
+    fun `checkChange advances without flushing durable store before batching interval`() {
+        var currentTime = 1_000L
+        val store = FakeCheckpointStore(initial = mapOf("chat_logs" to 10L))
+        val journal = BatchedCheckpointJournal(store = store, flushIntervalMs = 5_000L, clock = { currentTime })
+        val ingress =
+            CommandIngressService(
+                db =
+                    FakeChatLogRepository(
+                        latestLogId = 10L,
+                        polledLogs = listOf(webhookChatLogEntry(id = 11L, chatId = 100L, message = "!ping")),
+                    ),
+                config = config,
+                checkpointJournal = journal,
+                routingGateway = FakeRoutingGateway(result = RoutingResult.ACCEPTED),
+                onMarkDirty = {},
+            )
+
+        ingress.checkChange()
+        ingress.checkChange()
+
+        assertEquals(11L, ingress.lastObservedLogId())
+        assertEquals(10L, store.load("chat_logs"))
+
+        currentTime = 7_000L
+        ingress.checkChange()
+
+        assertEquals(10L, store.load("chat_logs"))
+        journal.flushIfDirty()
+        assertEquals(11L, store.load("chat_logs"))
+        ingress.close()
+    }
+
+    @Test
     fun `checkChange emits markDirty for each new log entry`() {
         val db =
             FakeChatLogRepository(
@@ -123,6 +156,29 @@ class CommandIngressServiceTest {
 
         assertEquals(11L, journal.saved["chat_logs"])
         assertEquals(listOf("chat_logs" to 11L), journal.advanceCalls)
+        ingress.close()
+    }
+
+    @Test
+    fun `checkChange does not flush checkpoints from ingress hot path`() {
+        val journal = FakeCheckpointJournal(initial = mapOf("chat_logs" to 10L))
+        val ingress =
+            CommandIngressService(
+                db =
+                    FakeChatLogRepository(
+                        latestLogId = 10L,
+                        polledLogs = listOf(webhookChatLogEntry(id = 11L, chatId = 100L, message = "!ping")),
+                    ),
+                config = config,
+                checkpointJournal = journal,
+                routingGateway = FakeRoutingGateway(result = RoutingResult.ACCEPTED),
+                onMarkDirty = {},
+            )
+
+        ingress.checkChange()
+        ingress.checkChange()
+
+        assertEquals(0, journal.flushIfDirtyCalls)
         ingress.close()
     }
 
@@ -193,6 +249,7 @@ private class FakeCheckpointJournal(
 ) : CheckpointJournal {
     val saved = initial.toMutableMap()
     val advanceCalls = mutableListOf<Pair<String, Long>>()
+    var flushIfDirtyCalls = 0
 
     override fun advance(
         stream: String,
@@ -202,7 +259,9 @@ private class FakeCheckpointJournal(
         advanceCalls += stream to cursor
     }
 
-    override fun flushIfDirty() {}
+    override fun flushIfDirty() {
+        flushIfDirtyCalls++
+    }
 
     override fun flushNow() {}
 

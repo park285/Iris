@@ -12,6 +12,7 @@ import party.qwer.iris.snapshot.RoomDiffEngine
 import party.qwer.iris.snapshot.RoomSnapshotReader
 import party.qwer.iris.snapshot.SnapshotCoordinator
 import party.qwer.iris.snapshot.SnapshotEventEmitter
+import party.qwer.iris.storage.ChatId
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -24,15 +25,20 @@ class SnapshotObserverTest {
     fun `full reconcile triggers after configured interval`() {
         val currentTimeMs = AtomicLong(0L)
         val diffEngine = SnapshotObserverTestDiffEngine()
+        val rooms = mutableListOf(100L)
         val snapshotReader =
             SnapshotObserverTestSnapshotReader(
-                rooms = listOf(100L),
+                roomsProvider = { rooms.toList() },
                 snapshots =
                     mapOf(
                         100L to
                             listOf(
                                 snapshotObserverTestSnapshot(chatId = 100L, members = setOf(1L), nicknames = mapOf(1L to "Alice")),
                                 snapshotObserverTestSnapshot(chatId = 100L, members = setOf(1L), nicknames = mapOf(1L to "Alice Updated")),
+                            ),
+                        200L to
+                            listOf(
+                                snapshotObserverTestSnapshot(chatId = 200L, members = setOf(2L), nicknames = mapOf(2L to "Bob")),
                             ),
                     ),
             )
@@ -64,12 +70,14 @@ class SnapshotObserverTest {
 
         runBlockingSeed(coordinator)
         observer.start()
+        rooms += 200L
         currentTimeMs.set(250L)
-        waitUntil(timeoutMs = 1_000L) { diffEngine.diffCalls >= 1 }
+        waitUntil(timeoutMs = 1_000L) { snapshotReader.snapshotCalls.contains(200L) }
         observer.stop()
 
         assertTrue(diffEngine.diffCalls >= 1)
-        assertEquals(listOf(100L), diffEngine.diffedChatIds)
+        assertTrue(diffEngine.diffedChatIds.contains(100L))
+        assertTrue(snapshotReader.snapshotCalls.contains(200L))
     }
 
     @Test
@@ -124,12 +132,12 @@ class SnapshotObserverTest {
     private fun waitUntil(
         timeoutMs: Long,
         condition: () -> Boolean,
-    ) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!condition() && System.currentTimeMillis() < deadline) {
-            Thread.sleep(10L)
+    ) = kotlinx.coroutines.runBlocking {
+        kotlinx.coroutines.withTimeout(timeoutMs) {
+            while (!condition()) {
+                kotlinx.coroutines.delay(10L)
+            }
         }
-        assertTrue(condition(), "condition not met within ${timeoutMs}ms")
     }
 }
 
@@ -209,18 +217,25 @@ private class SnapshotObserverTestCheckpointStore(
 }
 
 private class SnapshotObserverTestSnapshotReader(
-    private val rooms: List<Long>,
+    private val roomsProvider: () -> List<Long>,
     private val snapshots: Map<Long, List<RoomSnapshotData>>,
 ) : RoomSnapshotReader {
+    constructor(
+        rooms: List<Long>,
+        snapshots: Map<Long, List<RoomSnapshotData>>,
+    ) : this({ rooms }, snapshots)
+
     private val snapshotIndexes = mutableMapOf<Long, Int>()
+    val snapshotCalls = CopyOnWriteArrayList<Long>()
 
-    override fun listRoomChatIds(): List<Long> = rooms
+    override fun listRoomChatIds(): List<ChatId> = roomsProvider().map(::ChatId)
 
-    override fun snapshot(chatId: Long): RoomSnapshotData {
-        val roomSnapshots = snapshots.getValue(chatId)
-        val currentIndex = snapshotIndexes[chatId] ?: 0
+    override fun snapshot(chatId: ChatId): RoomSnapshotData {
+        snapshotCalls += chatId.value
+        val roomSnapshots = snapshots.getValue(chatId.value)
+        val currentIndex = snapshotIndexes[chatId.value] ?: 0
         val safeIndex = minOf(currentIndex, roomSnapshots.lastIndex)
-        snapshotIndexes[chatId] = safeIndex + 1
+        snapshotIndexes[chatId.value] = safeIndex + 1
         return roomSnapshots[safeIndex]
     }
 }

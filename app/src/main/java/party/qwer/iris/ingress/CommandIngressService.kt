@@ -52,7 +52,6 @@ class CommandIngressService(
     fun checkChange() {
         if (lastLogId == 0L) {
             lastLogId = checkpointJournal.load(CHECKPOINT_STREAM_CHAT_LOGS) ?: db.latestLogId().also { seeded -> checkpointJournal.advance(CHECKPOINT_STREAM_CHAT_LOGS, seeded) }
-            checkpointJournal.flushIfDirty()
             IrisLogger.debug("Initial lastLogId: $lastLogId")
             return
         }
@@ -66,7 +65,6 @@ class CommandIngressService(
                 }
             }
         }
-        checkpointJournal.flushIfDirty()
     }
 
     internal fun lastObservedLogId(): Long = lastLogId

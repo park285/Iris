@@ -35,6 +35,9 @@ internal class WebhookOutboxDispatcher(
     private val partitionQueueCapacity: Int = 64,
     private val maxDeliveryAttempts: Int = H2cDispatcher.MAX_DELIVERY_ATTEMPTS,
     private val backoffDelayProvider: (Int) -> Long = ::nextBackoffDelayMs,
+    private val claimRecoveryIntervalMs: Long = 30_000L,
+    private val claimExpirationMs: Long = 60_000L,
+    private val clock: () -> Long = System::currentTimeMillis,
 ) : Closeable {
     private val scopeJob = SupervisorJob()
     private val coroutineScope = CoroutineScope(scopeJob + Dispatchers.IO)
@@ -46,18 +49,35 @@ internal class WebhookOutboxDispatcher(
     @Volatile
     private var pollingJob: Job? = null
 
+    @Volatile
+    private var nextClaimRecoveryAtMs: Long = 0L
+
     fun start() {
         if (pollingJob?.isActive == true) {
             return
         }
-        store.recoverExpiredClaims(olderThanMs = 60_000L)
+        recoverExpiredClaimsNow()
         pollingJob =
             coroutineScope.launch {
                 while (isActive) {
+                    recoverExpiredClaimsIfDue()
                     pumpReadyEntries()
                     delay(pollIntervalMs)
                 }
             }
+    }
+
+    private fun recoverExpiredClaimsIfDue() {
+        val now = clock()
+        if (now < nextClaimRecoveryAtMs) {
+            return
+        }
+        recoverExpiredClaimsNow(now)
+    }
+
+    private fun recoverExpiredClaimsNow(now: Long = clock()) {
+        store.recoverExpiredClaims(olderThanMs = claimExpirationMs)
+        nextClaimRecoveryAtMs = now + claimRecoveryIntervalMs
     }
 
     private suspend fun pumpReadyEntries() {
