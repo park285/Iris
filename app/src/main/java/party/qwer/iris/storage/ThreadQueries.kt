@@ -50,7 +50,7 @@ class ThreadQueries(
                         messageCount = row.int("message_count") ?: 0,
                         lastActiveAt = row.long("last_active_at"),
                         originMessage = row.string("origin_message"),
-                        originUserId = row.long("origin_user_id"),
+                        originUserId = row.long("origin_user_id")?.let(::UserId),
                         originV = row.string("origin_v"),
                     )
                 },

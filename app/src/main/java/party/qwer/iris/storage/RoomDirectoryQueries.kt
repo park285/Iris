@@ -57,9 +57,9 @@ class RoomDirectoryQueries(
                 maxRows = 1,
                 mapper = { row ->
                     RoomRow(
-                        id = row.long("id") ?: 0L,
+                        id = ChatId(row.long("id") ?: 0L),
                         type = row.string("type"),
-                        linkId = row.long("link_id"),
+                        linkId = row.long("link_id")?.let(::LinkId),
                         activeMembersCount = row.int("active_members_count"),
                         meta = row.string("meta"),
                         members = row.string("members"),
@@ -82,9 +82,9 @@ class RoomDirectoryQueries(
                 maxRows = 1,
                 mapper = { row ->
                     RoomRow(
-                        id = row.long("id") ?: 0L,
+                        id = ChatId(row.long("id") ?: 0L),
                         type = row.string("type"),
-                        linkId = row.long("link_id"),
+                        linkId = row.long("link_id")?.let(::LinkId),
                         activeMembersCount = null,
                         meta = null,
                         members = row.string("members"),
@@ -107,9 +107,9 @@ class RoomDirectoryQueries(
                 maxRows = 1,
                 mapper = { row ->
                     RoomRow(
-                        id = chatId.value,
+                        id = chatId,
                         type = row.string("type"),
-                        linkId = row.long("link_id"),
+                        linkId = row.long("link_id")?.let(::LinkId),
                         activeMembersCount = row.int("active_members_count"),
                         meta = null,
                         members = row.string("members"),
@@ -132,9 +132,9 @@ class RoomDirectoryQueries(
                 maxRows = 1,
                 mapper = { row ->
                     RoomRow(
-                        id = row.long("id") ?: chatId.value,
+                        id = ChatId(row.long("id") ?: chatId.value),
                         type = row.string("type"),
-                        linkId = row.long("link_id"),
+                        linkId = row.long("link_id")?.let(::LinkId),
                         activeMembersCount = null,
                         meta = row.string("meta"),
                         members = null,
@@ -192,9 +192,9 @@ class RoomDirectoryQueries(
 
     private fun mapRoomRow(row: SqlRow): RoomRow =
         RoomRow(
-            id = row.long("id") ?: 0L,
+            id = ChatId(row.long("id") ?: 0L),
             type = row.string("type"),
-            linkId = row.long("link_id"),
+            linkId = row.long("link_id")?.let(::LinkId),
             activeMembersCount = row.int("active_members_count"),
             meta = row.string("meta"),
             members = row.string("members"),

@@ -1,9 +1,9 @@
 package party.qwer.iris.storage
 
 data class RoomRow(
-    val id: Long,
+    val id: ChatId,
     val type: String?,
-    val linkId: Long?,
+    val linkId: LinkId?,
     val activeMembersCount: Int?,
     val meta: String?,
     val members: String?,
@@ -16,13 +16,13 @@ data class RoomRow(
 )
 
 data class FriendRow(
-    val id: Long,
+    val id: UserId,
     val name: String?,
     val enc: Int,
 )
 
 data class OpenMemberRow(
-    val userId: Long,
+    val userId: UserId,
     val nickname: String?,
     val linkMemberType: Int,
     val profileImageUrl: String?,
@@ -30,12 +30,12 @@ data class OpenMemberRow(
 )
 
 data class ObservedProfileLinkRow(
-    val userId: Long,
+    val userId: UserId,
     val displayName: String?,
 )
 
 data class MemberActivityRow(
-    val userId: Long,
+    val userId: UserId,
     val messageCount: Int,
     val lastActive: Long?,
 )
@@ -46,7 +46,7 @@ data class ObservedProfileHintRow(
 )
 
 data class MessageTypeCountRow(
-    val userId: Long,
+    val userId: UserId,
     val type: String?,
     val count: Int,
     val lastActive: Long?,
@@ -64,7 +64,7 @@ data class ThreadRow(
     // 스레드의 원본(첫) 메시지 — 암호화된 원문
     val originMessage: String?,
     // 원본 메시지 작성자 userId (복호화에 사용)
-    val originUserId: Long?,
+    val originUserId: UserId?,
     // 원본 메시지의 v 필드 JSON (enc 값 추출용)
     val originV: String?,
 )

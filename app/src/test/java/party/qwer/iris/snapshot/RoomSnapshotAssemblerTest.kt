@@ -13,8 +13,8 @@ class RoomSnapshotAssemblerTest {
     fun `assemble builds snapshot from open member rows`() {
         val openMembers =
             listOf(
-                OpenMemberRow(userId = 1L, nickname = "Alice", linkMemberType = 1, profileImageUrl = "http://a", enc = 0),
-                OpenMemberRow(userId = 2L, nickname = "Bob", linkMemberType = 2, profileImageUrl = null, enc = 0),
+                OpenMemberRow(userId = UserId(1L), nickname = "Alice", linkMemberType = 1, profileImageUrl = "http://a", enc = 0),
+                OpenMemberRow(userId = UserId(2L), nickname = "Bob", linkMemberType = 2, profileImageUrl = null, enc = 0),
             )
         val batchNicknames = mapOf(1L to "Alice", 2L to "Bob", 3L to "Charlie")
 
@@ -47,7 +47,7 @@ class RoomSnapshotAssemblerTest {
     fun `assemble decrypts nicknames when enc is positive`() {
         val openMembers =
             listOf(
-                OpenMemberRow(userId = 1L, nickname = "encrypted", linkMemberType = 2, profileImageUrl = null, enc = 3),
+                OpenMemberRow(userId = UserId(1L), nickname = "encrypted", linkMemberType = 2, profileImageUrl = null, enc = 3),
             )
         val decrypt: (Int, String, Long) -> String = { enc, raw, _ -> "dec($enc:$raw)" }
 

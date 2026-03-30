@@ -41,10 +41,10 @@ class RoomStatsQueriesTest {
                 },
             )
 
-        val result = queries.loadMemberActivity(ChatId(42L), listOf(1L, 2L))
+        val result = queries.loadMemberActivity(ChatId(42L), listOf(UserId(1L), UserId(2L)))
         assertEquals(2, result.size)
         assertEquals(10, result[0].messageCount)
-        assertEquals(1L, result[0].userId)
+        assertEquals(UserId(1L), result[0].userId)
     }
 
     @Test
@@ -56,7 +56,7 @@ class RoomStatsQueriesTest {
                 },
             )
 
-        assertTrue(queries.loadMemberActivity(ChatId(42L), emptyList()).isEmpty())
+        assertTrue(queries.loadMemberActivity(ChatId(42L), emptyList<UserId>()).isEmpty())
     }
 
     @Test

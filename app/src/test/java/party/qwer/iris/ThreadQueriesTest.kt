@@ -5,6 +5,7 @@ import party.qwer.iris.model.QueryColumn
 import party.qwer.iris.storage.ChatId
 import party.qwer.iris.storage.KakaoDbSqlClient
 import party.qwer.iris.storage.ThreadQueries
+import party.qwer.iris.storage.UserId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -77,7 +78,7 @@ class ThreadQueriesTest {
         assertEquals(7, row.messageCount)
         assertEquals(1743200000L, row.lastActiveAt)
         assertEquals("hello", row.originMessage)
-        assertEquals(42L, row.originUserId)
+        assertEquals(UserId(42L), row.originUserId)
         assertEquals("""{"enc":1}""", row.originV)
     }
 

@@ -9,14 +9,14 @@ class RoomStatsQueries(
 
     fun loadMemberActivity(
         chatId: ChatId,
-        memberIds: List<Long>,
+        memberIds: List<UserId>,
     ): List<MemberActivityRow> {
         if (memberIds.isEmpty()) return emptyList()
         val placeholders = memberIds.joinToString(", ") { "?" }
         val bindArgs =
             buildList<SqlArg> {
                 add(SqlArg.LongVal(chatId.value))
-                memberIds.forEach { add(SqlArg.LongVal(it)) }
+                memberIds.forEach { add(SqlArg.LongVal(it.value)) }
             }
         return db.query(
             QuerySpec(
@@ -74,7 +74,7 @@ class RoomStatsQueries(
                 maxRows = STATS_ROW_LIMIT,
                 mapper = { row ->
                     MessageTypeCountRow(
-                        userId = row.long("user_id") ?: 0L,
+                        userId = UserId(row.long("user_id") ?: 0L),
                         type = row.string("type"),
                         count = row.int("cnt") ?: 0,
                         lastActive = row.long("last_active"),
@@ -115,7 +115,7 @@ class RoomStatsQueries(
 
     private fun mapActivityRow(row: SqlRow): MemberActivityRow =
         MemberActivityRow(
-            userId = row.long("user_id") ?: 0L,
+            userId = UserId(row.long("user_id") ?: 0L),
             messageCount = row.int("message_count") ?: 0,
             lastActive = row.long("last_active"),
         )

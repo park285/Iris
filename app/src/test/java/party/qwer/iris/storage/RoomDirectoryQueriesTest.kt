@@ -51,9 +51,9 @@ class RoomDirectoryQueriesTest {
         val rooms = queries.listAllRooms()
 
         assertEquals(1, rooms.size)
-        assertEquals(42L, rooms[0].id)
+        assertEquals(ChatId(42L), rooms[0].id)
         assertEquals("OM", rooms[0].type)
-        assertEquals(10L, rooms[0].linkId)
+        assertEquals(LinkId(10L), rooms[0].linkId)
         assertEquals(5, rooms[0].activeMembersCount)
         assertEquals("TestRoom", rooms[0].linkName)
         assertEquals(100, rooms[0].memberLimit)
@@ -90,7 +90,7 @@ class RoomDirectoryQueriesTest {
 
         val room = queries.findRoomById(ChatId(42L))
         assertNotNull(room)
-        assertEquals(42L, room.id)
+        assertEquals(ChatId(42L), room.id)
         assertEquals("MultiChat", room.type)
         assertNull(room.linkId)
     }

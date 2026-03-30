@@ -47,7 +47,7 @@ class MemberIdentityQueriesTest {
 
         val members = queries.loadOpenMembers(LinkId(10L))
         assertEquals(1, members.size)
-        assertEquals(1L, members[0].userId)
+        assertEquals(UserId(1L), members[0].userId)
         assertEquals("Alice", members[0].nickname)
         assertEquals(4, members[0].linkMemberType)
         assertEquals("http://img", members[0].profileImageUrl)

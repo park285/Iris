@@ -30,10 +30,10 @@ class ObservedProfileQueries(
         }
 
     fun resolveDisplayNamesBatch(
-        userIds: List<Long>,
-        chatId: Long?,
-    ): Map<Long, String> {
-        val orderedIds = userIds.distinct().filter { it > 0L }
+        userIds: List<UserId>,
+        chatId: ChatId?,
+    ): Map<UserId, String> {
+        val orderedIds = userIds.distinct().filter { it.value > 0L }
         if (orderedIds.isEmpty()) return emptyMap()
 
         return try {
@@ -47,8 +47,8 @@ class ObservedProfileQueries(
                     ORDER BY user_id ASC, updated_at DESC
                     """.trimIndent() to
                         buildList<SqlArg> {
-                            add(SqlArg.LongVal(chatId))
-                            orderedIds.forEach { add(SqlArg.LongVal(it)) }
+                            add(SqlArg.LongVal(chatId.value))
+                            orderedIds.forEach { add(SqlArg.LongVal(it.value)) }
                         }
                 } else {
                     """
@@ -56,10 +56,10 @@ class ObservedProfileQueries(
                     FROM db3.observed_profile_user_links
                     WHERE user_id IN ($placeholders)
                     ORDER BY user_id ASC, updated_at DESC
-                    """.trimIndent() to orderedIds.map { SqlArg.LongVal(it) as SqlArg }
+                    """.trimIndent() to orderedIds.map { SqlArg.LongVal(it.value) as SqlArg }
                 }
 
-            val result = LinkedHashMap<Long, String>()
+            val result = LinkedHashMap<UserId, String>()
             db
                 .query(
                     QuerySpec(
@@ -68,7 +68,7 @@ class ObservedProfileQueries(
                         maxRows = orderedIds.size,
                         mapper = { row ->
                             ObservedProfileLinkRow(
-                                userId = row.long("user_id") ?: 0L,
+                                userId = UserId(row.long("user_id") ?: 0L),
                                 displayName = row.string("display_name"),
                             )
                         },

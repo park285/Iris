@@ -73,14 +73,14 @@ class MemberRepository(
         val rooms =
             roomRows.map { row ->
                 RoomSummary(
-                    chatId = row.id,
+                    chatId = row.id.value,
                     type = row.type,
-                    linkId = row.linkId,
+                    linkId = row.linkId?.value,
                     activeMembersCount = row.activeMembersCount,
                     linkName =
                         row.linkName
                             ?: resolveNonOpenRoomName(
-                                chatId = row.id,
+                                chatId = row.id.value,
                                 roomType = row.type,
                                 meta = row.meta,
                                 members = row.members,
@@ -118,14 +118,14 @@ class MemberRepository(
         }
 
         if (linkId != null) {
-            val openMembers = memberIdentity.loadOpenMembers(LinkId(linkId))
-            val memberIds = openMembers.map { UserId(it.userId) }.distinct()
+            val openMembers = memberIdentity.loadOpenMembers(linkId)
+            val memberIds = openMembers.map { it.userId }.distinct()
             val activityByUser = loadMemberActivityByUser(roomId, memberIds)
             val members =
                 openMembers.map { row ->
-                    val activity = activityByUser[UserId(row.userId)]
+                    val activity = activityByUser[row.userId]
                     MemberInfo(
-                        userId = row.userId,
+                        userId = row.userId.value,
                         nickname = row.nickname?.let { memberIdentity.decryptNickname(row.enc, it) },
                         role = roleCodeToName(row.linkMemberType),
                         roleCode = row.linkMemberType,
@@ -135,7 +135,7 @@ class MemberRepository(
                     )
                 }
             learnObservedProfileMappings(chatId, members)
-            return MemberListResponse(chatId, linkId, members, members.size)
+            return MemberListResponse(chatId, linkId.value, members, members.size)
         }
 
         val roomMemberIds = parseJsonLongArray(roomRow.members).map(::UserId)
@@ -150,7 +150,7 @@ class MemberRepository(
             if (scopedMemberIds.isNotEmpty()) {
                 loadMemberActivityByUser(roomId, scopedMemberIds)
             } else {
-                roomStats.loadAllActivity(roomId).associateBy { UserId(it.userId) }
+                roomStats.loadAllActivity(roomId).associateBy { it.userId }
             }
         val userIds =
             ((if (scopedMemberIds.isNotEmpty()) scopedMemberIds else activityByUser.keys.toList()) + activityByUser.keys)
@@ -205,14 +205,14 @@ class MemberRepository(
 
         val botCommands =
             if (linkId != null) {
-                roomDirectory.loadBotCommands(LinkId(linkId)).map { BotCommandInfo(it.first, it.second) }
+                roomDirectory.loadBotCommands(linkId).map { BotCommandInfo(it.first, it.second) }
             } else {
                 emptyList()
             }
 
         val openLink =
             if (linkId != null) {
-                roomDirectory.loadOpenLink(LinkId(linkId))?.let { row ->
+                roomDirectory.loadOpenLink(linkId)?.let { row ->
                     OpenLinkInfo(
                         name = row.name,
                         url = row.url,
@@ -228,7 +228,7 @@ class MemberRepository(
         return RoomInfoResponse(
             chatId = chatId,
             type = roomRow.type,
-            linkId = linkId,
+            linkId = linkId?.value,
             notices = notices,
             blindedMemberIds = blindedIds,
             botCommands = botCommands,
@@ -260,7 +260,7 @@ class MemberRepository(
         val linkId = resolveLinkId(roomId)
 
         val rows = roomStats.loadTypeCountStats(roomId, from)
-        val byUser = rows.groupBy { UserId(it.userId) }
+        val byUser = rows.groupBy { it.userId }
         val nicknameByUser = prepareNicknameLookup(byUser.keys, linkId = linkId, chatId = roomId)
         val memberStats =
             byUser
@@ -350,7 +350,7 @@ class MemberRepository(
                     if (row.originMessage != null && row.originV != null) {
                         try {
                             val enc = JSONObject(row.originV).optInt("enc", 0)
-                            val userId = row.originUserId ?: botId
+                            val userId = row.originUserId?.value ?: botId
                             decrypt(enc, row.originMessage, userId)
                         } catch (_: Exception) {
                             row.originMessage
@@ -381,7 +381,7 @@ class MemberRepository(
         val friendName = memberIdentity.resolveFriendName(userId)
         if (friendName != null) return friendName
 
-        return observedProfile.resolveDisplayNamesBatch(listOf(userId.value), chatId?.value)[userId.value] ?: userId.value.toString()
+        return observedProfile.resolveDisplayNamesBatch(listOf(userId), chatId)[userId] ?: userId.value.toString()
     }
 
     internal fun resolveNicknamesBatch(
@@ -419,9 +419,9 @@ class MemberRepository(
 
         if (unresolved.isNotEmpty()) {
             observedProfile
-                .resolveDisplayNamesBatch(unresolved.map(UserId::value), chatId?.value)
+                .resolveDisplayNamesBatch(unresolved.toList(), chatId)
                 .forEach { (userId, displayName) ->
-                    resolved[UserId(userId)] = displayName
+                    resolved[userId] = displayName
                 }
         }
 
@@ -462,7 +462,7 @@ class MemberRepository(
             }
         return cached?.activityByUser
             ?: run {
-                val activity = roomStats.loadMemberActivity(chatId, memberIds.map(UserId::value)).associateBy { UserId(it.userId) }
+                val activity = roomStats.loadMemberActivity(chatId, memberIds).associateBy { it.userId }
                 synchronized(memberActivityCache) {
                     memberActivityCache[chatId] =
                         MemberActivityCacheEntry(
@@ -543,7 +543,7 @@ class MemberRepository(
     fun snapshot(chatId: Long): RoomSnapshotData {
         val roomId = ChatId(chatId)
         val roomRow = roomDirectory.findRoomForSnapshot(roomId)
-        val linkId = roomRow?.linkId?.let(::LinkId)
+        val linkId = roomRow?.linkId
         val memberIds = parseJsonLongArray(roomRow?.members).map(::UserId)
         val blindedIds = parseJsonLongArray(roomRow?.blindedMemberIds).map(::UserId)
         val openMembers =

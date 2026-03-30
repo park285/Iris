@@ -87,10 +87,10 @@ class ObservedProfileQueriesTest {
                 },
             )
 
-        val result = queries.resolveDisplayNamesBatch(listOf(1L, 2L, 3L), chatId = 42L)
-        assertEquals("Alice", result[1L])
-        assertEquals("Bob", result[2L])
-        assertNull(result[3L])
+        val result = queries.resolveDisplayNamesBatch(listOf(UserId(1L), UserId(2L), UserId(3L)), chatId = ChatId(42L))
+        assertEquals("Alice", result[UserId(1L)])
+        assertEquals("Bob", result[UserId(2L)])
+        assertNull(result[UserId(3L)])
     }
 
     @Test
@@ -104,7 +104,7 @@ class ObservedProfileQueriesTest {
                 },
             )
 
-        queries.resolveDisplayNamesBatch(listOf(1L), chatId = null)
+        queries.resolveDisplayNamesBatch(listOf(UserId(1L)), chatId = null)
         assert(!capturedSql.contains("chat_id"))
     }
 
@@ -119,7 +119,7 @@ class ObservedProfileQueriesTest {
                 },
             )
 
-        queries.resolveDisplayNamesBatch(listOf(1L), chatId = 42L)
+        queries.resolveDisplayNamesBatch(listOf(UserId(1L)), chatId = ChatId(42L))
         assert(capturedSql.contains("chat_id = ?"))
     }
 
@@ -139,8 +139,8 @@ class ObservedProfileQueriesTest {
                 },
             )
 
-        val result = queries.resolveDisplayNamesBatch(listOf(1L), chatId = null)
-        assertEquals("First", result[1L])
+        val result = queries.resolveDisplayNamesBatch(listOf(UserId(1L)), chatId = null)
+        assertEquals("First", result[UserId(1L)])
     }
 
     @Test
@@ -156,8 +156,8 @@ class ObservedProfileQueriesTest {
                 },
             )
 
-        val result = queries.resolveDisplayNamesBatch(listOf(1L), chatId = null)
-        assertNull(result[1L])
+        val result = queries.resolveDisplayNamesBatch(listOf(UserId(1L)), chatId = null)
+        assertNull(result[UserId(1L)])
     }
 
     @Test
@@ -169,6 +169,6 @@ class ObservedProfileQueriesTest {
                 },
             )
 
-        assertEquals(emptyMap(), queries.resolveDisplayNamesBatch(emptyList(), chatId = null))
+        assertEquals(emptyMap<UserId, String>(), queries.resolveDisplayNamesBatch(emptyList(), chatId = null))
     }
 }

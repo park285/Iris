@@ -22,7 +22,7 @@ object RoomSnapshotAssembler {
         val profileImages = mutableMapOf<UserId, String>()
 
         for (member in openMembers) {
-            val uid = UserId(member.userId)
+            val uid = member.userId
             val rawNick = member.nickname
             nicknames[uid] =
                 if (rawNick != null && member.enc > 0) {

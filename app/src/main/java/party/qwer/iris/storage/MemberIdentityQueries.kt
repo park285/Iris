@@ -127,7 +127,7 @@ class MemberIdentityQueries(
 
     private fun mapOpenMemberRow(row: SqlRow): OpenMemberRow =
         OpenMemberRow(
-            userId = row.long("user_id") ?: 0L,
+            userId = UserId(row.long("user_id") ?: 0L),
             nickname = row.string("nickname"),
             linkMemberType = row.int("link_member_type") ?: 2,
             profileImageUrl = row.string("profile_image_url"),
