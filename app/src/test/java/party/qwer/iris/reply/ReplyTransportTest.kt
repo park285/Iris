@@ -177,13 +177,13 @@ class ReplyTransportTest {
             )
 
         transport.sendNativeImages(
-                command =
-                    NativeImageReplyCommand(
-                        target = ReplyTarget(chatId = ChatId(300L), threadId = null),
-                        base64Images = listOf("base64"),
-                        threadScope = null,
-                        requestId = "img-1",
-                    ),
+            command =
+                NativeImageReplyCommand(
+                    target = ReplyTarget(chatId = ChatId(300L), threadId = null),
+                    base64Images = listOf("base64"),
+                    threadScope = null,
+                    requestId = "img-1",
+                ),
             preparedImages = preparedImages,
         )
 

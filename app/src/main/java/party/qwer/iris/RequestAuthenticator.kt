@@ -80,7 +80,10 @@ internal class RequestAuthenticator(
             require(purgeIntervalMs >= 0L) { "purgeIntervalMs must be non-negative" }
         }
 
-        fun tryRecord(nonce: String, now: Long): Boolean =
+        fun tryRecord(
+            nonce: String,
+            now: Long,
+        ): Boolean =
             synchronized(this) {
                 maybePurge(now)
                 if (nonceTimestamps.containsKey(nonce)) {

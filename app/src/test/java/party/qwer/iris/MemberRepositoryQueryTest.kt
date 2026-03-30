@@ -2,6 +2,7 @@ package party.qwer.iris
 
 import kotlinx.serialization.json.JsonPrimitive
 import party.qwer.iris.model.QueryColumn
+import party.qwer.iris.storage.ChatId
 import party.qwer.iris.storage.KakaoDbSqlClient
 import party.qwer.iris.storage.LinkId
 import party.qwer.iris.storage.MemberIdentityQueries
@@ -11,7 +12,6 @@ import party.qwer.iris.storage.RoomDirectoryQueries
 import party.qwer.iris.storage.RoomStatsQueries
 import party.qwer.iris.storage.SqlClient
 import party.qwer.iris.storage.ThreadQueries
-import party.qwer.iris.storage.ChatId
 import party.qwer.iris.storage.UserId
 import kotlin.test.Test
 import kotlin.test.assertEquals

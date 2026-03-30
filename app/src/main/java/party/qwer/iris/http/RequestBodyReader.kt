@@ -7,8 +7,8 @@ import io.ktor.server.request.receiveChannel
 import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readAvailable
 import party.qwer.iris.requestRejected
-import java.io.ByteArrayOutputStream
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.nio.file.Files
 import java.nio.file.Path
@@ -130,7 +130,9 @@ private class RequestBodySink(
 
 internal data class RequestBodyBufferingPolicy(
     val maxInMemoryBytes: Int = MAX_IN_MEMORY_BODY_BYTES,
-    val spillDirectory: Path = Path.of(System.getProperty("java.io.tmpdir")),
+    val spillDirectory: Path =
+        java.nio.file.Paths
+            .get(System.getProperty("java.io.tmpdir")),
     val spillStorageFactory: (Path) -> RequestBodyStorage = ::SpillFileRequestBodyStorage,
 ) {
     init {

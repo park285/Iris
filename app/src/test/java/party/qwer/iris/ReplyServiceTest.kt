@@ -1,6 +1,7 @@
 package party.qwer.iris
 
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import party.qwer.iris.model.ReplyLifecycleState
 import party.qwer.iris.reply.ReplyThreadId
 import party.qwer.iris.storage.ChatId
@@ -12,8 +13,6 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith

@@ -9,7 +9,8 @@ internal class StreamingBodyResult(
     private val storage: RequestBodyStorage,
     val sha256Hex: String,
 ) : AutoCloseable {
-    fun readUtf8Body(): String = storage.readUtf8Body()
+    // 프로덕션 경로는 decodeJson() 사용. 테스트 전용.
+    internal fun readUtf8Body(): String = storage.readUtf8Body()
 
     @OptIn(ExperimentalSerializationApi::class)
     fun <T> decodeJson(

@@ -1,11 +1,11 @@
 package party.qwer.iris.reply
 
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import party.qwer.iris.ReplyAdmissionStatus
 import party.qwer.iris.ReplyQueueKey
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue

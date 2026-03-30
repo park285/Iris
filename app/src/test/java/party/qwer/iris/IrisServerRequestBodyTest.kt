@@ -28,15 +28,15 @@ class IrisServerRequestBodyTest {
     fun `read request body accepts payload within limit`() =
         runBlocking {
             readBodyWithStreamingDigest(
-                    bodyChannel = ByteReadChannel("""{"ok":true}"""),
-                    declaredContentLength = 11,
-                    maxBodyBytes = 64,
-                ).use { result ->
-                    assertEquals("""{"ok":true}""", result.readUtf8Body())
-                    assertEquals(
-                        sha256Hex("""{"ok":true}""".toByteArray()),
-                        result.sha256Hex,
-                    )
-                }
+                bodyChannel = ByteReadChannel("""{"ok":true}"""),
+                declaredContentLength = 11,
+                maxBodyBytes = 64,
+            ).use { result ->
+                assertEquals("""{"ok":true}""", result.readUtf8Body())
+                assertEquals(
+                    sha256Hex("""{"ok":true}""".toByteArray()),
+                    result.sha256Hex,
+                )
+            }
         }
 }

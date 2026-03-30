@@ -20,6 +20,7 @@ class SnapshotCoordinator(
     private val dirtyRoomQueue = ArrayDeque<ChatId>()
     private val dirtyRoomCountValue = AtomicInteger(0)
     private val deletedRoomsPendingCleanup = mutableSetOf<ChatId>()
+
     // 삭제 완료된 방 — 빈 베이스라인이 previousSnapshots에 유지됨
     private val cleanedUpRooms = mutableSetOf<ChatId>()
 
@@ -92,9 +93,9 @@ class SnapshotCoordinator(
     private fun handleFullReconcile() {
         val currentRoomIds =
             roomSnapshotReader
-            .listRoomChatIds()
-            .filter { it.value > 0L }
-            .toSet()
+                .listRoomChatIds()
+                .filter { it.value > 0L }
+                .toSet()
 
         // DB 장애로 빈 결과가 반환되면 대량 leave 이벤트 방지를 위해 스킵
         if (currentRoomIds.isEmpty() && previousSnapshots.isNotEmpty()) {

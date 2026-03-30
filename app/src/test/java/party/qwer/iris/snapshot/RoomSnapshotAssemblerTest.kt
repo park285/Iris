@@ -1,8 +1,8 @@
 package party.qwer.iris.snapshot
 
-import party.qwer.iris.storage.OpenMemberRow
 import party.qwer.iris.storage.ChatId
 import party.qwer.iris.storage.LinkId
+import party.qwer.iris.storage.OpenMemberRow
 import party.qwer.iris.storage.UserId
 import kotlin.test.Test
 import kotlin.test.assertEquals

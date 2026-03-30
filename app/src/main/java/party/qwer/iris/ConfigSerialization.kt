@@ -143,8 +143,18 @@ private fun migrateLegacySecrets(
     root: JsonObject,
     values: ConfigValues,
 ): LegacySecretMigration {
-    val legacyWebhookToken = root[LEGACY_WEBHOOK_TOKEN_KEY]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-    val legacyBotToken = root[LEGACY_BOT_TOKEN_KEY]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+    val legacyWebhookToken =
+        root[LEGACY_WEBHOOK_TOKEN_KEY]
+            ?.jsonPrimitive
+            ?.contentOrNull
+            ?.trim()
+            .orEmpty()
+    val legacyBotToken =
+        root[LEGACY_BOT_TOKEN_KEY]
+            ?.jsonPrimitive
+            ?.contentOrNull
+            ?.trim()
+            .orEmpty()
     val migratedValues =
         values.copy(
             inboundSigningSecret = values.inboundSigningSecret.ifBlank { legacyWebhookToken },

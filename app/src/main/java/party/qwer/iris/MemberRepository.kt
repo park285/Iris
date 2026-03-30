@@ -565,9 +565,10 @@ class MemberRepository(
                 decrypt = decrypt,
                 botId = UserId(botId),
             ).also { snapshot ->
-                val longNicknames = snapshot.nicknames
-                    .filterValues { it.isNotBlank() }
-                    .mapKeys { (k, _) -> k.value }
+                val longNicknames =
+                    snapshot.nicknames
+                        .filterValues { it.isNotBlank() }
+                        .mapKeys { (k, _) -> k.value }
                 val learnable = excludeFriendResolvedUsers(longNicknames)
                 if (learnable.isNotEmpty()) {
                     learnObservedProfileUserMappings(chatId, learnable)

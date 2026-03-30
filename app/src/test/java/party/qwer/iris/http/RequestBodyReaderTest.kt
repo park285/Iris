@@ -11,8 +11,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.supervisorScope
 import party.qwer.iris.ApiRequestException
-import party.qwer.iris.sha256Hex
 import party.qwer.iris.model.ConfigRequest
+import party.qwer.iris.sha256Hex
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
@@ -56,13 +56,13 @@ class RequestBodyReaderTest {
         runBlocking {
             val payload = """{"action":"test","data":"hello"}"""
             readBodyWithStreamingDigest(
-                    bodyChannel = ByteReadChannel(payload),
-                    declaredContentLength = payload.length.toLong(),
-                    maxBodyBytes = 1024,
-                ).use { result ->
-                    assertEquals(payload, result.readUtf8Body())
-                    assertEquals(sha256Hex(payload.toByteArray()), result.sha256Hex)
-                }
+                bodyChannel = ByteReadChannel(payload),
+                declaredContentLength = payload.length.toLong(),
+                maxBodyBytes = 1024,
+            ).use { result ->
+                assertEquals(payload, result.readUtf8Body())
+                assertEquals(sha256Hex(payload.toByteArray()), result.sha256Hex)
+            }
         }
 
     @Test
@@ -82,13 +82,13 @@ class RequestBodyReaderTest {
     fun `empty body returns empty string and correct digest`() =
         runBlocking {
             readBodyWithStreamingDigest(
-                    bodyChannel = ByteReadChannel(""),
-                    declaredContentLength = 0,
-                    maxBodyBytes = 1024,
-                ).use { result ->
-                    assertEquals("", result.readUtf8Body())
-                    assertEquals(sha256Hex(ByteArray(0)), result.sha256Hex)
-                }
+                bodyChannel = ByteReadChannel(""),
+                declaredContentLength = 0,
+                maxBodyBytes = 1024,
+            ).use { result ->
+                assertEquals("", result.readUtf8Body())
+                assertEquals(sha256Hex(ByteArray(0)), result.sha256Hex)
+            }
         }
 
     @Test
@@ -96,12 +96,12 @@ class RequestBodyReaderTest {
         runBlocking {
             val payload = "x".repeat(64)
             readBodyWithStreamingDigest(
-                    bodyChannel = ByteReadChannel(payload),
-                    declaredContentLength = 64,
-                    maxBodyBytes = 64,
-                ).use { result ->
-                    assertEquals(payload, result.readUtf8Body())
-                }
+                bodyChannel = ByteReadChannel(payload),
+                declaredContentLength = 64,
+                maxBodyBytes = 64,
+            ).use { result ->
+                assertEquals(payload, result.readUtf8Body())
+            }
         }
 
     @Test
@@ -284,9 +284,7 @@ private class FailingSpillStorage(
         bytes: ByteArray,
         offset: Int,
         length: Int,
-    ) {
-        throw IllegalStateException("spill write failed")
-    }
+    ): Unit = throw IllegalStateException("spill write failed")
 
     override fun readUtf8Body(): String = error("unused")
 
