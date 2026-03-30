@@ -148,7 +148,7 @@ class WebhookOutboxTest {
                     requestOrder += messageId
                     val current = currentConcurrent.incrementAndGet()
                     maxConcurrent.updateAndGet { previous -> maxOf(previous, current) }
-                    Thread.sleep(150)
+                    CountDownLatch(1).await(150, TimeUnit.MILLISECONDS)
                     currentConcurrent.decrementAndGet()
                     latch.countDown()
                     exchange.sendResponseHeaders(204, -1)

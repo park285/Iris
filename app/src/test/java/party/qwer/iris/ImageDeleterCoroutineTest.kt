@@ -1,5 +1,8 @@
 package party.qwer.iris
 
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import java.nio.file.Files
 import java.util.concurrent.ScheduledExecutorService
 import kotlin.io.path.writeText
@@ -49,12 +52,12 @@ class ImageDeleterCoroutineTest {
 
         try {
             deleter.startDeletion()
-            Thread.sleep(150)
+            runBlocking { delay(150L) }
             deleter.stopDeletion()
 
             val fileAfterStop = tempDir.resolve("after-stop.jpg").apply { writeText("after") }.toFile()
             fileAfterStop.setLastModified(System.currentTimeMillis() - retentionMillis - 1_000L)
-            Thread.sleep(250)
+            runBlocking { delay(250L) }
 
             assertTrue(fileAfterStop.exists())
             assertEquals(1, tempDir.toFile().listFiles()?.size)
@@ -66,14 +69,11 @@ class ImageDeleterCoroutineTest {
     private fun waitUntil(
         timeoutMs: Long,
         predicate: () -> Boolean,
-    ) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < deadline) {
-            if (predicate()) {
-                return
+    ) = runBlocking {
+        withTimeout(timeoutMs) {
+            while (!predicate()) {
+                delay(25L)
             }
-            Thread.sleep(25)
         }
-        assertTrue(predicate())
     }
 }

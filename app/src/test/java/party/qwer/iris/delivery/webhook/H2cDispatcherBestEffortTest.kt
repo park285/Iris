@@ -39,7 +39,7 @@ class H2cDispatcherBestEffortTest {
                     ),
                 ),
             )
-            Thread.sleep(300)
+            CountDownLatch(1).await(300, TimeUnit.MILLISECONDS)
         }
 
         val requestCount = AtomicInteger(0)
@@ -56,8 +56,7 @@ class H2cDispatcherBestEffortTest {
 
         try {
             H2cDispatcher(config, transportOverride = "http1").use { restarted ->
-                Thread.sleep(1_500)
-                assertFalse(latch.await(200, TimeUnit.MILLISECONDS))
+                assertFalse(latch.await(1_500, TimeUnit.MILLISECONDS))
                 assertEquals(0, requestCount.get())
                 assertEquals(
                     RoutingResult.ACCEPTED,
@@ -217,7 +216,7 @@ class H2cDispatcherBestEffortTest {
                 createContext("/webhook/iris") { exchange ->
                     val current = currentConcurrent.incrementAndGet()
                     concurrentMax.updateAndGet { max -> maxOf(max, current) }
-                    Thread.sleep(200)
+                    CountDownLatch(1).await(200, TimeUnit.MILLISECONDS)
                     currentConcurrent.decrementAndGet()
                     allDone.countDown()
                     exchange.sendResponseHeaders(204, -1)
@@ -270,7 +269,7 @@ class H2cDispatcherBestEffortTest {
                 createContext("/webhook/iris") { exchange ->
                     val current = currentConcurrent.incrementAndGet()
                     concurrentMax.updateAndGet { max -> maxOf(max, current) }
-                    Thread.sleep(200)
+                    CountDownLatch(1).await(200, TimeUnit.MILLISECONDS)
                     currentConcurrent.decrementAndGet()
                     allDone.countDown()
                     exchange.sendResponseHeaders(204, -1)
