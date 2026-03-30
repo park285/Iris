@@ -22,7 +22,7 @@ private const val REQUEST_BODY_TEMP_FILE_SUFFIX = ".tmp"
 internal suspend fun readProtectedBody(
     call: ApplicationCall,
     maxBodyBytes: Int,
-): StreamingBodyResult =
+): RequestBodyHandle =
     readBodyWithStreamingDigest(
         bodyChannel = call.receiveChannel(),
         declaredContentLength = call.request.headers[HttpHeaders.ContentLength]?.toLongOrNull(),
@@ -34,7 +34,7 @@ internal suspend fun readBodyWithStreamingDigest(
     declaredContentLength: Long?,
     maxBodyBytes: Int,
     bufferingPolicy: RequestBodyBufferingPolicy = RequestBodyBufferingPolicy(),
-): StreamingBodyResult {
+): RequestBodyHandle {
     if (declaredContentLength != null && declaredContentLength > maxBodyBytes) {
         requestRejected("request body too large", HttpStatusCode.PayloadTooLarge)
     }
@@ -59,7 +59,7 @@ internal suspend fun readBodyWithStreamingDigest(
         }
 
         val hexDigest = digest.digest().joinToString("") { byte -> "%02x".format(byte) }
-        return StreamingBodyResult(
+        return RequestBodyHandle(
             storage = requestBodySink.detachStorage(),
             sha256Hex = hexDigest,
         )
