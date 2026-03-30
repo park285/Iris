@@ -222,6 +222,38 @@ class ReplyAdmissionServiceTest {
         )
     }
 
+    @Test
+    fun `enqueueSuspend returns accepted when running`() =
+        runBlocking {
+            val service =
+                ReplyAdmissionService(
+                    maxWorkers = 16,
+                    perWorkerQueueCapacity = 16,
+                )
+            service.start()
+
+            val result =
+                service.enqueueSuspend(
+                    key = ReplyQueueKey(chatId = 1L, threadId = null),
+                    request = stubPipelineRequest(),
+                )
+
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
+            service.shutdown()
+        }
+
+    @Test
+    fun `debugSnapshotSuspend returns current state`() =
+        runBlocking {
+            val service = ReplyAdmissionService()
+            service.start()
+
+            val snapshot = service.debugSnapshotSuspend()
+
+            assertEquals(ReplyAdmissionLifecycle.RUNNING, snapshot.lifecycle)
+            service.shutdown()
+        }
+
     private fun stubPipelineRequest(blockMs: Long = 0L): PipelineRequest =
         object : PipelineRequest {
             override val requestId: String? = null

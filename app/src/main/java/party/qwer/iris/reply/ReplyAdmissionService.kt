@@ -147,8 +147,21 @@ internal class ReplyAdmissionService(
             AdmissionCommand.Enqueue(key, request, it)
         }
 
+    suspend fun enqueueSuspend(
+        key: ReplyQueueKey,
+        request: PipelineRequest,
+    ): ReplyAdmissionResult =
+        dispatchSuspend<AdmissionCommand.Enqueue, ReplyAdmissionResult> {
+            AdmissionCommand.Enqueue(key, request, it)
+        }
+
     internal fun debugSnapshot(): ReplyAdmissionDebugSnapshot =
         dispatchCommand<AdmissionCommand.DebugSnapshot, ReplyAdmissionDebugSnapshot> {
+            AdmissionCommand.DebugSnapshot(it)
+        }
+
+    internal suspend fun debugSnapshotSuspend(): ReplyAdmissionDebugSnapshot =
+        dispatchSuspend<AdmissionCommand.DebugSnapshot, ReplyAdmissionDebugSnapshot> {
             AdmissionCommand.DebugSnapshot(it)
         }
 
@@ -337,24 +350,32 @@ internal class ReplyAdmissionService(
         }
     }
 
-    private fun closeWorkers(workers: List<WorkerState>) {
+    private suspend fun closeWorkersSuspend(workers: List<WorkerState>) {
         workers.forEach { it.channel.close() }
-        runBlocking {
-            workers.forEach { worker ->
-                withTimeoutOrNull(shutdownTimeoutMs) { worker.job.join() } ?: run {
-                    worker.job.cancel()
-                    withTimeoutOrNull(shutdownTimeoutMs) { worker.job.join() }
-                        ?: IrisLogger.error("[ReplyAdmissionService] Worker(${worker.key}) cancel timed out; abandoning")
-                }
+        workers.forEach { worker ->
+            withTimeoutOrNull(shutdownTimeoutMs) { worker.job.join() } ?: run {
+                worker.job.cancel()
+                withTimeoutOrNull(shutdownTimeoutMs) { worker.job.join() }
+                    ?: IrisLogger.error("[ReplyAdmissionService] Worker(${worker.key}) cancel timed out; abandoning")
             }
         }
     }
 
-    private fun <C : AdmissionCommand, T> dispatchCommand(build: (CompletableDeferred<T>) -> C): T =
+    private fun closeWorkers(workers: List<WorkerState>) {
+        runBlocking { closeWorkersSuspend(workers) }
+    }
+
+    private suspend fun <C : AdmissionCommand, T> dispatchSuspend(build: (CompletableDeferred<T>) -> C): T {
+        val reply = CompletableDeferred<T>()
+        commands.send(build(reply))
+        return reply.await()
+    }
+
+    private fun <C : AdmissionCommand, T> dispatchCommand(
+        build: (CompletableDeferred<T>) -> C,
+    ): T =
         runBlocking {
-            val reply = CompletableDeferred<T>()
-            commands.send(build(reply))
-            reply.await()
+            dispatchSuspend(build)
         }
 
     private fun buildCoroutineScope(): CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
