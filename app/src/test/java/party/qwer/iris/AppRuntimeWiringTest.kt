@@ -4,6 +4,7 @@ import party.qwer.iris.persistence.IrisDatabaseSchema
 import party.qwer.iris.persistence.JdbcSqliteHelper
 import party.qwer.iris.persistence.PendingWebhookDelivery
 import party.qwer.iris.storage.ChatId
+import party.qwer.iris.storage.UserId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -112,12 +113,12 @@ class AppRuntimeWiringTest {
 
     private fun snapshotData(chatId: Long): RoomSnapshotData =
         RoomSnapshotData(
-            chatId = chatId,
+            chatId = ChatId(chatId),
             linkId = null,
-            memberIds = setOf(chatId),
+            memberIds = setOf(UserId(chatId)),
             blindedIds = emptySet(),
-            nicknames = mapOf(chatId to "room-$chatId"),
-            roles = mapOf(chatId to 0),
+            nicknames = mapOf(UserId(chatId) to "room-$chatId"),
+            roles = mapOf(UserId(chatId) to 0),
             profileImages = emptyMap(),
         )
 }

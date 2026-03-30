@@ -4,6 +4,9 @@ import party.qwer.iris.model.MemberEvent
 import party.qwer.iris.model.NicknameChangeEvent
 import party.qwer.iris.model.ProfileChangeEvent
 import party.qwer.iris.model.RoleChangeEvent
+import party.qwer.iris.storage.ChatId
+import party.qwer.iris.storage.LinkId
+import party.qwer.iris.storage.UserId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -17,13 +20,13 @@ class RoomSnapshotManagerTest {
         roles: Map<Long, Int> = emptyMap(),
         profileImages: Map<Long, String> = emptyMap(),
     ) = RoomSnapshotData(
-        chatId = 100L,
-        linkId = 1L,
-        memberIds = memberIds,
-        blindedIds = blindedIds,
-        nicknames = nicknames,
-        roles = roles,
-        profileImages = profileImages,
+        chatId = ChatId(100L),
+        linkId = LinkId(1L),
+        memberIds = memberIds.map(::UserId).toSet(),
+        blindedIds = blindedIds.map(::UserId).toSet(),
+        nicknames = nicknames.map { (k, v) -> UserId(k) to v }.toMap(),
+        roles = roles.map { (k, v) -> UserId(k) to v }.toMap(),
+        profileImages = profileImages.map { (k, v) -> UserId(k) to v }.toMap(),
     )
 
     @Test

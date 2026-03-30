@@ -30,17 +30,17 @@ class RoomSnapshotAssemblerTest {
                 botId = UserId(1L),
             )
 
-        assertEquals(42L, snapshot.chatId)
-        assertEquals(10L, snapshot.linkId)
-        assertEquals(setOf(1L, 2L, 3L), snapshot.memberIds)
-        assertEquals(setOf(99L), snapshot.blindedIds)
-        assertEquals("Alice", snapshot.nicknames[1L])
-        assertEquals("Bob", snapshot.nicknames[2L])
-        assertEquals("Charlie", snapshot.nicknames[3L])
-        assertEquals(1, snapshot.roles[1L])
-        assertEquals(2, snapshot.roles[2L])
-        assertEquals("http://a", snapshot.profileImages[1L])
-        assertTrue(2L !in snapshot.profileImages)
+        assertEquals(ChatId(42L), snapshot.chatId)
+        assertEquals(LinkId(10L), snapshot.linkId)
+        assertEquals(setOf(UserId(1L), UserId(2L), UserId(3L)), snapshot.memberIds)
+        assertEquals(setOf(UserId(99L)), snapshot.blindedIds)
+        assertEquals("Alice", snapshot.nicknames[UserId(1L)])
+        assertEquals("Bob", snapshot.nicknames[UserId(2L)])
+        assertEquals("Charlie", snapshot.nicknames[UserId(3L)])
+        assertEquals(1, snapshot.roles[UserId(1L)])
+        assertEquals(2, snapshot.roles[UserId(2L)])
+        assertEquals("http://a", snapshot.profileImages[UserId(1L)])
+        assertTrue(UserId(2L) !in snapshot.profileImages)
     }
 
     @Test
@@ -63,7 +63,7 @@ class RoomSnapshotAssemblerTest {
                 botId = UserId(1L),
             )
 
-        assertEquals("dec(3:encrypted)", snapshot.nicknames[1L])
+        assertEquals("dec(3:encrypted)", snapshot.nicknames[UserId(1L)])
     }
 
     @Test
@@ -80,8 +80,8 @@ class RoomSnapshotAssemblerTest {
                 botId = UserId(1L),
             )
 
-        assertEquals("Alice", snapshot.nicknames[1L])
-        assertEquals("Bob", snapshot.nicknames[2L])
+        assertEquals("Alice", snapshot.nicknames[UserId(1L)])
+        assertEquals("Bob", snapshot.nicknames[UserId(2L)])
         assertTrue(snapshot.roles.isEmpty())
         assertTrue(snapshot.profileImages.isEmpty())
     }
@@ -100,7 +100,7 @@ class RoomSnapshotAssemblerTest {
                 botId = UserId(1L),
             )
 
-        assertEquals("Alice", snapshot.nicknames[1L])
-        assertTrue(2L !in snapshot.nicknames)
+        assertEquals("Alice", snapshot.nicknames[UserId(1L)])
+        assertTrue(UserId(2L) !in snapshot.nicknames)
     }
 }

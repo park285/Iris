@@ -17,33 +17,34 @@ object RoomSnapshotAssembler {
         decrypt: (Int, String, Long) -> String,
         botId: UserId,
     ): RoomSnapshotData {
-        val nicknames = mutableMapOf<Long, String>()
-        val roles = mutableMapOf<Long, Int>()
-        val profileImages = mutableMapOf<Long, String>()
+        val nicknames = mutableMapOf<UserId, String>()
+        val roles = mutableMapOf<UserId, Int>()
+        val profileImages = mutableMapOf<UserId, String>()
 
         for (member in openMembers) {
+            val uid = UserId(member.userId)
             val rawNick = member.nickname
-            nicknames[member.userId] =
+            nicknames[uid] =
                 if (rawNick != null && member.enc > 0) {
                     decrypt(member.enc, rawNick, botId.value)
                 } else {
                     rawNick ?: ""
                 }
-            roles[member.userId] = member.linkMemberType
-            member.profileImageUrl?.let { profileImages[member.userId] = it }
+            roles[uid] = member.linkMemberType
+            member.profileImageUrl?.let { profileImages[uid] = it }
         }
 
         batchNicknames.forEach { (userId, nickname) ->
             if (nickname.isNotBlank() && nickname != userId.value.toString()) {
-                nicknames[userId.value] = nickname
+                nicknames[userId] = nickname
             }
         }
 
         return RoomSnapshotData(
-            chatId = chatId.value,
-            linkId = linkId?.value,
-            memberIds = memberIds.mapTo(linkedSetOf()) { it.value },
-            blindedIds = blindedIds.mapTo(linkedSetOf()) { it.value },
+            chatId = chatId,
+            linkId = linkId,
+            memberIds = memberIds,
+            blindedIds = blindedIds,
             nicknames = nicknames,
             roles = roles,
             profileImages = profileImages,

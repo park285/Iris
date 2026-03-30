@@ -14,6 +14,8 @@ import party.qwer.iris.snapshot.RoomSnapshotReader
 import party.qwer.iris.snapshot.SnapshotCoordinator
 import party.qwer.iris.snapshot.SnapshotEventEmitter
 import party.qwer.iris.storage.ChatId
+import party.qwer.iris.storage.LinkId
+import party.qwer.iris.storage.UserId
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -258,13 +260,13 @@ class ObserverHelperSnapshotTest {
         profileImages: Map<Long, String> = emptyMap(),
     ): RoomSnapshotData =
         RoomSnapshotData(
-            chatId = chatId,
-            linkId = chatId + 1000L,
-            memberIds = members,
+            chatId = ChatId(chatId),
+            linkId = LinkId(chatId + 1000L),
+            memberIds = members.map(::UserId).toSet(),
             blindedIds = emptySet(),
-            nicknames = nicknames,
-            roles = members.associateWith { 2 },
-            profileImages = profileImages,
+            nicknames = nicknames.map { (k, v) -> UserId(k) to v }.toMap(),
+            roles = members.associate { UserId(it) to 2 },
+            profileImages = profileImages.map { (k, v) -> UserId(k) to v }.toMap(),
         )
 
     private fun waitUntil(
@@ -310,14 +312,14 @@ class SnapshotTestCountingDiffEngine : RoomDiffEngine {
         curr: RoomSnapshotData,
     ): List<Any> {
         diffCalls++
-        diffedChatIds += curr.chatId
+        diffedChatIds += curr.chatId.value
         val joined = (curr.memberIds - prev.memberIds).firstOrNull() ?: return emptyList()
         return listOf(
             MemberEvent(
                 event = "join",
-                chatId = curr.chatId,
-                linkId = curr.linkId,
-                userId = joined,
+                chatId = curr.chatId.value,
+                linkId = curr.linkId?.value,
+                userId = joined.value,
                 nickname = curr.nicknames[joined],
                 estimated = false,
                 timestamp = 1L,

@@ -20,9 +20,9 @@ open class RoomSnapshotManager : RoomDiffEngine {
             events.add(
                 MemberEvent(
                     event = "join",
-                    chatId = curr.chatId,
-                    linkId = curr.linkId,
-                    userId = uid,
+                    chatId = curr.chatId.value,
+                    linkId = curr.linkId?.value,
+                    userId = uid.value,
                     nickname = curr.nicknames[uid],
                     estimated = false,
                     timestamp = now,
@@ -36,9 +36,9 @@ open class RoomSnapshotManager : RoomDiffEngine {
             events.add(
                 MemberEvent(
                     event = if (isKicked) "kick" else "leave",
-                    chatId = curr.chatId,
-                    linkId = curr.linkId,
-                    userId = uid,
+                    chatId = curr.chatId.value,
+                    linkId = curr.linkId?.value,
+                    userId = uid.value,
                     nickname = prev.nicknames[uid],
                     estimated = !isKicked,
                     timestamp = now,
@@ -54,9 +54,9 @@ open class RoomSnapshotManager : RoomDiffEngine {
             if (oldNick != null && newNick != null && oldNick != newNick) {
                 events.add(
                     NicknameChangeEvent(
-                        chatId = curr.chatId,
-                        linkId = curr.linkId,
-                        userId = uid,
+                        chatId = curr.chatId.value,
+                        linkId = curr.linkId?.value,
+                        userId = uid.value,
                         oldNickname = oldNick,
                         newNickname = newNick,
                         timestamp = now,
@@ -69,9 +69,9 @@ open class RoomSnapshotManager : RoomDiffEngine {
             if (oldRole != null && newRole != null && oldRole != newRole) {
                 events.add(
                     RoleChangeEvent(
-                        chatId = curr.chatId,
-                        linkId = curr.linkId,
-                        userId = uid,
+                        chatId = curr.chatId.value,
+                        linkId = curr.linkId?.value,
+                        userId = uid.value,
                         oldRole = roleCodeToName(oldRole),
                         newRole = roleCodeToName(newRole),
                         timestamp = now,
@@ -84,9 +84,9 @@ open class RoomSnapshotManager : RoomDiffEngine {
             if (oldImg != newImg) {
                 events.add(
                     ProfileChangeEvent(
-                        chatId = curr.chatId,
-                        linkId = curr.linkId,
-                        userId = uid,
+                        chatId = curr.chatId.value,
+                        linkId = curr.linkId?.value,
+                        userId = uid.value,
                         timestamp = now,
                     ),
                 )

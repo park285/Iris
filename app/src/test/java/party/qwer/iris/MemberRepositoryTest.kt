@@ -10,6 +10,7 @@ import party.qwer.iris.storage.RoomDirectoryQueries
 import party.qwer.iris.storage.RoomStatsQueries
 import party.qwer.iris.storage.SqlClient
 import party.qwer.iris.storage.ThreadQueries
+import party.qwer.iris.storage.UserId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -1097,7 +1098,7 @@ class MemberRepositoryTest {
 
         val snapshot = repo.snapshot(chatId = 366795577484293L)
 
-        assertEquals("재균", snapshot.nicknames[203887151L])
-        assertEquals(null, snapshot.nicknames[243338321L])
+        assertEquals("재균", snapshot.nicknames[UserId(203887151L)])
+        assertEquals(null, snapshot.nicknames[UserId(243338321L)])
     }
 }

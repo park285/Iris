@@ -565,9 +565,10 @@ class MemberRepository(
                 decrypt = decrypt,
                 botId = UserId(botId),
             ).also { snapshot ->
-                val learnable = excludeFriendResolvedUsers(
-                    snapshot.nicknames.filterValues { it.isNotBlank() },
-                )
+                val longNicknames = snapshot.nicknames
+                    .filterValues { it.isNotBlank() }
+                    .mapKeys { (k, _) -> k.value }
+                val learnable = excludeFriendResolvedUsers(longNicknames)
                 if (learnable.isNotEmpty()) {
                     learnObservedProfileUserMappings(chatId, learnable)
                 }
@@ -653,11 +654,11 @@ class MemberRepository(
 }
 
 data class RoomSnapshotData(
-    val chatId: Long,
-    val linkId: Long?,
-    val memberIds: Set<Long>,
-    val blindedIds: Set<Long>,
-    val nicknames: Map<Long, String>,
-    val roles: Map<Long, Int>,
-    val profileImages: Map<Long, String>,
+    val chatId: ChatId,
+    val linkId: LinkId?,
+    val memberIds: Set<UserId>,
+    val blindedIds: Set<UserId>,
+    val nicknames: Map<UserId, String>,
+    val roles: Map<UserId, Int>,
+    val profileImages: Map<UserId, String>,
 )

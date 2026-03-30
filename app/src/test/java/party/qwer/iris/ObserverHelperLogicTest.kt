@@ -14,6 +14,7 @@ import party.qwer.iris.snapshot.SnapshotCoordinator
 import party.qwer.iris.snapshot.SnapshotEventEmitter
 import party.qwer.iris.storage.ChatId
 import party.qwer.iris.storage.KakaoDbSqlClient
+import party.qwer.iris.storage.LinkId
 import party.qwer.iris.storage.MemberIdentityQueries
 import party.qwer.iris.storage.ObservedProfileQueries
 import party.qwer.iris.storage.QuerySpec
@@ -21,6 +22,7 @@ import party.qwer.iris.storage.RoomDirectoryQueries
 import party.qwer.iris.storage.RoomStatsQueries
 import party.qwer.iris.storage.SqlClient
 import party.qwer.iris.storage.ThreadQueries
+import party.qwer.iris.storage.UserId
 import java.io.File
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -93,21 +95,21 @@ class ObserverHelperLogicTest {
                         100L to
                             listOf(
                                 RoomSnapshotData(
-                                    chatId = 100L,
-                                    linkId = 200L,
-                                    memberIds = setOf(1L),
+                                    chatId = ChatId(100L),
+                                    linkId = LinkId(200L),
+                                    memberIds = setOf(UserId(1L)),
                                     blindedIds = emptySet(),
-                                    nicknames = mapOf(1L to "Alice"),
-                                    roles = mapOf(1L to 2),
+                                    nicknames = mapOf(UserId(1L) to "Alice"),
+                                    roles = mapOf(UserId(1L) to 2),
                                     profileImages = emptyMap(),
                                 ),
                                 RoomSnapshotData(
-                                    chatId = 100L,
-                                    linkId = 200L,
-                                    memberIds = setOf(1L, 2L),
+                                    chatId = ChatId(100L),
+                                    linkId = LinkId(200L),
+                                    memberIds = setOf(UserId(1L), UserId(2L)),
                                     blindedIds = emptySet(),
-                                    nicknames = mapOf(1L to "Alice", 2L to "Bob"),
-                                    roles = mapOf(1L to 2, 2L to 2),
+                                    nicknames = mapOf(UserId(1L) to "Alice", UserId(2L) to "Bob"),
+                                    roles = mapOf(UserId(1L) to 2, UserId(2L) to 2),
                                     profileImages = emptyMap(),
                                 ),
                             ),
