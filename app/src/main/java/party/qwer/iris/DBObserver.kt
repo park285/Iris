@@ -12,7 +12,7 @@ import kotlinx.coroutines.runBlocking
 
 internal class DBObserver(
     private val observerHelper: ObserverHelper,
-    private val config: ConfigProvider,
+    private val config: PollingConfigProvider,
 ) {
     private val coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 

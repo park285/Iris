@@ -3,8 +3,8 @@ package party.qwer.iris
 import party.qwer.iris.model.MemberEvent
 import party.qwer.iris.model.NicknameChangeEvent
 import party.qwer.iris.model.ProfileChangeEvent
-import party.qwer.iris.model.RoomEvent
 import party.qwer.iris.model.RoleChangeEvent
+import party.qwer.iris.model.RoomEvent
 import party.qwer.iris.model.roleCodeToName
 import party.qwer.iris.snapshot.RoomDiffEngine
 
