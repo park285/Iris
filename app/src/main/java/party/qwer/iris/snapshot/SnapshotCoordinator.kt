@@ -1,5 +1,6 @@
 package party.qwer.iris.snapshot
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
@@ -8,9 +9,6 @@ import party.qwer.iris.persistence.InMemorySnapshotStateStore
 import party.qwer.iris.persistence.PersistedSnapshotState
 import party.qwer.iris.persistence.SnapshotStateStore
 import party.qwer.iris.storage.ChatId
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 
 internal class SnapshotCoordinator(
     scope: CoroutineScope,
@@ -18,87 +16,152 @@ internal class SnapshotCoordinator(
     private val diffEngine: RoomDiffEngine,
     private val emitter: SnapshotEventEmitter,
     private val stateStore: SnapshotStateStore = InMemorySnapshotStateStore(),
+    private val missingPolicy: SnapshotMissingPolicy = SnapshotMissingPolicy(),
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private sealed interface SnapshotState {
+        val chatId: ChatId
+
         data class Present(
             val snapshot: RoomSnapshotData,
-        ) : SnapshotState
+        ) : SnapshotState {
+            override val chatId: ChatId
+                get() = snapshot.chatId
+        }
 
-        data object Missing : SnapshotState
+        data class MissingPending(
+            val previousSnapshot: RoomSnapshotData,
+            val firstMissingAtMs: Long,
+            val consecutiveMisses: Int,
+        ) : SnapshotState {
+            override val chatId: ChatId
+                get() = previousSnapshot.chatId
+        }
+
+        data class MissingConfirmed(
+            val previousSnapshot: RoomSnapshotData,
+            val confirmedAtMs: Long,
+        ) : SnapshotState {
+            override val chatId: ChatId
+                get() = previousSnapshot.chatId
+        }
     }
 
-    private val commandSignals = Channel<Unit>(Channel.CONFLATED)
-    private val seedRequested = AtomicBoolean(false)
-    private val fullReconcileRequested = AtomicBoolean(false)
-    private val pendingDrainBudget = AtomicInteger(0)
-    private val pendingDirtyRooms = ConcurrentHashMap.newKeySet<ChatId>()
+    private data class SnapshotCoordinatorState(
+        val previousSnapshots: MutableMap<ChatId, SnapshotState> = mutableMapOf(),
+        val dirtyRoomSet: MutableSet<ChatId> = mutableSetOf(),
+        val dirtyRoomQueue: ArrayDeque<ChatId> = ArrayDeque(),
+        val pendingDebugReplies: MutableList<CompletableDeferred<SnapshotCoordinatorDebugSnapshot>> = mutableListOf(),
+        var pendingSeedCache: Boolean = false,
+        var pendingFullReconcile: Boolean = false,
+        var pendingDrainBudget: Int = 0,
+        var pendingPruneCutoffEpochMs: Long? = null,
+    ) {
+        fun markDirty(chatId: ChatId) {
+            if (chatId.value <= 0L) return
+            if (dirtyRoomSet.add(chatId)) {
+                dirtyRoomQueue.addLast(chatId)
+            }
+        }
+    }
 
-    private val previousSnapshots = mutableMapOf<ChatId, SnapshotState>()
-    private val dirtyRoomSet = mutableSetOf<ChatId>()
-    private val dirtyRoomQueue = ArrayDeque<ChatId>()
-    private val dirtyRoomCountValue = AtomicInteger(0)
+    private val commands = Channel<SnapshotCommand>(Channel.UNLIMITED)
+
+    @Volatile
+    private var lastKnownDebugSnapshot =
+        SnapshotCoordinatorDebugSnapshot(
+            dirtyRoomCount = 0,
+            cachedRoomCount = 0,
+            pendingFullReconcile = false,
+            pendingPruneCutoffEpochMs = null,
+        )
 
     init {
         scope.launch {
-            for (ignored in commandSignals) {
-                drainPendingCommands()
-            }
+            runLoop()
         }
     }
 
     suspend fun send(command: SnapshotCommand) {
-        mergePendingCommand(command)
-        commandSignals.send(Unit)
+        commands.send(command)
     }
 
     fun enqueue(command: SnapshotCommand) {
-        mergePendingCommand(command)
-        commandSignals.trySend(Unit)
+        commands.trySend(command)
     }
 
-    fun dirtyRoomCount(): Int = dirtyRoomCountValue.get() + pendingDirtyRooms.size
+    suspend fun debugSnapshotSuspend(): SnapshotCoordinatorDebugSnapshot {
+        val replyTo = CompletableDeferred<SnapshotCoordinatorDebugSnapshot>()
+        send(SnapshotCommand.GetDebugSnapshot(replyTo))
+        return replyTo.await()
+    }
 
-    private fun mergePendingCommand(command: SnapshotCommand) {
-        when (command) {
-            SnapshotCommand.SeedCache -> seedRequested.set(true)
-            SnapshotCommand.FullReconcile -> fullReconcileRequested.set(true)
-            is SnapshotCommand.MarkDirty -> {
-                if (command.chatId.value > 0L) {
-                    pendingDirtyRooms.add(command.chatId)
-                }
+    fun dirtyRoomCount(): Int = lastKnownDebugSnapshot.dirtyRoomCount
+
+    private suspend fun runLoop() {
+        val state = SnapshotCoordinatorState()
+        for (command in commands) {
+            reduce(state, command)
+            while (true) {
+                val nextCommand = commands.tryReceive().getOrNull() ?: break
+                reduce(state, nextCommand)
             }
-            is SnapshotCommand.Drain -> {
-                pendingDrainBudget.accumulateAndGet(command.budget.coerceAtLeast(0), ::maxOf)
-            }
+            drainPendingCommands(state)
+            val debugSnapshot = buildDebugSnapshot(state)
+            lastKnownDebugSnapshot = debugSnapshot
+            flushDebugReplies(state, debugSnapshot)
         }
     }
 
-    private fun drainPendingCommands() {
+    private fun reduce(
+        state: SnapshotCoordinatorState,
+        command: SnapshotCommand,
+    ) {
+        when (command) {
+            SnapshotCommand.SeedCache -> state.pendingSeedCache = true
+            SnapshotCommand.FullReconcile -> state.pendingFullReconcile = true
+            is SnapshotCommand.PruneMissing -> {
+                val cutoffEpochMs = command.cutoffEpochMs.coerceAtLeast(0L)
+                state.pendingPruneCutoffEpochMs =
+                    state.pendingPruneCutoffEpochMs
+                        ?.let { maxOf(it, cutoffEpochMs) }
+                        ?: cutoffEpochMs
+            }
+            is SnapshotCommand.MarkDirty -> state.markDirty(command.chatId)
+            is SnapshotCommand.Drain -> {
+                state.pendingDrainBudget = maxOf(state.pendingDrainBudget, command.budget.coerceAtLeast(0))
+            }
+            is SnapshotCommand.GetDebugSnapshot -> state.pendingDebugReplies += command.replyTo
+        }
+    }
+
+    private fun drainPendingCommands(state: SnapshotCoordinatorState) {
         while (true) {
             var handled = false
 
-            if (seedRequested.compareAndSet(true, false)) {
-                handleSeedCache()
+            if (state.pendingSeedCache) {
+                state.pendingSeedCache = false
+                handleSeedCache(state)
                 handled = true
             }
 
-            if (fullReconcileRequested.compareAndSet(true, false)) {
-                handleFullReconcile()
+            if (state.pendingFullReconcile) {
+                state.pendingFullReconcile = false
+                handleFullReconcile(state)
                 handled = true
             }
 
-            val pendingDirty =
-                pendingDirtyRooms
-                    .toList()
-                    .filter(pendingDirtyRooms::remove)
-            if (pendingDirty.isNotEmpty()) {
-                pendingDirty.forEach(::handleMarkDirty)
+            val pruneCutoffEpochMs = state.pendingPruneCutoffEpochMs
+            if (pruneCutoffEpochMs != null) {
+                state.pendingPruneCutoffEpochMs = null
+                handlePruneMissing(state, pruneCutoffEpochMs)
                 handled = true
             }
 
-            val drainBudget = pendingDrainBudget.getAndSet(0)
+            val drainBudget = state.pendingDrainBudget
             if (drainBudget > 0) {
-                handleDrain(drainBudget)
+                state.pendingDrainBudget = 0
+                handleDrain(state, drainBudget)
                 handled = true
             }
 
@@ -108,12 +171,33 @@ internal class SnapshotCoordinator(
         }
     }
 
-    private fun handleSeedCache() {
-        previousSnapshots.clear()
+    private fun flushDebugReplies(
+        state: SnapshotCoordinatorState,
+        snapshot: SnapshotCoordinatorDebugSnapshot,
+    ) {
+        if (state.pendingDebugReplies.isEmpty()) {
+            return
+        }
+        state.pendingDebugReplies.forEach { replyTo ->
+            replyTo.complete(snapshot)
+        }
+        state.pendingDebugReplies.clear()
+    }
+
+    private fun buildDebugSnapshot(state: SnapshotCoordinatorState): SnapshotCoordinatorDebugSnapshot =
+        SnapshotCoordinatorDebugSnapshot(
+            dirtyRoomCount = state.dirtyRoomQueue.size,
+            cachedRoomCount = state.previousSnapshots.size,
+            pendingFullReconcile = state.pendingFullReconcile,
+            pendingPruneCutoffEpochMs = state.pendingPruneCutoffEpochMs,
+        )
+
+    private fun handleSeedCache(state: SnapshotCoordinatorState) {
+        state.previousSnapshots.clear()
         stateStore
             .loadAll()
-            .forEach { (chatId, state) ->
-                previousSnapshots[chatId] = state.toSnapshotState()
+            .forEach { (chatId, persistedState) ->
+                state.previousSnapshots[chatId] = persistedState.toSnapshotState()
             }
 
         val currentRoomIds =
@@ -122,11 +206,11 @@ internal class SnapshotCoordinator(
                 .filter { it.value > 0L }
                 .toSet()
 
-        if (previousSnapshots.isEmpty()) {
+        if (state.previousSnapshots.isEmpty()) {
             currentRoomIds.forEach { chatId ->
                 when (val result = roomSnapshotReader.snapshot(chatId)) {
                     is RoomSnapshotReadResult.Present -> {
-                        previousSnapshots[chatId] = SnapshotState.Present(result.snapshot)
+                        state.previousSnapshots[chatId] = SnapshotState.Present(result.snapshot)
                         stateStore.savePresent(result.snapshot)
                     }
                     RoomSnapshotReadResult.Missing -> Unit
@@ -139,60 +223,115 @@ internal class SnapshotCoordinator(
             return
         }
 
-        val previouslyPresentRooms =
-            previousSnapshots
-                .filterValues { state -> state is SnapshotState.Present }
-                .keys
-        (previouslyPresentRooms + currentRoomIds).forEach(::handleMarkDirty)
+        (state.previousSnapshots.keys + currentRoomIds).forEach(state::markDirty)
     }
 
-    private fun handleMarkDirty(chatId: ChatId) {
-        if (chatId.value <= 0L) return
-        if (dirtyRoomSet.add(chatId)) {
-            dirtyRoomQueue.addLast(chatId)
-            dirtyRoomCountValue.incrementAndGet()
-        }
-    }
-
-    private fun handleDrain(budget: Int) {
+    private fun handleDrain(
+        state: SnapshotCoordinatorState,
+        budget: Int,
+    ) {
         repeat(budget) {
-            val chatId = dirtyRoomQueue.removeFirstOrNull() ?: return
-            if (dirtyRoomSet.remove(chatId)) {
-                dirtyRoomCountValue.decrementAndGet()
-            }
+            val chatId = state.dirtyRoomQueue.removeFirstOrNull() ?: return
+            state.dirtyRoomSet.remove(chatId)
 
             when (val result = roomSnapshotReader.snapshot(chatId)) {
                 is RoomSnapshotReadResult.Present -> {
                     val events =
-                        when (val previous = previousSnapshots[chatId]) {
+                        when (val previous = state.previousSnapshots[chatId]) {
                             is SnapshotState.Present -> diffEngine.diff(previous.snapshot, result.snapshot)
-                            SnapshotState.Missing -> diffEngine.diffRestored(result.snapshot)
+                            is SnapshotState.MissingPending ->
+                                if (missingPolicy.restoreQuietlyWhenPending) {
+                                    emptyList()
+                                } else {
+                                    diffEngine.diffRestored(result.snapshot)
+                                }
+                            is SnapshotState.MissingConfirmed -> diffEngine.diffRestored(result.snapshot)
                             null -> emptyList()
                         }
-                    previousSnapshots[chatId] = SnapshotState.Present(result.snapshot)
+                    state.previousSnapshots[chatId] = SnapshotState.Present(result.snapshot)
                     stateStore.savePresent(result.snapshot)
                     if (events.isNotEmpty()) {
                         emitter.emit(events)
                     }
                 }
                 RoomSnapshotReadResult.Missing -> {
-                    val previousSnapshot =
-                        when (val previous = previousSnapshots[chatId]) {
-                            is SnapshotState.Present -> previous.snapshot
-                            SnapshotState.Missing, null -> null
-                        } ?: return@repeat
-                    val events = diffEngine.diffMissing(previousSnapshot)
-                    if (events.isNotEmpty()) {
-                        emitter.emit(events)
-                    }
-                    previousSnapshots[chatId] = SnapshotState.Missing
-                    stateStore.saveMissing(chatId)
+                    handleMissingSnapshot(state, chatId)
                 }
             }
         }
     }
 
-    private fun handleFullReconcile() {
+    private fun handleMissingSnapshot(
+        state: SnapshotCoordinatorState,
+        chatId: ChatId,
+    ) {
+        when (val previous = state.previousSnapshots[chatId]) {
+            is SnapshotState.Present -> {
+                val pendingState =
+                    SnapshotState.MissingPending(
+                        previousSnapshot = previous.snapshot,
+                        firstMissingAtMs = clock(),
+                        consecutiveMisses = 1,
+                    )
+                state.previousSnapshots[chatId] = pendingState
+                stateStore.saveMissingPending(
+                    previousSnapshot = pendingState.previousSnapshot,
+                    firstMissingAtMs = pendingState.firstMissingAtMs,
+                    consecutiveMisses = pendingState.consecutiveMisses,
+                )
+                maybeConfirmMissing(state, pendingState)
+            }
+
+            is SnapshotState.MissingPending -> {
+                val updatedPendingState =
+                    previous.copy(
+                        consecutiveMisses = previous.consecutiveMisses + 1,
+                    )
+                state.previousSnapshots[chatId] = updatedPendingState
+                stateStore.saveMissingPending(
+                    previousSnapshot = updatedPendingState.previousSnapshot,
+                    firstMissingAtMs = updatedPendingState.firstMissingAtMs,
+                    consecutiveMisses = updatedPendingState.consecutiveMisses,
+                )
+                maybeConfirmMissing(state, updatedPendingState)
+            }
+
+            is SnapshotState.MissingConfirmed -> Unit
+            null -> Unit
+        }
+    }
+
+    private fun maybeConfirmMissing(
+        state: SnapshotCoordinatorState,
+        pendingState: SnapshotState.MissingPending,
+    ) {
+        if (!shouldConfirmMissing(pendingState)) {
+            return
+        }
+        val confirmedAtMs = clock()
+        val events = diffEngine.diffMissing(pendingState.previousSnapshot)
+        state.previousSnapshots[pendingState.chatId] =
+            SnapshotState.MissingConfirmed(
+                previousSnapshot = pendingState.previousSnapshot,
+                confirmedAtMs = confirmedAtMs,
+            )
+        stateStore.saveMissingConfirmed(
+            previousSnapshot = pendingState.previousSnapshot,
+            confirmedAtMs = confirmedAtMs,
+        )
+        if (events.isNotEmpty()) {
+            emitter.emit(events)
+        }
+    }
+
+    private fun shouldConfirmMissing(pendingState: SnapshotState.MissingPending): Boolean {
+        if (pendingState.consecutiveMisses >= missingPolicy.confirmAfterConsecutiveMisses) {
+            return true
+        }
+        return clock() - pendingState.firstMissingAtMs >= missingPolicy.confirmAfterMs
+    }
+
+    private fun handleFullReconcile(state: SnapshotCoordinatorState) {
         val currentRoomIds =
             roomSnapshotReader
                 .listRoomChatIds()
@@ -200,20 +339,45 @@ internal class SnapshotCoordinator(
                 .toSet()
 
         // DB 장애로 빈 결과가 반환되면 대량 leave 이벤트 방지를 위해 스킵
-        if (currentRoomIds.isEmpty() && previousSnapshots.isNotEmpty()) {
+        if (currentRoomIds.isEmpty() && state.previousSnapshots.isNotEmpty()) {
             return
         }
 
-        val previouslyPresentRooms =
-            previousSnapshots
-                .filterValues { state -> state is SnapshotState.Present }
-                .keys
-        (previouslyPresentRooms + currentRoomIds).forEach(::handleMarkDirty)
+        (state.previousSnapshots.keys + currentRoomIds).forEach(state::markDirty)
+    }
+
+    private fun handlePruneMissing(
+        state: SnapshotCoordinatorState,
+        cutoffEpochMs: Long,
+    ) {
+        val removedChatIds = stateStore.pruneMissingOlderThan(cutoffEpochMs)
+        if (removedChatIds.isEmpty()) {
+            return
+        }
+        removedChatIds.forEach { chatId ->
+            if (state.previousSnapshots[chatId] is SnapshotState.MissingConfirmed) {
+                state.previousSnapshots.remove(chatId)
+            }
+            if (state.dirtyRoomSet.remove(chatId)) {
+                state.dirtyRoomQueue.remove(chatId)
+            }
+        }
     }
 
     private fun PersistedSnapshotState.toSnapshotState(): SnapshotState =
         when (this) {
             is PersistedSnapshotState.Present -> SnapshotState.Present(snapshot)
-            is PersistedSnapshotState.Missing -> SnapshotState.Missing
+            is PersistedSnapshotState.MissingPending ->
+                SnapshotState.MissingPending(
+                    previousSnapshot = previousSnapshot,
+                    firstMissingAtMs = firstMissingAtMs,
+                    consecutiveMisses = consecutiveMisses,
+                )
+
+            is PersistedSnapshotState.MissingConfirmed ->
+                SnapshotState.MissingConfirmed(
+                    previousSnapshot = previousSnapshot,
+                    confirmedAtMs = confirmedAtMs,
+                )
         }
 }

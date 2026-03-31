@@ -14,6 +14,14 @@ internal data class PersistedSnapshotPayload(
 )
 
 @Serializable
+internal data class PersistedMissingSnapshotPayload(
+    val snapshot: PersistedSnapshotPayload,
+    val firstMissingAtMs: Long? = null,
+    val consecutiveMisses: Int = 0,
+    val confirmedAtMs: Long? = null,
+)
+
+@Serializable
 internal data class PersistedSnapshotStringEntry(
     val userId: Long,
     val value: String,

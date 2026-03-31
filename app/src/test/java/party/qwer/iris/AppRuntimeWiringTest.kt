@@ -60,9 +60,12 @@ class AppRuntimeWiringTest {
                 CHAT_LOGS_STREAM,
             ),
         )
-        runtime.snapshotStateStore.saveMissing(ChatId(77L))
+        runtime.snapshotStateStore.saveMissingConfirmed(snapshotData(chatId = 77L), confirmedAtMs = 1_000L)
         assertEquals(
-            PersistedSnapshotState.Missing(ChatId(77L)),
+            PersistedSnapshotState.MissingConfirmed(
+                previousSnapshot = snapshotData(chatId = 77L),
+                confirmedAtMs = 1_000L,
+            ),
             runtime.snapshotStateStore.loadAll()[ChatId(77L)],
         )
     }

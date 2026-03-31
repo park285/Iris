@@ -55,7 +55,7 @@ class SnapshotCoordinatorTest {
             val diffEngine = RecordingDiffEngine()
             val emitter = RecordingEmitter()
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
-            val coordinator = SnapshotCoordinator(scope, reader, diffEngine, emitter)
+            val coordinator = SnapshotCoordinator(scope, reader, diffEngine, emitter, missingPolicy = immediateMissingPolicy())
 
             coordinator.send(SnapshotCommand.SeedCache)
             yield()
@@ -240,7 +240,7 @@ class SnapshotCoordinatorTest {
             val diffEngine = RecordingDiffEngine()
             val emitter = RecordingEmitter()
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
-            val coordinator = SnapshotCoordinator(scope, reader, diffEngine, emitter)
+            val coordinator = SnapshotCoordinator(scope, reader, diffEngine, emitter, missingPolicy = immediateMissingPolicy())
 
             coordinator.send(SnapshotCommand.SeedCache)
             yield()
@@ -259,7 +259,7 @@ class SnapshotCoordinatorTest {
         }
 
     @Test
-    fun `deleted room is diffed once and then dropped from future full reconcile passes`() =
+    fun `deleted room emits leave once and remains tracked without duplicate events`() =
         runBlocking {
             val rooms = mutableListOf(100L, 200L)
             val reader =
@@ -273,7 +273,7 @@ class SnapshotCoordinatorTest {
                 )
             val emitter = RecordingEmitter()
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
-            val coordinator = SnapshotCoordinator(scope, reader, RoomSnapshotManager(), emitter)
+            val coordinator = SnapshotCoordinator(scope, reader, RoomSnapshotManager(), emitter, missingPolicy = immediateMissingPolicy())
 
             coordinator.send(SnapshotCommand.SeedCache)
             yield()
@@ -296,7 +296,7 @@ class SnapshotCoordinatorTest {
             assertEquals(listOf("leave"), firstPassEvents.filterIsInstance<MemberEvent>().map { it.event })
             assertEquals(listOf(100L), firstPassEvents.filterIsInstance<MemberEvent>().map { it.chatId })
             assertEquals(emptyList(), emitter.emittedEvents)
-            assertEquals(2, reader.snapshotCalls.count { it == 100L })
+            assertEquals(3, reader.snapshotCalls.count { it == 100L })
             scope.cancel()
         }
 
@@ -315,7 +315,7 @@ class SnapshotCoordinatorTest {
             val diffEngine = RecordingDiffEngine()
             val emitter = RecordingEmitter()
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
-            val coordinator = SnapshotCoordinator(scope, reader, diffEngine, emitter)
+            val coordinator = SnapshotCoordinator(scope, reader, diffEngine, emitter, missingPolicy = immediateMissingPolicy())
 
             coordinator.send(SnapshotCommand.SeedCache)
             yield()
@@ -355,6 +355,35 @@ class SnapshotCoordinatorTest {
         }
 
     @Test
+    fun `debug snapshot reflects cached rooms and dirty backlog`() =
+        runBlocking {
+            val reader =
+                StubSnapshotReader(
+                    rooms = listOf(100L, 200L),
+                    snapshots =
+                        mapOf(
+                            100L to listOf(snapshot(100L, setOf(1L)), snapshot(100L, setOf(1L, 10L))),
+                            200L to listOf(snapshot(200L, setOf(2L))),
+                        ),
+                )
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            val coordinator = SnapshotCoordinator(scope, reader, RecordingDiffEngine(), RecordingEmitter())
+
+            coordinator.send(SnapshotCommand.SeedCache)
+            yield()
+            coordinator.send(SnapshotCommand.MarkDirty(chatId = ChatId(100L)))
+            yield()
+
+            val debugSnapshot = coordinator.debugSnapshotSuspend()
+
+            assertEquals(2, debugSnapshot.cachedRoomCount)
+            assertEquals(1, debugSnapshot.dirtyRoomCount)
+            assertEquals(false, debugSnapshot.pendingFullReconcile)
+            assertEquals(null, debugSnapshot.pendingPruneCutoffEpochMs)
+            scope.cancel()
+        }
+
+    @Test
     fun `drain emits leave events when room becomes missing`() =
         runBlocking {
             val rooms = mutableListOf(100L, 200L)
@@ -369,7 +398,7 @@ class SnapshotCoordinatorTest {
                 )
             val emitter = RecordingEmitter()
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
-            val coordinator = SnapshotCoordinator(scope, reader, RoomSnapshotManager(), emitter)
+            val coordinator = SnapshotCoordinator(scope, reader, RoomSnapshotManager(), emitter, missingPolicy = immediateMissingPolicy())
 
             coordinator.send(SnapshotCommand.SeedCache)
             yield()
@@ -384,6 +413,115 @@ class SnapshotCoordinatorTest {
             assertEquals(listOf("leave"), events.map { it.event })
             assertEquals(listOf(100L), events.map { it.chatId })
             assertEquals(listOf(1L), events.map { it.userId })
+            scope.cancel()
+        }
+
+    @Test
+    fun `first missing only records pending state without leave events`() =
+        runBlocking {
+            val rooms = mutableListOf(100L)
+            val reader =
+                StubSnapshotReader(
+                    roomsProvider = { rooms.map(::ChatId) },
+                    snapshots = mapOf(100L to listOf(snapshot(100L, setOf(1L), nicknames = mapOf(1L to "Alice")))),
+                )
+            val emitter = RecordingEmitter()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            val coordinator = SnapshotCoordinator(scope, reader, RoomSnapshotManager(), emitter)
+
+            coordinator.send(SnapshotCommand.SeedCache)
+            yield()
+
+            rooms.remove(100L)
+            coordinator.send(SnapshotCommand.FullReconcile)
+            yield()
+            coordinator.send(SnapshotCommand.Drain(budget = 10))
+            yield()
+
+            assertTrue(emitter.emittedEvents.isEmpty())
+            scope.cancel()
+        }
+
+    @Test
+    fun `second missing confirms pending room and emits leave once`() =
+        runBlocking {
+            val rooms = mutableListOf(100L, 200L)
+            val reader =
+                StubSnapshotReader(
+                    roomsProvider = { rooms.map(::ChatId) },
+                    snapshots =
+                        mapOf(
+                            100L to listOf(snapshot(100L, setOf(1L), nicknames = mapOf(1L to "Alice"))),
+                            200L to listOf(snapshot(200L, setOf(9L)), snapshot(200L, setOf(9L))),
+                        ),
+                )
+            val emitter = RecordingEmitter()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            val coordinator = SnapshotCoordinator(scope, reader, RoomSnapshotManager(), emitter)
+
+            coordinator.send(SnapshotCommand.SeedCache)
+            yield()
+
+            rooms.remove(100L)
+            coordinator.send(SnapshotCommand.FullReconcile)
+            yield()
+            coordinator.send(SnapshotCommand.Drain(budget = 10))
+            yield()
+            assertTrue(emitter.emittedEvents.isEmpty())
+
+            coordinator.send(SnapshotCommand.FullReconcile)
+            yield()
+            coordinator.send(SnapshotCommand.Drain(budget = 10))
+            yield()
+
+            val events = emitter.emittedEvents.filterIsInstance<MemberEvent>()
+            assertEquals(listOf("leave"), events.map { it.event })
+            assertEquals(listOf(100L), events.map { it.chatId })
+            scope.cancel()
+        }
+
+    @Test
+    fun `restore from pending missing stays quiet`() =
+        runBlocking {
+            val rooms = mutableListOf(100L, 200L)
+            val reader =
+                StubSnapshotReader(
+                    roomsProvider = { rooms.map(::ChatId) },
+                    snapshots =
+                        mapOf(
+                            100L to
+                                listOf(
+                                    snapshot(100L, setOf(1L), nicknames = mapOf(1L to "Alice")),
+                                    snapshot(100L, setOf(2L), nicknames = mapOf(2L to "Bob")),
+                                ),
+                            200L to
+                                listOf(
+                                    snapshot(200L, setOf(9L)),
+                                    snapshot(200L, setOf(9L)),
+                                ),
+                        ),
+                )
+            val emitter = RecordingEmitter()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            val coordinator = SnapshotCoordinator(scope, reader, RoomSnapshotManager(), emitter)
+
+            coordinator.send(SnapshotCommand.SeedCache)
+            yield()
+
+            rooms.remove(100L)
+            coordinator.send(SnapshotCommand.FullReconcile)
+            yield()
+            coordinator.send(SnapshotCommand.Drain(budget = 10))
+            yield()
+            assertTrue(emitter.emittedEvents.isEmpty())
+
+            rooms += 100L
+            coordinator.send(SnapshotCommand.FullReconcile)
+            yield()
+            coordinator.send(SnapshotCommand.Drain(budget = 10))
+            yield()
+
+            assertTrue(emitter.emittedEvents.isEmpty())
             scope.cancel()
         }
 
@@ -407,7 +545,7 @@ class SnapshotCoordinatorTest {
             val diffEngine = RecordingDiffEngine()
             val emitter = RecordingEmitter()
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
-            val coordinator = SnapshotCoordinator(scope, reader, diffEngine, emitter)
+            val coordinator = SnapshotCoordinator(scope, reader, diffEngine, emitter, missingPolicy = immediateMissingPolicy())
 
             coordinator.send(SnapshotCommand.SeedCache)
             yield()
@@ -447,6 +585,7 @@ class SnapshotCoordinatorTest {
                 diffEngine = RecordingDiffEngine(),
                 emitter = RecordingEmitter(),
                 stateStore = stateStore,
+                missingPolicy = immediateMissingPolicy(),
             ).also { coordinator ->
                 coordinator.send(SnapshotCommand.SeedCache)
                 yield()
@@ -471,6 +610,7 @@ class SnapshotCoordinatorTest {
                     diffEngine = diffEngine,
                     emitter = emitter,
                     stateStore = stateStore,
+                    missingPolicy = immediateMissingPolicy(),
                 )
 
             restartedCoordinator.send(SnapshotCommand.SeedCache)
@@ -509,6 +649,7 @@ class SnapshotCoordinatorTest {
                     diffEngine = RecordingDiffEngine(),
                     emitter = RecordingEmitter(),
                     stateStore = stateStore,
+                    missingPolicy = immediateMissingPolicy(),
                 )
 
             initialCoordinator.send(SnapshotCommand.SeedCache)
@@ -538,6 +679,7 @@ class SnapshotCoordinatorTest {
                     diffEngine = diffEngine,
                     emitter = emitter,
                     stateStore = stateStore,
+                    missingPolicy = immediateMissingPolicy(),
                 )
 
             restartedCoordinator.send(SnapshotCommand.SeedCache)
@@ -576,7 +718,7 @@ class SnapshotCoordinatorTest {
                 )
             val emitter = RecordingEmitter()
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
-            val coordinator = SnapshotCoordinator(scope, reader, RoomSnapshotManager(), emitter)
+            val coordinator = SnapshotCoordinator(scope, reader, RoomSnapshotManager(), emitter, missingPolicy = immediateMissingPolicy())
 
             // 1단계: 시드
             coordinator.send(SnapshotCommand.SeedCache)
@@ -694,7 +836,7 @@ class SnapshotCoordinatorTest {
             coordinator.enqueue(SnapshotCommand.MarkDirty(chatId = ChatId(100L)))
             coordinator.enqueue(SnapshotCommand.Drain(budget = 10))
 
-            assertEquals(1, coordinator.dirtyRoomCount())
+            assertEquals(0, coordinator.dirtyRoomCount())
 
             runCurrent()
 
@@ -810,3 +952,10 @@ private class RecordingEmitter :
         super.emit(events)
     }
 }
+
+private fun immediateMissingPolicy(): SnapshotMissingPolicy =
+    SnapshotMissingPolicy(
+        confirmAfterConsecutiveMisses = 1,
+        confirmAfterMs = 0L,
+        restoreQuietlyWhenPending = false,
+    )

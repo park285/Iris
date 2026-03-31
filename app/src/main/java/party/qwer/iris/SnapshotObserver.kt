@@ -20,6 +20,7 @@ internal class SnapshotObserver(
     private val intervalMs: Long = 5_000L,
     private val maxRoomsPerTick: Int = 32,
     private val fullReconcileIntervalMs: Long = 60_000L,
+    private val missingTombstoneTtlMs: Long? = null,
     private val clock: () -> Long = System::currentTimeMillis,
     dispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
@@ -43,7 +44,7 @@ internal class SnapshotObserver(
                             snapshotCoordinator.send(SnapshotCommand.FullReconcile)
                             nextFullReconcileAtMs = clock() + fullReconcileIntervalMs
                         }
-                        val backlog = snapshotCoordinator.dirtyRoomCount()
+                        val backlog = snapshotCoordinator.debugSnapshotSuspend().dirtyRoomCount
                         val drainBudget =
                             when {
                                 backlog >= maxRoomsPerTick * 8 -> maxRoomsPerTick * 4
@@ -51,6 +52,10 @@ internal class SnapshotObserver(
                                 else -> maxRoomsPerTick
                             }
                         snapshotCoordinator.send(SnapshotCommand.Drain(drainBudget))
+                        missingTombstoneTtlMs?.let { ttlMs ->
+                            val cutoffEpochMs = (clock() - ttlMs).coerceAtLeast(0L)
+                            snapshotCoordinator.send(SnapshotCommand.PruneMissing(cutoffEpochMs))
+                        }
                         checkpointJournal.flushIfDirty()
                     } catch (e: Exception) {
                         IrisLogger.error("[SnapshotObserver] error: ${e.message}", e)

@@ -34,6 +34,7 @@ internal object SnapshotRuntimeFactory {
         webhookOutboxStore: WebhookDeliveryStore,
         sseEventBus: SseEventBus,
         snapshotStateStore: SnapshotStateStore,
+        missingTombstoneTtlMs: Long? = null,
     ): SnapshotRuntime {
         val routingGateway = OutboxRoutingGateway(configManager, webhookOutboxStore)
         val roomSnapshotReader =
@@ -74,7 +75,7 @@ internal object SnapshotRuntimeFactory {
             ingressService = ingressService,
             observerHelper = observerHelper,
             dbObserver = DBObserver(observerHelper, configManager),
-            snapshotObserver = SnapshotObserver(snapshotCoordinator, checkpointJournal),
+            snapshotObserver = SnapshotObserver(snapshotCoordinator, checkpointJournal, missingTombstoneTtlMs = missingTombstoneTtlMs),
         )
     }
 

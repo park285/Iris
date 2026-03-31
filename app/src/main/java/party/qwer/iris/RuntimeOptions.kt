@@ -5,6 +5,7 @@ internal data class RuntimeOptions(
     val bindHost: String,
     val httpWorkerThreads: Int,
     val bridgeHealthRefreshMs: Long,
+    val snapshotMissingTombstoneTtlMs: Long?,
     val imageDeletionIntervalMs: Long,
     val imageRetentionMs: Long,
 ) {
@@ -22,6 +23,10 @@ internal data class RuntimeOptions(
                     positiveDurationMillisOrDefault(
                         env["IRIS_BRIDGE_HEALTH_REFRESH_MS"],
                         DEFAULT_BRIDGE_HEALTH_REFRESH_MS,
+                    ),
+                snapshotMissingTombstoneTtlMs =
+                    optionalPositiveDurationMillis(
+                        env["IRIS_SNAPSHOT_MISSING_TOMBSTONE_TTL_MS"],
                     ),
                 imageDeletionIntervalMs =
                     positiveDurationMillisOrDefault(
@@ -48,3 +53,5 @@ internal fun positiveIntOrDefault(
     rawValue: String?,
     defaultValue: Int,
 ): Int = rawValue?.trim()?.toIntOrNull()?.takeIf { it > 0 } ?: defaultValue
+
+internal fun optionalPositiveDurationMillis(rawValue: String?): Long? = rawValue?.trim()?.toLongOrNull()?.takeIf { it > 0L }
