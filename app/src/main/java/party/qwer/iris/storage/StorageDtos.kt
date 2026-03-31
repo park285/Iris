@@ -1,5 +1,7 @@
 package party.qwer.iris.storage
 
+import party.qwer.iris.model.ThreadOriginMetadata
+
 data class RoomRow(
     val id: ChatId,
     val type: String?,
@@ -65,6 +67,6 @@ data class ThreadRow(
     val originMessage: String?,
     // 원본 메시지 작성자 userId (복호화에 사용)
     val originUserId: UserId?,
-    // 원본 메시지의 v 필드 JSON (enc 값 추출용)
-    val originV: String?,
+    // 원본 메시지의 origin metadata
+    val originMetadata: ThreadOriginMetadata?,
 )

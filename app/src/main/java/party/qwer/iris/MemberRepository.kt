@@ -2,7 +2,6 @@ package party.qwer.iris
 
 import kotlinx.serialization.json.Json
 import party.qwer.iris.model.MemberActivityResponse
-import party.qwer.iris.model.MemberInfo
 import party.qwer.iris.model.MemberListResponse
 import party.qwer.iris.model.RoomInfoResponse
 import party.qwer.iris.model.RoomListResponse
@@ -44,6 +43,7 @@ class MemberRepository internal constructor(
     private val roomStatisticsService = dependencies.roomStatisticsService
     private val threadListingService = dependencies.threadListingService
     private val snapshotService = dependencies.snapshotService
+    private val periodSpecParser = PeriodSpecParser()
 
     companion object {
         internal val json = Json { ignoreUnknownKeys = true }
@@ -86,9 +86,7 @@ class MemberRepository internal constructor(
             ),
     )
 
-    fun listRooms(): RoomListResponse {
-        return roomCatalogService.listRooms()
-    }
+    fun listRooms(): RoomListResponse = roomCatalogService.listRooms()
 
     fun roomSummary(chatId: Long): RoomSummary? = roomCatalogService.roomSummary(chatId)
 
@@ -112,13 +110,24 @@ class MemberRepository internal constructor(
         period: String?,
         limit: Int,
         minMessages: Int = 0,
-    ): StatsResponse = roomStatisticsService.roomStats(chatId, period, limit, minMessages)
+    ): StatsResponse =
+        roomStatisticsService.roomStats(
+            chatId = ChatId(chatId),
+            period = periodSpecParser.parse(period),
+            limit = limit,
+            minMessages = minMessages,
+        )
 
     fun memberActivity(
         chatId: Long,
         userId: Long,
         period: String?,
-    ): MemberActivityResponse = roomStatisticsService.memberActivity(chatId, userId, period)
+    ): MemberActivityResponse =
+        roomStatisticsService.memberActivity(
+            chatId = ChatId(chatId),
+            userId = UserId(userId),
+            period = periodSpecParser.parse(period),
+        )
 
     fun listThreads(chatId: Long): ThreadListResponse = threadListingService.listThreads(chatId)
 
@@ -128,13 +137,11 @@ class MemberRepository internal constructor(
         chatId: ChatId? = null,
     ): Map<UserId, String> = identityResolver.resolveNicknamesBatch(userIds, linkId, chatId)
 
-    fun snapshot(chatId: Long): RoomSnapshotReadResult {
-        return snapshotService.snapshot(chatId)
-    }
+    fun snapshot(chatId: Long): RoomSnapshotReadResult = snapshotService.snapshot(chatId)
 
     fun parseJsonLongArray(raw: String?): Set<Long> = metadata.parseJsonLongArray(raw)
 
-    fun parsePeriodSeconds(period: String?): Long? = metadata.parsePeriodSeconds(period)
+    fun parsePeriodSeconds(period: String?): Long? = periodSpecParser.toSeconds(periodSpecParser.parse(period))
 
     fun resolveSenderRole(
         userId: Long,

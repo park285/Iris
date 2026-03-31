@@ -1,8 +1,12 @@
 package party.qwer.iris.storage
 
+import party.qwer.iris.ThreadOriginMetadataDecoder
+
 class ThreadQueries(
     private val db: SqlClient,
 ) {
+    private val originMetadataDecoder = ThreadOriginMetadataDecoder()
+
     companion object {
         // 방당 최대 반환할 스레드 수
         private const val THREAD_LIST_LIMIT = 20
@@ -55,7 +59,7 @@ class ThreadQueries(
                         lastActiveAt = row.long("last_active_at"),
                         originMessage = row.string("origin_message"),
                         originUserId = row.long("origin_user_id")?.let(::UserId),
-                        originV = row.string("origin_v"),
+                        originMetadata = originMetadataDecoder.decode(row.string("origin_v")),
                     )
                 },
             ),

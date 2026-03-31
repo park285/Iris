@@ -105,7 +105,6 @@ internal object RuntimeBuilders {
                 observedProfile = observedProfile,
                 resolveNicknamesBatch = { userIds, linkId, chatId -> identityResolver.resolveNicknamesBatch(userIds, linkId, chatId) },
                 botId = botId,
-                json = MemberRepository.json,
             )
         return MemberRepositoryDependencies(
             roomDirectory = roomDirectory,
@@ -132,7 +131,6 @@ internal object RuntimeBuilders {
             roomStatisticsService =
                 RoomStatisticsService(
                     roomStats = roomStats,
-                    metadata = metadata,
                     resolveLinkId = roomDirectory::resolveLinkId,
                     prepareNicknameLookup = { userIds, linkId, chatId -> identityResolver.prepareNicknameLookup(userIds, linkId, chatId) },
                     resolveNickname = { userId, linkId, chatId -> identityResolver.resolveNickname(userId, linkId, chatId) },

@@ -79,7 +79,8 @@ class ThreadQueriesTest {
         assertEquals(1743200000L, row.lastActiveAt)
         assertEquals("hello", row.originMessage)
         assertEquals(UserId(42L), row.originUserId)
-        assertEquals("""{"enc":1}""", row.originV)
+        requireNotNull(row.originMetadata)
+        assertEquals(1, row.originMetadata.enc)
     }
 
     @Test
@@ -115,7 +116,7 @@ class ThreadQueriesTest {
         assertNull(row.lastActiveAt)
         assertNull(row.originMessage)
         assertNull(row.originUserId)
-        assertNull(row.originV)
+        assertNull(row.originMetadata)
     }
 
     @Test

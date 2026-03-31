@@ -4,7 +4,6 @@ import party.qwer.iris.model.MemberInfo
 import party.qwer.iris.model.MemberListResponse
 import party.qwer.iris.model.roleCodeToName
 import party.qwer.iris.storage.ChatId
-import party.qwer.iris.storage.MemberActivityRow
 import party.qwer.iris.storage.MemberIdentityQueries
 import party.qwer.iris.storage.ObservedProfileQueries
 import party.qwer.iris.storage.RoomDirectoryQueries

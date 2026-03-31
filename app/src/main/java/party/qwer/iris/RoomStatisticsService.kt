@@ -3,6 +3,7 @@ package party.qwer.iris
 import party.qwer.iris.model.MemberActivityResponse
 import party.qwer.iris.model.MemberStats
 import party.qwer.iris.model.PeriodRange
+import party.qwer.iris.model.PeriodSpec
 import party.qwer.iris.model.StatsResponse
 import party.qwer.iris.storage.ChatId
 import party.qwer.iris.storage.LinkId
@@ -11,7 +12,6 @@ import party.qwer.iris.storage.UserId
 
 internal class RoomStatisticsService(
     private val roomStats: RoomStatsQueries,
-    private val metadata: MemberRepositoryMetadata,
     private val resolveLinkId: (ChatId) -> LinkId?,
     private val prepareNicknameLookup: (
         userIds: Collection<UserId>,
@@ -27,20 +27,19 @@ internal class RoomStatisticsService(
     private val nowEpochSeconds: () -> Long = { System.currentTimeMillis() / 1000 },
 ) {
     fun roomStats(
-        chatId: Long,
-        period: String?,
+        chatId: ChatId,
+        period: PeriodSpec,
         limit: Int,
         minMessages: Int = 0,
     ): StatsResponse {
-        val periodSecs = metadata.parsePeriodSeconds(period)
+        val periodSecs = PeriodSpecParser().toSeconds(period)
         val now = nowEpochSeconds()
         val from = if (periodSecs != null) now - periodSecs else 0L
-        val roomId = ChatId(chatId)
-        val linkId = resolveLinkId(roomId)
+        val linkId = resolveLinkId(chatId)
 
-        val rows = roomStats.loadTypeCountStats(roomId, from)
+        val rows = roomStats.loadTypeCountStats(chatId, from)
         val byUser = rows.groupBy { it.userId }
-        val nicknameByUser = prepareNicknameLookup(byUser.keys, linkId, roomId)
+        val nicknameByUser = prepareNicknameLookup(byUser.keys, linkId, chatId)
         val memberStats =
             byUser
                 .map { (userId, typeRows) ->
@@ -67,7 +66,7 @@ internal class RoomStatisticsService(
                 .filter { it.messageCount >= minMessages }
 
         return StatsResponse(
-            chatId = chatId,
+            chatId = chatId.value,
             period = PeriodRange(from, now),
             totalMessages = memberStats.sumOf { it.messageCount },
             activeMembers = memberStats.size,
@@ -76,17 +75,16 @@ internal class RoomStatisticsService(
     }
 
     fun memberActivity(
-        chatId: Long,
-        userId: Long,
-        period: String?,
+        chatId: ChatId,
+        userId: UserId,
+        period: PeriodSpec,
     ): MemberActivityResponse {
-        val periodSecs = metadata.parsePeriodSeconds(period)
+        val periodSecs = PeriodSpecParser().toSeconds(period)
         val now = nowEpochSeconds()
         val from = if (periodSecs != null) now - periodSecs else 0L
-        val roomId = ChatId(chatId)
-        val linkId = resolveLinkId(roomId)
+        val linkId = resolveLinkId(chatId)
 
-        val rows = roomStats.loadMessageLog(roomId, UserId(userId), from)
+        val rows = roomStats.loadMessageLog(chatId, userId, from)
         val types = mutableMapOf<String, Int>()
         val hours = IntArray(24)
         var firstAt: Long? = null
@@ -104,8 +102,8 @@ internal class RoomStatisticsService(
         }
 
         return MemberActivityResponse(
-            userId = userId,
-            nickname = resolveNickname(UserId(userId), linkId, roomId) ?: userId.toString(),
+            userId = userId.value,
+            nickname = resolveNickname(userId, linkId, chatId) ?: userId.value.toString(),
             messageCount = rows.size,
             firstMessageAt = firstAt,
             lastMessageAt = lastAt,

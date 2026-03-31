@@ -1,6 +1,4 @@
 package party.qwer.iris
-
-import org.json.JSONObject
 import party.qwer.iris.model.ThreadListResponse
 import party.qwer.iris.model.ThreadSummary
 import party.qwer.iris.storage.ChatId
@@ -23,9 +21,9 @@ internal class ThreadListingService(
         val threads =
             rows.map { row ->
                 val decryptedOrigin =
-                    if (row.originMessage != null && row.originV != null) {
+                    if (row.originMessage != null && row.originMetadata != null) {
                         try {
-                            val enc = JSONObject(row.originV).optInt("enc", 0)
+                            val enc = row.originMetadata.enc
                             val userId = row.originUserId?.value ?: botId
                             decrypt(enc, row.originMessage, userId)
                         } catch (_: Exception) {
