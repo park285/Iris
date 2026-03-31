@@ -18,6 +18,7 @@ internal fun Route.installConfigRoutes(
     authSupport: AuthSupport,
     configManager: ConfigManager,
     serverJson: Json,
+    protectedBodyReader: ProtectedBodyReader = ::readProtectedBody,
 ) {
     route("/config") {
         get {
@@ -25,24 +26,31 @@ internal fun Route.installConfigRoutes(
             call.respond(configManager.configResponse())
         }
         post("{name}") {
-            readProtectedBody(call, MAX_CONFIG_REQUEST_BODY_BYTES).use { bodyResult ->
-                if (!authSupport.requireInboundSignature(call, method = "POST", bodySha256Hex = bodyResult.sha256Hex)) {
-                    return@post
+            if (
+                !withVerifiedProtectedBody(
+                    call = call,
+                    maxBodyBytes = MAX_CONFIG_REQUEST_BODY_BYTES,
+                    bodyReader = protectedBodyReader,
+                    precheck = { authSupport.precheckInboundSignature(call, method = "POST") },
+                    finalize = { precheck, actualBodySha256Hex -> authSupport.finalizeSignature(call, precheck, actualBodySha256Hex) },
+                ) { bodyResult ->
+                    val name = call.parameters["name"] ?: throw ApiRequestException("missing config name")
+                    val request = bodyResult.decodeJson(serverJson, ConfigRequest.serializer())
+                    val updateOutcome = applyConfigUpdate(configManager, name, request)
+                    if (!configManager.saveConfigNow()) {
+                        throw ApiRequestException("failed to persist config update", HttpStatusCode.InternalServerError)
+                    }
+                    call.respond(
+                        configManager.configUpdateResponse(
+                            name = updateOutcome.name,
+                            persisted = true,
+                            applied = updateOutcome.applied,
+                            requiresRestart = updateOutcome.requiresRestart,
+                        ),
+                    )
                 }
-                val name = call.parameters["name"] ?: throw ApiRequestException("missing config name")
-                val request = bodyResult.decodeJson(serverJson, ConfigRequest.serializer())
-                val updateOutcome = applyConfigUpdate(configManager, name, request)
-                if (!configManager.saveConfigNow()) {
-                    throw ApiRequestException("failed to persist config update", HttpStatusCode.InternalServerError)
-                }
-                call.respond(
-                    configManager.configUpdateResponse(
-                        name = updateOutcome.name,
-                        persisted = true,
-                        applied = updateOutcome.applied,
-                        requiresRestart = updateOutcome.requiresRestart,
-                    ),
-                )
+            ) {
+                return@post
             }
         }
     }

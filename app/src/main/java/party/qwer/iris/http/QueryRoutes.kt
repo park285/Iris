@@ -17,47 +17,69 @@ internal fun Route.installQueryRoutes(
     authSupport: AuthSupport,
     serverJson: Json,
     memberRepo: MemberRepository?,
+    protectedBodyReader: ProtectedBodyReader = ::readProtectedBody,
 ) {
     val repo = memberRepo
 
     post("/query/room-summary") {
         val availableRepo = repo ?: internalServerFailure("member repository unavailable")
-        readProtectedBody(call, MAX_QUERY_REQUEST_BODY_BYTES).use { rawBody ->
-            if (!authSupport.requireBotControlSignature(call, method = "POST", bodySha256Hex = rawBody.sha256Hex)) {
-                return@post
+        if (
+            !withVerifiedProtectedBody(
+                call = call,
+                maxBodyBytes = MAX_QUERY_REQUEST_BODY_BYTES,
+                bodyReader = protectedBodyReader,
+                precheck = { authSupport.precheckBotControlSignature(call, method = "POST") },
+                finalize = { precheck, actualBodySha256Hex -> authSupport.finalizeSignature(call, precheck, actualBodySha256Hex) },
+            ) { rawBody ->
+                val request = rawBody.decodeJson(serverJson, QueryRoomSummaryRequest.serializer())
+                val summary = availableRepo.roomSummary(request.chatId) ?: invalidRequest("room not found")
+                call.respond(summary)
             }
-            val request = rawBody.decodeJson(serverJson, QueryRoomSummaryRequest.serializer())
-            val summary = availableRepo.roomSummary(request.chatId) ?: invalidRequest("room not found")
-            call.respond(summary)
+        ) {
+            return@post
         }
     }
 
     post("/query/member-stats") {
         val availableRepo = repo ?: internalServerFailure("member repository unavailable")
-        readProtectedBody(call, MAX_QUERY_REQUEST_BODY_BYTES).use { rawBody ->
-            if (!authSupport.requireBotControlSignature(call, method = "POST", bodySha256Hex = rawBody.sha256Hex)) {
-                return@post
+        if (
+            !withVerifiedProtectedBody(
+                call = call,
+                maxBodyBytes = MAX_QUERY_REQUEST_BODY_BYTES,
+                bodyReader = protectedBodyReader,
+                precheck = { authSupport.precheckBotControlSignature(call, method = "POST") },
+                finalize = { precheck, actualBodySha256Hex -> authSupport.finalizeSignature(call, precheck, actualBodySha256Hex) },
+            ) { rawBody ->
+                val request = rawBody.decodeJson(serverJson, QueryMemberStatsRequest.serializer())
+                call.respond(
+                    availableRepo.roomStats(
+                        chatId = request.chatId,
+                        period = request.period,
+                        limit = request.limit,
+                        minMessages = request.minMessages,
+                    ),
+                )
             }
-            val request = rawBody.decodeJson(serverJson, QueryMemberStatsRequest.serializer())
-            call.respond(
-                availableRepo.roomStats(
-                    chatId = request.chatId,
-                    period = request.period,
-                    limit = request.limit,
-                    minMessages = request.minMessages,
-                ),
-            )
+        ) {
+            return@post
         }
     }
 
     post("/query/recent-threads") {
         val availableRepo = repo ?: internalServerFailure("member repository unavailable")
-        readProtectedBody(call, MAX_QUERY_REQUEST_BODY_BYTES).use { rawBody ->
-            if (!authSupport.requireBotControlSignature(call, method = "POST", bodySha256Hex = rawBody.sha256Hex)) {
-                return@post
+        if (
+            !withVerifiedProtectedBody(
+                call = call,
+                maxBodyBytes = MAX_QUERY_REQUEST_BODY_BYTES,
+                bodyReader = protectedBodyReader,
+                precheck = { authSupport.precheckBotControlSignature(call, method = "POST") },
+                finalize = { precheck, actualBodySha256Hex -> authSupport.finalizeSignature(call, precheck, actualBodySha256Hex) },
+            ) { rawBody ->
+                val request = rawBody.decodeJson(serverJson, QueryRecentThreadsRequest.serializer())
+                call.respond(availableRepo.listThreads(request.chatId))
             }
-            val request = rawBody.decodeJson(serverJson, QueryRecentThreadsRequest.serializer())
-            call.respond(availableRepo.listThreads(request.chatId))
+        ) {
+            return@post
         }
     }
 }

@@ -26,6 +26,7 @@ import party.qwer.iris.storage.ObservedProfileQueries
 import party.qwer.iris.storage.RoomDirectoryQueries
 import party.qwer.iris.storage.RoomStatsQueries
 import party.qwer.iris.storage.ThreadQueries
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -249,6 +250,39 @@ class QueryRoutesTest {
             assertEquals(HttpStatusCode.Unauthorized, response.status)
         }
 
+    @Test
+    fun `invalid query signature is rejected before body read`() =
+        testApplication {
+            val bodyReads = AtomicInteger(0)
+            application {
+                install(ContentNegotiation) {
+                    json(serverJson)
+                }
+                routing {
+                    installQueryRoutes(
+                        authSupport = AuthSupport(party.qwer.iris.RequestAuthenticator(), queryRouteConfig),
+                        serverJson = serverJson,
+                        memberRepo = buildQueryRouteRepo(queryRouteLegacyQuery { _, _, _ -> emptyList() }),
+                        protectedBodyReader = { _, _ ->
+                            bodyReads.incrementAndGet()
+                            error("body should not be read before auth")
+                        },
+                    )
+                }
+            }
+
+            val body = """{"chatId":42}"""
+            val response =
+                client.post("/query/room-summary") {
+                    contentType(ContentType.Application.Json)
+                    setBody(body)
+                    applySignedHeaders("/query/room-summary", body, secret = "wrong-secret")
+                }
+
+            assertEquals(HttpStatusCode.Unauthorized, response.status)
+            assertEquals(0, bodyReads.get())
+        }
+
     private fun io.ktor.client.request.HttpRequestBuilder.applySignedHeaders(
         path: String,
         body: String,
@@ -269,6 +303,7 @@ class QueryRoutesTest {
         header("X-Iris-Timestamp", timestamp)
         header("X-Iris-Nonce", nonce)
         header("X-Iris-Signature", signature)
+        header("X-Iris-Body-Sha256", sha256Hex(body.toByteArray()))
     }
 }
 
@@ -291,7 +326,11 @@ private fun queryRouteStubResult(
     columns: List<String>,
     rows: List<Map<String, String?>>,
 ): QueryExecutionResult {
-    val cols = columns.map { party.qwer.iris.model.QueryColumn(name = it, sqliteType = "TEXT") }
+    val cols =
+        columns.map {
+            party.qwer.iris.model
+                .QueryColumn(name = it, sqliteType = "TEXT")
+        }
     val jsonRows =
         rows.map { row ->
             columns.map { col ->
@@ -306,7 +345,12 @@ private fun queryRouteEmptyResult(): QueryExecutionResult = QueryExecutionResult
 private fun queryRouteLegacyQuery(block: (String, Array<String?>?, Int) -> List<Map<String, String?>>): (String, Array<String?>?, Int) -> QueryExecutionResult =
     { sql, args, maxRows ->
         val rows = block(sql, args, maxRows)
-        val columns = rows.firstOrNull()?.keys?.toList().orEmpty()
+        val columns =
+            rows
+                .firstOrNull()
+                ?.keys
+                ?.toList()
+                .orEmpty()
         if (columns.isEmpty()) {
             queryRouteEmptyResult()
         } else {
