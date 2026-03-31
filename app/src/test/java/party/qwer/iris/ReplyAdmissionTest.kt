@@ -198,7 +198,7 @@ private class RecordingMessageSender : MessageSender {
         return ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
     }
 
-    override suspend fun sendNativePhotoBytesSuspend(
+    suspend fun sendNativePhotoBytesSuspend(
         room: Long,
         imageBytes: ByteArray,
         threadId: Long?,
@@ -210,7 +210,7 @@ private class RecordingMessageSender : MessageSender {
         return ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
     }
 
-    override suspend fun sendNativeMultiplePhotosBytesSuspend(
+    suspend fun sendNativeMultiplePhotosBytesSuspend(
         room: Long,
         imageBytesList: List<ByteArray>,
         threadId: Long?,
@@ -221,6 +221,30 @@ private class RecordingMessageSender : MessageSender {
         lastRequestId = requestId
         return ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
     }
+
+    override suspend fun sendNativeMultiplePhotosHandlesSuspend(
+        room: Long,
+        imageHandles: List<VerifiedImagePayloadHandle>,
+        threadId: Long?,
+        threadScope: Int?,
+        requestId: String?,
+    ): ReplyAdmissionResult =
+        try {
+            sendNativeMultiplePhotosBytesSuspend(
+                room = room,
+                imageBytesList =
+                    imageHandles.map { handle ->
+                        handle.openInputStream().use { input -> input.readBytes() }
+                    },
+                threadId = threadId,
+                threadScope = threadScope,
+                requestId = requestId,
+            )
+        } finally {
+            imageHandles.forEach { handle ->
+                runCatching { handle.close() }
+            }
+        }
 
     override suspend fun sendTextShareSuspend(
         room: Long,

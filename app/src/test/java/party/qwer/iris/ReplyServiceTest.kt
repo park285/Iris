@@ -28,8 +28,22 @@ class ReplyServiceTest {
     private companion object {
         private val VALID_TEST_PNG_BYTES =
             byteArrayOf(
-                0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-                0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+                0x89.toByte(),
+                0x50,
+                0x4E,
+                0x47,
+                0x0D,
+                0x0A,
+                0x1A,
+                0x0A,
+                0x00,
+                0x00,
+                0x00,
+                0x0D,
+                0x49,
+                0x48,
+                0x44,
+                0x52,
             )
     }
 
@@ -524,8 +538,7 @@ class ReplyServiceTest {
         assertFailsWith<IllegalArgumentException> {
             validateImageBytesPayload(
                 imageBytesList = payloads,
-                maxImagesPerRequest = 8,
-                maxTotalBytes = 10,
+                policy = ReplyImagePolicy(maxImagesPerRequest = 8, maxTotalBytes = 10),
             )
         }
     }

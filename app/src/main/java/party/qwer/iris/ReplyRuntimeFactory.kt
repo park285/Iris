@@ -10,8 +10,9 @@ internal data class ReplyRuntime(
 
 internal object ReplyRuntimeFactory {
     fun create(
-        config: ConfigProvider,
+        config: ReplyDispatchConfigProvider,
         bridgeClient: UdsImageBridgeClient,
+        imagePolicy: ReplyImagePolicy = ReplyImagePolicy(),
         imageDir: File = File(IRIS_IMAGE_DIR_PATH),
         startService: (Intent) -> Unit = { intent -> AndroidHiddenApi.startService(intent) },
         startActivityAs: (String, Intent) -> Unit = { callerPackage, intent ->
@@ -27,6 +28,7 @@ internal object ReplyRuntimeFactory {
                     startActivityAs = startActivityAs,
                     mediaScanner = { file -> broadcastMediaScan(Uri.fromFile(file)) },
                     imageDir = imageDir,
+                    imagePolicy = imagePolicy,
                 ),
         )
 }

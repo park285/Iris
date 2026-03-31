@@ -11,6 +11,7 @@ import party.qwer.iris.ReplyAdmissionStatus
 import party.qwer.iris.ReplyQueueKey
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ReplyAdmissionServiceTest {
@@ -277,6 +278,46 @@ class ReplyAdmissionServiceTest {
 
             assertEquals(ReplyAdmissionLifecycle.RUNNING, snapshot.lifecycle)
             service.shutdown()
+        }
+
+    @Test
+    fun `debugSnapshotSuspend exposes queue depth and worker age`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            var now = 10_000L
+            val service =
+                ReplyAdmissionService(
+                    maxWorkers = 16,
+                    perWorkerQueueCapacity = 16,
+                    workerIdleTimeoutMs = 60_000L,
+                    dispatcher = dispatcher,
+                    clock = { now },
+                )
+            service.startSuspend()
+
+            val key = ReplyQueueKey(chatId = 11L, threadId = 22L)
+            val started = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val blockingRequest = controlledPipelineRequest(started, release)
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, service.enqueueSuspend(key, blockingRequest).status)
+
+            advanceUntilIdle()
+            started.await()
+            now += 500L
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, service.enqueueSuspend(key, stubPipelineRequest()).status)
+
+            val snapshot = service.debugSnapshotSuspend()
+            assertEquals(ReplyAdmissionLifecycle.RUNNING, snapshot.lifecycle)
+            assertEquals(1, snapshot.activeWorkers)
+            assertEquals(0, snapshot.closingWorkers)
+            assertEquals(1, snapshot.workers.size)
+            assertEquals("OPEN", snapshot.workers.single().mailboxState)
+            assertEquals(1, snapshot.workers.single().queueDepth)
+            assertTrue(snapshot.workers.single().ageMs >= 500L)
+
+            release.complete(Unit)
+            advanceUntilIdle()
+            service.shutdownSuspend()
         }
 
     private fun stubPipelineRequest(blockMs: Long = 0L): PipelineRequest =

@@ -17,6 +17,10 @@ import party.qwer.iris.ConfigManager
 import party.qwer.iris.ConfigProvider
 import party.qwer.iris.MemberRepository
 import party.qwer.iris.MessageSender
+import party.qwer.iris.ReplyAdmissionResult
+import party.qwer.iris.model.ImageBridgeHealthResult
+import party.qwer.iris.model.ReplyLifecycleState
+import party.qwer.iris.model.ReplyStatusSnapshot
 import party.qwer.iris.sha256Hex
 import party.qwer.iris.signIrisRequestWithBodyHash
 import party.qwer.iris.storage.KakaoDbSqlClient
@@ -25,9 +29,6 @@ import party.qwer.iris.storage.ObservedProfileQueries
 import party.qwer.iris.storage.RoomDirectoryQueries
 import party.qwer.iris.storage.RoomStatsQueries
 import party.qwer.iris.storage.ThreadQueries
-import party.qwer.iris.model.ImageBridgeHealthResult
-import party.qwer.iris.model.ReplyLifecycleState
-import party.qwer.iris.model.ReplyStatusSnapshot
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -230,21 +231,45 @@ private val noOpMessageSender =
             requestId: String?,
         ) = error("unused")
 
-        override suspend fun sendNativePhotoBytesSuspend(
+        suspend fun sendNativePhotoBytesSuspend(
             room: Long,
             imageBytes: ByteArray,
             threadId: Long?,
             threadScope: Int?,
             requestId: String?,
-        ) = error("unused")
+        ): ReplyAdmissionResult = error("unused")
 
-        override suspend fun sendNativeMultiplePhotosBytesSuspend(
+        suspend fun sendNativeMultiplePhotosBytesSuspend(
             room: Long,
             imageBytesList: List<ByteArray>,
             threadId: Long?,
             threadScope: Int?,
             requestId: String?,
-        ) = error("unused")
+        ): ReplyAdmissionResult = error("unused")
+
+        override suspend fun sendNativeMultiplePhotosHandlesSuspend(
+            room: Long,
+            imageHandles: List<party.qwer.iris.VerifiedImagePayloadHandle>,
+            threadId: Long?,
+            threadScope: Int?,
+            requestId: String?,
+        ): ReplyAdmissionResult =
+            try {
+                sendNativeMultiplePhotosBytesSuspend(
+                    room = room,
+                    imageBytesList =
+                        imageHandles.map { handle ->
+                            handle.openInputStream().use { input -> input.readBytes() }
+                        },
+                    threadId = threadId,
+                    threadScope = threadScope,
+                    requestId = requestId,
+                )
+            } finally {
+                imageHandles.forEach { handle ->
+                    runCatching { handle.close() }
+                }
+            }
 
         override suspend fun sendTextShareSuspend(
             room: Long,

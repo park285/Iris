@@ -18,6 +18,7 @@ import party.qwer.iris.MessageSender
 import party.qwer.iris.QueryExecutionResult
 import party.qwer.iris.ReplyAdmissionResult
 import party.qwer.iris.ReplyAdmissionStatus
+import party.qwer.iris.VerifiedImagePayloadHandle
 import party.qwer.iris.model.QueryColumn
 import party.qwer.iris.model.ReplyLifecycleState
 import party.qwer.iris.model.ReplyStatusSnapshot
@@ -201,7 +202,7 @@ private val noopMessageSender =
             requestId: String?,
         ): ReplyAdmissionResult = ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
 
-        override suspend fun sendNativePhotoBytesSuspend(
+        suspend fun sendNativePhotoBytesSuspend(
             room: Long,
             imageBytes: ByteArray,
             threadId: Long?,
@@ -209,13 +210,37 @@ private val noopMessageSender =
             requestId: String?,
         ): ReplyAdmissionResult = ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
 
-        override suspend fun sendNativeMultiplePhotosBytesSuspend(
+        suspend fun sendNativeMultiplePhotosBytesSuspend(
             room: Long,
             imageBytesList: List<ByteArray>,
             threadId: Long?,
             threadScope: Int?,
             requestId: String?,
         ): ReplyAdmissionResult = ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
+
+        override suspend fun sendNativeMultiplePhotosHandlesSuspend(
+            room: Long,
+            imageHandles: List<VerifiedImagePayloadHandle>,
+            threadId: Long?,
+            threadScope: Int?,
+            requestId: String?,
+        ): ReplyAdmissionResult =
+            try {
+                sendNativeMultiplePhotosBytesSuspend(
+                    room = room,
+                    imageBytesList =
+                        imageHandles.map { handle ->
+                            handle.openInputStream().use { input -> input.readBytes() }
+                        },
+                    threadId = threadId,
+                    threadScope = threadScope,
+                    requestId = requestId,
+                )
+            } finally {
+                imageHandles.forEach { handle ->
+                    runCatching { handle.close() }
+                }
+            }
 
         override suspend fun sendTextShareSuspend(
             room: Long,

@@ -1,37 +1,50 @@
 package party.qwer.iris.reply
 
 import party.qwer.iris.PreparedImages
+import party.qwer.iris.ReplyImagePolicy
+import party.qwer.iris.VerifiedImagePayloadHandle
 import party.qwer.iris.cleanupPreparedImages
 import party.qwer.iris.ensureImageDir
-import party.qwer.iris.saveImage
-import party.qwer.iris.validateImageBytesPayload
+import party.qwer.iris.saveVerifiedStreamedImage
+import party.qwer.iris.validateImagePayloadSizes
 import java.io.File
 
 internal class MediaPreparationService(
     private val mediaScanner: (File) -> Unit,
     private val imageDir: File,
     private val imageMediaScanEnabled: Boolean,
-    private val maxImagesPerRequest: Int = 8,
-    private val maxTotalBytes: Int = 30 * 1024 * 1024,
+    private val imagePolicy: ReplyImagePolicy = ReplyImagePolicy(),
 ) : MediaPreparationCleanup {
-    fun prepare(
+    fun prepareVerifiedHandles(
         room: Long,
-        imageBytesList: List<ByteArray>,
+        imageHandles: List<VerifiedImagePayloadHandle>,
     ): PreparedImages {
-        val validatedPayloads =
-            validateImageBytesPayload(
-                imageBytesList = imageBytesList,
-                maxImagesPerRequest = maxImagesPerRequest,
-                maxTotalBytes = maxTotalBytes,
-            )
+        validateImagePayloadSizes(
+            imageSizes = imageHandles.map { it.sizeBytes },
+            policy = imagePolicy,
+        )
+        return prepareValidatedHandles(room = room, imageHandles = imageHandles)
+    }
+
+    private fun prepareValidatedHandles(
+        room: Long,
+        imageHandles: List<VerifiedImagePayloadHandle>,
+    ): PreparedImages {
         ensureImageDir(imageDir)
 
-        val imagePaths = ArrayList<String>(validatedPayloads.size)
-        val createdFiles = ArrayList<File>(validatedPayloads.size)
+        val imagePaths = ArrayList<String>(imageHandles.size)
+        val createdFiles = ArrayList<File>(imageHandles.size)
 
         try {
-            validatedPayloads.forEach { payload ->
-                val imageFile = saveImage(payload, imageDir)
+            imageHandles.forEach { handle ->
+                val imageFile =
+                    handle.openInputStream().use { input ->
+                        saveVerifiedStreamedImage(
+                            input = input,
+                            outputDir = imageDir,
+                            expectedFormat = handle.format,
+                        )
+                    }
                 createdFiles.add(imageFile)
                 if (imageMediaScanEnabled) {
                     mediaScanner(imageFile)

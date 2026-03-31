@@ -1,5 +1,9 @@
 package party.qwer.iris.reply
 
+import party.qwer.iris.ImageFormat
+import party.qwer.iris.VerifiedImagePayloadHandle
+import party.qwer.iris.verifiedImageHandle
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.atomic.AtomicInteger
@@ -13,8 +17,22 @@ class MediaPreparationServiceTest {
     private companion object {
         private val VALID_TEST_PNG_BYTES =
             byteArrayOf(
-                0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-                0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+                0x89.toByte(),
+                0x50,
+                0x4E,
+                0x47,
+                0x0D,
+                0x0A,
+                0x1A,
+                0x0A,
+                0x00,
+                0x00,
+                0x00,
+                0x0D,
+                0x49,
+                0x48,
+                0x44,
+                0x52,
             )
     }
 
@@ -28,7 +46,7 @@ class MediaPreparationServiceTest {
                 imageMediaScanEnabled = false,
             )
 
-        val result = service.prepare(room = 100L, imageBytesList = listOf(VALID_TEST_PNG_BYTES))
+        val result = service.prepareVerifiedHandles(room = 100L, imageHandles = listOf(verifiedImageHandle(VALID_TEST_PNG_BYTES)))
 
         assertEquals(100L, result.room)
         assertEquals(1, result.imagePaths.size)
@@ -50,7 +68,7 @@ class MediaPreparationServiceTest {
                 imageMediaScanEnabled = false,
             )
 
-        val result = service.prepare(room = 200L, imageBytesList = List(3) { VALID_TEST_PNG_BYTES })
+        val result = service.prepareVerifiedHandles(room = 200L, imageHandles = List(3) { verifiedImageHandle(VALID_TEST_PNG_BYTES) })
 
         assertEquals(3, result.imagePaths.size)
         assertEquals(3, result.files.size)
@@ -72,7 +90,7 @@ class MediaPreparationServiceTest {
                 imageMediaScanEnabled = true,
             )
 
-        val result = service.prepare(room = 300L, imageBytesList = listOf(VALID_TEST_PNG_BYTES))
+        val result = service.prepareVerifiedHandles(room = 300L, imageHandles = listOf(verifiedImageHandle(VALID_TEST_PNG_BYTES)))
 
         assertEquals(1, scannedFiles.size)
         service.cleanup(result)
@@ -90,7 +108,7 @@ class MediaPreparationServiceTest {
                 imageMediaScanEnabled = false,
             )
 
-        val result = service.prepare(room = 400L, imageBytesList = listOf(VALID_TEST_PNG_BYTES))
+        val result = service.prepareVerifiedHandles(room = 400L, imageHandles = listOf(verifiedImageHandle(VALID_TEST_PNG_BYTES)))
 
         assertEquals(0, scannedFiles.size)
         service.cleanup(result)
@@ -108,7 +126,7 @@ class MediaPreparationServiceTest {
             )
 
         assertFailsWith<IllegalArgumentException> {
-            service.prepare(room = 500L, imageBytesList = listOf(ByteArray(0)))
+            service.prepareVerifiedHandles(room = 500L, imageHandles = emptyList())
         }
 
         val remaining = imageDir.listFiles()?.filter { !it.name.endsWith(".tmp") } ?: emptyList()
@@ -129,10 +147,46 @@ class MediaPreparationServiceTest {
                 imageMediaScanEnabled = false,
             )
 
-        val result = service.prepare(room = 600L, imageBytesList = listOf(VALID_TEST_PNG_BYTES))
+        val result = service.prepareVerifiedHandles(room = 600L, imageHandles = listOf(verifiedImageHandle(VALID_TEST_PNG_BYTES)))
 
         assertTrue(imageDir.exists())
         service.cleanup(result)
         parentDir.deleteRecursively()
+    }
+
+    @Test
+    fun `prepareVerifiedHandles rejects mismatched verified format header`() {
+        val jpegBytes =
+            byteArrayOf(
+                0xFF.toByte(),
+                0xD8.toByte(),
+                0xFF.toByte(),
+                0xE0.toByte(),
+            )
+        val imageDir = Files.createTempDirectory("iris-media-mismatch").toFile()
+        val service =
+            MediaPreparationService(
+                mediaScanner = {},
+                imageDir = imageDir,
+                imageMediaScanEnabled = false,
+            )
+
+        val mismatchedHandle =
+            object : VerifiedImagePayloadHandle {
+                override val sha256Hex: String = "deadbeef"
+                override val sizeBytes: Long = jpegBytes.size.toLong()
+                override val format: ImageFormat = ImageFormat.PNG
+                override val contentType: String = "image/png"
+
+                override fun openInputStream() = ByteArrayInputStream(jpegBytes)
+
+                override fun close() = Unit
+            }
+
+        assertFailsWith<IllegalArgumentException> {
+            service.prepareVerifiedHandles(room = 700L, imageHandles = listOf(mismatchedHandle))
+        }
+
+        imageDir.deleteRecursively()
     }
 }

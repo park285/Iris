@@ -87,6 +87,55 @@ internal fun saveStreamedImage(
     }
 }
 
+internal fun saveVerifiedStreamedImage(
+    input: InputStream,
+    outputDir: File,
+    expectedFormat: ImageFormat,
+): File {
+    val tempFile = File(outputDir, "${UUID.randomUUID()}.upload.tmp")
+    val sample = ArrayList<Byte>(32)
+    try {
+        FileOutputStream(tempFile).use { output ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val read = input.read(buffer)
+                if (read <= 0) {
+                    break
+                }
+                val remainingSampleCapacity = 32 - sample.size
+                if (remainingSampleCapacity > 0) {
+                    repeat(minOf(read, remainingSampleCapacity)) { index ->
+                        sample += buffer[index]
+                    }
+                }
+                output.write(buffer, 0, read)
+            }
+            output.fd.sync()
+        }
+        val actualFormat = requireKnownImageFormat(sample.toByteArray())
+        require(actualFormat == expectedFormat) { "mismatched image format" }
+        val targetFile = File(outputDir, "${UUID.randomUUID()}.${detectImageFileExtension(sample.toByteArray())}")
+        try {
+            Files.move(
+                tempFile.toPath(),
+                targetFile.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+            )
+            return targetFile
+        } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+            Files.move(
+                tempFile.toPath(),
+                targetFile.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+            return targetFile
+        }
+    } catch (error: Exception) {
+        tempFile.delete()
+        throw error
+    }
+}
+
 internal fun detectImageFileExtension(imageBytes: ByteArray): String {
     if (isPngSignature(imageBytes)) {
         return "png"

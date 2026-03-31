@@ -33,6 +33,7 @@ internal class ReplyService(
     private val transport: ReplyTransport,
     private val dispatchScheduler: DispatchScheduler,
     private val statusTracker: ReplyStatusTracker,
+    private val imagePolicy: ReplyImagePolicy,
 ) : MessageSender {
     private constructor(components: ReplyServiceComponents) : this(
         components.admissionService,
@@ -41,12 +42,10 @@ internal class ReplyService(
         components.transport,
         components.dispatchScheduler,
         components.statusTracker,
+        components.imagePolicy,
     )
 
     private companion object {
-        private const val MAX_IMAGES_PER_REQUEST = 8
-        private const val MAX_TOTAL_IMAGE_PAYLOAD_BYTES_PER_REQUEST = 30 * 1024 * 1024
-
         private data class ReplyServiceComponents(
             val admissionService: ReplyAdmissionService,
             val commandFactory: ReplyCommandFactory,
@@ -54,6 +53,7 @@ internal class ReplyService(
             val transport: ReplyTransport,
             val dispatchScheduler: DispatchScheduler,
             val statusTracker: ReplyStatusTracker,
+            val imagePolicy: ReplyImagePolicy,
         )
 
         private fun defaultImageMediaScanEnabled(): Boolean =
@@ -65,7 +65,7 @@ internal class ReplyService(
                 ?: true
 
         private fun buildComponents(
-            config: ConfigProvider,
+            config: ReplyDispatchConfigProvider,
             nativeImageReplySender: NativeImageReplySender,
             notificationReplySender: (String, Long, CharSequence, Long?, Int?) -> Unit,
             sharedTextReplySender: (Long, CharSequence, Long?, Int?) -> Unit,
@@ -75,12 +75,14 @@ internal class ReplyService(
             dispatchClock: () -> Long,
             statusTickerNanos: () -> Long,
             statusUpdatedAtEpochMs: () -> Long,
+            imagePolicy: ReplyImagePolicy,
         ): ReplyServiceComponents {
             val mediaPreparationService =
                 MediaPreparationService(
                     mediaScanner = mediaScanner,
                     imageDir = imageDir,
                     imageMediaScanEnabled = defaultImageMediaScanEnabled(),
+                    imagePolicy = imagePolicy,
                 )
             val dispatchScheduler =
                 DispatchScheduler(
@@ -112,40 +114,42 @@ internal class ReplyService(
                     ),
                 dispatchScheduler = dispatchScheduler,
                 statusTracker = statusTracker,
+                imagePolicy = imagePolicy,
             )
         }
 
         private fun buildAdmissionRequestProcessor(
             dispatchScheduler: DispatchScheduler,
             statusTracker: ReplyStatusTracker,
-        ): suspend (PipelineRequest) -> Unit = { request ->
-            val pipelineRequest = request as? ReplyPipelineRequest
-            if (pipelineRequest == null) {
-                request.prepare()
-                dispatchScheduler.awaitPermit()
-                request.send()
-            } else {
-                try {
-                    statusTracker.transition(pipelineRequest.requestId, ReplyTransitionEvent.PrepareStarted)
-                    pipelineRequest.prepare()
-                    statusTracker.transition(pipelineRequest.requestId, ReplyTransitionEvent.PrepareCompleted)
+        ): suspend (PipelineRequest) -> Unit =
+            { request ->
+                val pipelineRequest = request as? ReplyPipelineRequest
+                if (pipelineRequest == null) {
+                    request.prepare()
                     dispatchScheduler.awaitPermit()
-                    statusTracker.transition(pipelineRequest.requestId, ReplyTransitionEvent.SendStarted)
-                    pipelineRequest.send()
-                    statusTracker.transition(pipelineRequest.requestId, ReplyTransitionEvent.SendCompleted)
-                } catch (e: Exception) {
-                    statusTracker.transition(
-                        pipelineRequest.requestId,
-                        ReplyTransitionEvent.Failed(e.message ?: "reply pipeline failure"),
-                    )
-                    IrisLogger.error("[ReplyService] pipeline send error: ${e.message}", e)
+                    request.send()
+                } else {
+                    try {
+                        statusTracker.transition(pipelineRequest.requestId, ReplyTransitionEvent.PrepareStarted)
+                        pipelineRequest.prepare()
+                        statusTracker.transition(pipelineRequest.requestId, ReplyTransitionEvent.PrepareCompleted)
+                        dispatchScheduler.awaitPermit()
+                        statusTracker.transition(pipelineRequest.requestId, ReplyTransitionEvent.SendStarted)
+                        pipelineRequest.send()
+                        statusTracker.transition(pipelineRequest.requestId, ReplyTransitionEvent.SendCompleted)
+                    } catch (e: Exception) {
+                        statusTracker.transition(
+                            pipelineRequest.requestId,
+                            ReplyTransitionEvent.Failed(e.message ?: "reply pipeline failure"),
+                        )
+                        IrisLogger.error("[ReplyService] pipeline send error: ${e.message}", e)
+                    }
                 }
             }
-        }
     }
 
     internal constructor(
-        config: ConfigProvider,
+        config: ReplyDispatchConfigProvider,
         nativeImageReplySender: NativeImageReplySender = UdsImageReplySender(),
         startService: (Intent) -> Unit = { intent -> AndroidHiddenApi.startService(intent) },
         startActivityAs: (String, Intent) -> Unit = { callerPackage, intent ->
@@ -163,6 +167,7 @@ internal class ReplyService(
         dispatchClock: () -> Long = System::currentTimeMillis,
         statusTickerNanos: () -> Long = System::nanoTime,
         statusUpdatedAtEpochMs: () -> Long = System::currentTimeMillis,
+        imagePolicy: ReplyImagePolicy = ReplyImagePolicy(),
     ) : this(
         components =
             buildComponents(
@@ -176,6 +181,7 @@ internal class ReplyService(
                 dispatchClock = dispatchClock,
                 statusTickerNanos = statusTickerNanos,
                 statusUpdatedAtEpochMs = statusUpdatedAtEpochMs,
+                imagePolicy = imagePolicy,
             ),
     )
 
@@ -222,7 +228,7 @@ internal class ReplyService(
         )
     }
 
-    override suspend fun sendNativePhotoBytesSuspend(
+    suspend fun sendNativePhotoBytesSuspend(
         room: Long,
         imageBytes: ByteArray,
         threadId: Long?,
@@ -230,7 +236,7 @@ internal class ReplyService(
         requestId: String?,
     ): ReplyAdmissionResult = sendNativeMultiplePhotosBytesSuspend(room, listOf(imageBytes), threadId, threadScope, requestId)
 
-    override suspend fun sendNativeMultiplePhotosBytesSuspend(
+    suspend fun sendNativeMultiplePhotosBytesSuspend(
         room: Long,
         imageBytesList: List<ByteArray>,
         threadId: Long?,
@@ -239,10 +245,9 @@ internal class ReplyService(
     ): ReplyAdmissionResult {
         val validatedPayloads =
             try {
-                validateImageBytesPayload(
+                verifyImagePayloadHandles(
                     imageBytesList = imageBytesList,
-                    maxImagesPerRequest = MAX_IMAGES_PER_REQUEST,
-                    maxTotalBytes = MAX_TOTAL_IMAGE_PAYLOAD_BYTES_PER_REQUEST,
+                    policy = imagePolicy,
                 )
             } catch (_: IllegalArgumentException) {
                 return ReplyAdmissionResult(
@@ -251,16 +256,56 @@ internal class ReplyService(
                 )
             }
 
-        return enqueueRequest(
-            chatId = room,
+        return sendNativeMultiplePhotosHandlesSuspend(
+            room = room,
+            imageHandles = validatedPayloads,
             threadId = threadId,
+            threadScope = threadScope,
             requestId = requestId,
-            pipelineRequest =
-                NativeImagePipelineRequest(
-                    command = commandFactory.nativeImageReply(room, validatedPayloads.size, threadId, threadScope, requestId),
-                    imageBytesList = validatedPayloads,
-                ),
         )
+    }
+
+    override suspend fun sendNativeMultiplePhotosHandlesSuspend(
+        room: Long,
+        imageHandles: List<VerifiedImagePayloadHandle>,
+        threadId: Long?,
+        threadScope: Int?,
+        requestId: String?,
+    ): ReplyAdmissionResult {
+        val validatedHandles =
+            try {
+                validateImagePayloadSizes(
+                    imageSizes = imageHandles.map { it.sizeBytes },
+                    policy = imagePolicy,
+                )
+                imageHandles.toList()
+            } catch (_: IllegalArgumentException) {
+                imageHandles.forEach { handle ->
+                    runCatching { handle.close() }
+                }
+                return ReplyAdmissionResult(
+                    ReplyAdmissionStatus.INVALID_PAYLOAD,
+                    "image replies require valid binary payload",
+                )
+            }
+
+        val result =
+            enqueueRequest(
+                chatId = room,
+                threadId = threadId,
+                requestId = requestId,
+                pipelineRequest =
+                    NativeImageHandlePipelineRequest(
+                        command = commandFactory.nativeImageReply(room, validatedHandles.size, threadId, threadScope, requestId),
+                        imageHandles = validatedHandles,
+                    ),
+            )
+        if (result.status != ReplyAdmissionStatus.ACCEPTED) {
+            validatedHandles.forEach { handle ->
+                runCatching { handle.close() }
+            }
+        }
+        return result
     }
 
     internal suspend fun enqueueActionSuspend(
@@ -283,8 +328,7 @@ internal class ReplyService(
         lane: ReplySendLane = ReplySendLane.TEXT,
         requestId: String? = null,
         action: suspend () -> Unit,
-    ): ReplyAdmissionResult =
-        runBlocking { enqueueActionSuspend(chatId, threadId, lane, requestId, action) }
+    ): ReplyAdmissionResult = runBlocking { enqueueActionSuspend(chatId, threadId, lane, requestId, action) }
 
     override suspend fun sendTextShareSuspend(
         room: Long,
@@ -335,6 +379,7 @@ internal class ReplyService(
         return if (result.status == ReplyAdmissionStatus.ACCEPTED) {
             result
         } else {
+            pipelineRequest.discard()
             if (requestId != null && statusTracker.get(requestId)?.state == party.qwer.iris.model.ReplyLifecycleState.QUEUED) {
                 statusTracker.transition(requestId, ReplyTransitionEvent.Failed(result.message ?: result.status.name))
             }
@@ -373,21 +418,34 @@ internal class ReplyService(
         }
     }
 
-    private inner class NativeImagePipelineRequest(
+    private inner class NativeImageHandlePipelineRequest(
         private val command: NativeImageReplyCommand,
-        imageBytesList: List<ByteArray>,
+        imageHandles: List<VerifiedImagePayloadHandle>,
     ) : ReplyPipelineRequest {
         override val requestId: String? = command.requestId
         private lateinit var preparedImages: PreparedImages
-        private var imageBytesList: List<ByteArray>? = imageBytesList
+        private var imageHandles: List<VerifiedImagePayloadHandle>? = imageHandles
 
         override suspend fun prepare() {
-            val payloads = imageBytesList ?: error("image payload bytes already consumed")
-            IrisLogger.info(
-                "[ReplyService] preparing image reply room=${command.chatId} threadId=${command.threadId} imageCount=${command.imageCount}",
-            )
-            preparedImages = mediaPreparationService.prepare(command.chatId, payloads)
-            imageBytesList = null
+            val payloads = imageHandles ?: error("image payload handles already consumed")
+            try {
+                IrisLogger.info(
+                    "[ReplyService] preparing streamed image reply room=${command.chatId} threadId=${command.threadId} imageCount=${command.imageCount}",
+                )
+                preparedImages = mediaPreparationService.prepareVerifiedHandles(command.chatId, payloads)
+            } finally {
+                payloads.forEach { handle ->
+                    runCatching { handle.close() }
+                }
+                imageHandles = null
+            }
+        }
+
+        override suspend fun discard() {
+            imageHandles?.forEach { handle ->
+                runCatching { handle.close() }
+            }
+            imageHandles = null
         }
 
         override suspend fun send() {
