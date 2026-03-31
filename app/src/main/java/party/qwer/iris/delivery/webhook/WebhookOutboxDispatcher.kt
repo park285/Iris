@@ -1,11 +1,11 @@
 package party.qwer.iris.delivery.webhook
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -13,15 +13,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import party.qwer.iris.ConfigProvider
-import party.qwer.iris.delivery.webhook.DeliveryRetrySchedule
-import party.qwer.iris.delivery.webhook.WebhookDelivery
-import party.qwer.iris.delivery.webhook.WebhookDeliveryClient
-import party.qwer.iris.delivery.webhook.WebhookHttpClientFactory
-import party.qwer.iris.delivery.webhook.WebhookRequestFactory
-import party.qwer.iris.delivery.webhook.nextBackoffDelayMs
-import party.qwer.iris.delivery.webhook.nextDeliveryRetrySchedule
-import party.qwer.iris.delivery.webhook.resolveWebhookTransport
-import party.qwer.iris.delivery.webhook.shouldRetryStatus
 import party.qwer.iris.persistence.ClaimedDelivery
 import party.qwer.iris.persistence.WebhookDeliveryStore
 import java.io.Closeable
@@ -32,13 +23,8 @@ internal class WebhookOutboxDispatcher(
     private val store: WebhookDeliveryStore,
     transportOverride: String? = null,
     private val partitionCount: Int = 4,
-    private val pollIntervalMs: Long = 200L,
-    private val maxClaimBatchSize: Int = 64,
-    private val partitionQueueCapacity: Int = 64,
-    private val maxDeliveryAttempts: Int = H2cDispatcher.MAX_DELIVERY_ATTEMPTS,
+    private val deliveryPolicy: WebhookDeliveryPolicy = WebhookDeliveryPolicy(),
     private val backoffDelayProvider: (Int) -> Long = ::nextBackoffDelayMs,
-    private val claimRecoveryIntervalMs: Long = 30_000L,
-    private val claimExpirationMs: Long = 60_000L,
     private val clock: () -> Long = System::currentTimeMillis,
     dispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : Closeable {
@@ -73,7 +59,7 @@ internal class WebhookOutboxDispatcher(
                     }
                     recoverExpiredClaimsIfDue()
                     pumpReadyEntries()
-                    delay(pollIntervalMs)
+                    delay(deliveryPolicy.pollIntervalMs)
                 }
             }
     }
@@ -87,12 +73,12 @@ internal class WebhookOutboxDispatcher(
     }
 
     private fun recoverExpiredClaimsNow(now: Long = clock()) {
-        store.recoverExpiredClaims(olderThanMs = claimExpirationMs)
-        nextClaimRecoveryAtMs = now + claimRecoveryIntervalMs
+        store.recoverExpiredClaims(olderThanMs = deliveryPolicy.claimExpirationMs)
+        nextClaimRecoveryAtMs = now + deliveryPolicy.claimRecoveryIntervalMs
     }
 
     private suspend fun pumpReadyEntries() {
-        val claimed = store.claimReady(maxClaimBatchSize)
+        val claimed = store.claimReady(deliveryPolicy.maxClaimBatchSize)
         claimed.forEach { entry ->
             outstandingClaims[entry.id] = entry
             val partition =
@@ -103,7 +89,7 @@ internal class WebhookOutboxDispatcher(
             if (sendResult.isFailure) {
                 releaseClaimIfOutstanding(
                     entry = entry,
-                    nextAttemptAt = clock() + pollIntervalMs,
+                    nextAttemptAt = clock() + deliveryPolicy.pollIntervalMs,
                     reason = "partition queue saturated: route=${entry.route}, partition=${partition.index}",
                 )
             }
@@ -115,7 +101,7 @@ internal class WebhookOutboxDispatcher(
             route = route,
             partitions =
                 List(partitionCount.coerceAtLeast(1)) { index ->
-                    val channel = Channel<ClaimedDelivery>(partitionQueueCapacity)
+                    val channel = Channel<ClaimedDelivery>(deliveryPolicy.partitionQueueCapacity)
                     val job =
                         coroutineScope.launch {
                             for (entry in channel) {
@@ -183,7 +169,7 @@ internal class WebhookOutboxDispatcher(
             val retrySchedule =
                 nextDeliveryRetrySchedule(
                     attempt = entry.attemptCount,
-                    maxDeliveryAttempts = maxDeliveryAttempts,
+                    maxDeliveryAttempts = deliveryPolicy.maxDeliveryAttempts,
                     backoffDelayProvider = backoffDelayProvider,
                 )
         ) {

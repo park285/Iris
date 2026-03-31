@@ -3,7 +3,7 @@ package party.qwer.iris.delivery.webhook
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import party.qwer.iris.ConfigProvider
+import party.qwer.iris.ActiveSecretProvider
 
 internal data class WebhookDelivery(
     val url: String,
@@ -14,7 +14,7 @@ internal data class WebhookDelivery(
 )
 
 internal class WebhookRequestFactory(
-    private val config: ConfigProvider,
+    private val config: ActiveSecretProvider,
 ) {
     fun create(delivery: WebhookDelivery): Request =
         Request
@@ -24,7 +24,7 @@ internal class WebhookRequestFactory(
             .header(HEADER_IRIS_MESSAGE_ID, delivery.messageId)
             .header(HEADER_IRIS_ROUTE, delivery.route)
             .apply {
-                val webhookToken = config.outboundWebhookToken
+                val webhookToken = config.activeOutboundWebhookToken()
                 if (webhookToken.isNotBlank()) {
                     header(HEADER_IRIS_TOKEN, webhookToken)
                 }

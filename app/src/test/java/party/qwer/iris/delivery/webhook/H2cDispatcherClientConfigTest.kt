@@ -1,6 +1,8 @@
 package party.qwer.iris.delivery.webhook
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertSame
 
 class H2cDispatcherClientConfigTest {
@@ -58,6 +60,52 @@ class H2cDispatcherClientConfigTest {
             http1Client.writeTimeoutMillis.toLong(),
             "http1Client writeTimeout",
         )
+    }
+
+    @Test
+    fun `transport security mode defaults to loopback cleartext only`() {
+        assertEquals(
+            TransportSecurityMode.LOOPBACK_HTTP_ALLOWED,
+            resolveTransportSecurityMode(rawMode = null, allowCleartextHttp = false),
+        )
+        assertEquals(
+            TransportSecurityMode.PRIVATE_OVERLAY_HTTP_ALLOWED,
+            resolveTransportSecurityMode(rawMode = null, allowCleartextHttp = true),
+        )
+        assertEquals(
+            TransportSecurityMode.TLS_REQUIRED,
+            resolveTransportSecurityMode(rawMode = "tls_required", allowCleartextHttp = true),
+        )
+    }
+
+    @Test
+    fun `non loopback cleartext webhook is rejected in loopback mode`() {
+        val factory =
+            WebhookHttpClientFactory(
+                transport = WebhookTransport.H2C,
+                sharedDispatcher = okhttp3.Dispatcher(),
+                sharedConnectionPool = okhttp3.ConnectionPool(),
+                transportSecurityMode = TransportSecurityMode.LOOPBACK_HTTP_ALLOWED,
+            )
+
+        assertFailsWith<IllegalArgumentException> {
+            factory.clientFor("http://100.100.1.3:30001/webhook/iris")
+        }
+    }
+
+    @Test
+    fun `non loopback cleartext webhook is allowed in private overlay mode`() {
+        val factory =
+            WebhookHttpClientFactory(
+                transport = WebhookTransport.H2C,
+                sharedDispatcher = okhttp3.Dispatcher(),
+                sharedConnectionPool = okhttp3.ConnectionPool(),
+                transportSecurityMode = TransportSecurityMode.PRIVATE_OVERLAY_HTTP_ALLOWED,
+            )
+
+        val client = factory.clientFor("http://100.100.1.3:30001/webhook/iris")
+        val h2cClient = readClientField(factory, "h2cClient")
+        assertSame(h2cClient, client)
     }
 
     private fun readDispatcherField(h2cDispatcher: H2cDispatcher): okhttp3.Dispatcher =

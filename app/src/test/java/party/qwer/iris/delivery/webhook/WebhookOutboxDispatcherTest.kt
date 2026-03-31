@@ -66,9 +66,12 @@ class WebhookOutboxDispatcherTest {
                 store = store,
                 transportOverride = "http1",
                 partitionCount = 1,
-                partitionQueueCapacity = 1,
-                pollIntervalMs = 25L,
-                maxClaimBatchSize = 10,
+                deliveryPolicy =
+                    WebhookDeliveryPolicy(
+                        partitionQueueCapacity = 1,
+                        pollIntervalMs = 25L,
+                        maxClaimBatchSize = 10,
+                    ),
                 clock = fakeClock::get,
             ).use { dispatcher ->
                 dispatcher.start()
@@ -98,9 +101,12 @@ class WebhookOutboxDispatcherTest {
                 WebhookOutboxDispatcher(
                     config = config,
                     store = store,
-                    pollIntervalMs = 25L,
-                    maxClaimBatchSize = 1,
-                    claimRecoveryIntervalMs = recoveryInterval,
+                    deliveryPolicy =
+                        WebhookDeliveryPolicy(
+                            pollIntervalMs = 25L,
+                            maxClaimBatchSize = 1,
+                            claimRecoveryIntervalMs = recoveryInterval,
+                        ),
                     clock = { testScheduler.currentTime },
                     dispatcher = dispatcher,
                 )
@@ -130,9 +136,12 @@ class WebhookOutboxDispatcherTest {
                 WebhookOutboxDispatcher(
                     config = config,
                     store = store,
-                    pollIntervalMs = 1_000L,
-                    maxClaimBatchSize = 1,
-                    claimRecoveryIntervalMs = 30_000L,
+                    deliveryPolicy =
+                        WebhookDeliveryPolicy(
+                            pollIntervalMs = 1_000L,
+                            maxClaimBatchSize = 1,
+                            claimRecoveryIntervalMs = 30_000L,
+                        ),
                     clock = { testScheduler.currentTime },
                     dispatcher = dispatcher,
                 )
@@ -177,8 +186,11 @@ class WebhookOutboxDispatcherTest {
                 config = config,
                 store = store,
                 transportOverride = "http1",
-                pollIntervalMs = 25L,
-                maxClaimBatchSize = 1,
+                deliveryPolicy =
+                    WebhookDeliveryPolicy(
+                        pollIntervalMs = 25L,
+                        maxClaimBatchSize = 1,
+                    ),
                 clock = fakeClock::get,
             )
 
@@ -197,6 +209,51 @@ class WebhookOutboxDispatcherTest {
         assertEquals(listOf(1L), store.releasedIds.toList())
         assertTrue(store.releaseReasons.contains("dispatcher shutdown"))
         assertTrue(store.retriedIds.isEmpty(), "graceful close should not increment retry attempt")
+    }
+
+    @Test
+    fun `dispatcher uses delivery policy max attempts instead of legacy dispatcher constant`() {
+        val configPath = Files.createTempFile("iris-outbox-policy", ".json").toFile().absolutePath
+        val config = ConfigManager(configPath = configPath)
+        val port = reservePort()
+        config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, "http://127.0.0.1:$port/webhook/iris")
+        val deadLatch = CountDownLatch(1)
+        val store =
+            RecordingWebhookDeliveryStore(
+                claimedEntries = listOf(claimedEntry(id = 1L, roomId = 1L, messageId = "msg-policy")),
+                onDead = { deadLatch.countDown() },
+            )
+        val server =
+            HttpServer.create(InetSocketAddress("127.0.0.1", port), 0).apply {
+                createContext("/webhook/iris") { exchange ->
+                    exchange.sendResponseHeaders(503, -1)
+                    exchange.close()
+                }
+                executor = Executors.newSingleThreadExecutor()
+                start()
+            }
+
+        try {
+            WebhookOutboxDispatcher(
+                config = config,
+                store = store,
+                transportOverride = "http1",
+                deliveryPolicy = WebhookDeliveryPolicy(maxDeliveryAttempts = 1),
+                clock = fakeClock::get,
+            ).use { dispatcher ->
+                dispatcher.start()
+                assertTrue(deadLatch.await(5, TimeUnit.SECONDS))
+            }
+        } finally {
+            server.stop(0)
+            (server.executor as? java.util.concurrent.ExecutorService)
+                ?.shutdownNow()
+            Files.deleteIfExists(Path.of(configPath))
+        }
+
+        assertEquals(listOf(1L), store.deadIds.toList())
+        assertTrue(store.retriedIds.isEmpty())
+        assertTrue(store.deadReasons.any { it.contains("status=503") })
     }
 
     private fun claimedEntry(
@@ -224,12 +281,15 @@ private class RecordingWebhookDeliveryStore(
     private val claimedEntries: List<ClaimedDelivery>,
     private val onRetry: () -> Unit = {},
     private val onRelease: () -> Unit = {},
+    private val onDead: () -> Unit = {},
 ) : WebhookDeliveryStore {
     private var claimed = false
     val retriedIds = CopyOnWriteArrayList<Long>()
     val retryReasons = CopyOnWriteArrayList<String>()
     val releasedIds = CopyOnWriteArrayList<Long>()
     val releaseReasons = CopyOnWriteArrayList<String>()
+    val deadIds = CopyOnWriteArrayList<Long>()
+    val deadReasons = CopyOnWriteArrayList<String>()
     val recoverOlderThanMs = CopyOnWriteArrayList<Long>()
     val recoverCallCount = AtomicInteger(0)
 
@@ -261,7 +321,11 @@ private class RecordingWebhookDeliveryStore(
         id: Long,
         claimToken: String,
         reason: String?,
-    ) {}
+    ) {
+        deadIds += id
+        deadReasons += reason.orEmpty()
+        onDead()
+    }
 
     override fun releaseClaim(
         id: Long,

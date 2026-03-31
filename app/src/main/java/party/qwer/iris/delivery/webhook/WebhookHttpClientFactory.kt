@@ -2,13 +2,30 @@ package party.qwer.iris.delivery.webhook
 
 import okhttp3.ConnectionPool
 import okhttp3.Dispatcher
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import java.util.concurrent.TimeUnit
 
+private const val ALLOW_CLEARTEXT_HTTP_ENV = "IRIS_ALLOW_CLEARTEXT_HTTP"
+private const val TRANSPORT_SECURITY_MODE_ENV = "IRIS_WEBHOOK_TRANSPORT_SECURITY_MODE"
+
+private fun cleartextFlagEnabled(rawValue: String?): Boolean =
+    rawValue
+        ?.trim()
+        ?.lowercase()
+        ?.let { normalized -> normalized == "1" || normalized == "true" || normalized == "on" }
+        ?: false
+
 internal enum class WebhookTransport {
     H2C,
     HTTP1,
+}
+
+internal enum class TransportSecurityMode {
+    TLS_REQUIRED,
+    LOOPBACK_HTTP_ALLOWED,
+    PRIVATE_OVERLAY_HTTP_ALLOWED,
 }
 
 internal fun resolveWebhookTransport(transportOverride: String?): WebhookTransport {
@@ -25,10 +42,35 @@ internal fun resolveWebhookTransport(transportOverride: String?): WebhookTranspo
     }
 }
 
+internal fun resolveTransportSecurityMode(
+    rawMode: String?,
+    allowCleartextHttp: Boolean = cleartextFlagEnabled(System.getenv(ALLOW_CLEARTEXT_HTTP_ENV)),
+): TransportSecurityMode {
+    val normalized = rawMode?.trim()?.lowercase().orEmpty()
+    return when (normalized) {
+        "tls_required", "tls", "https_only" -> TransportSecurityMode.TLS_REQUIRED
+        "loopback_http_allowed", "loopback" -> TransportSecurityMode.LOOPBACK_HTTP_ALLOWED
+        "private_overlay_http_allowed", "private_overlay", "cleartext_http_allowed" ->
+            TransportSecurityMode.PRIVATE_OVERLAY_HTTP_ALLOWED
+
+        else ->
+            if (allowCleartextHttp) {
+                TransportSecurityMode.PRIVATE_OVERLAY_HTTP_ALLOWED
+            } else {
+                TransportSecurityMode.LOOPBACK_HTTP_ALLOWED
+            }
+    }
+}
+
 internal class WebhookHttpClientFactory(
     transport: WebhookTransport,
     sharedDispatcher: Dispatcher,
     sharedConnectionPool: ConnectionPool,
+    private val transportSecurityMode: TransportSecurityMode =
+        resolveTransportSecurityMode(
+            rawMode = System.getenv(TRANSPORT_SECURITY_MODE_ENV),
+            allowCleartextHttp = cleartextFlagEnabled(System.getenv(ALLOW_CLEARTEXT_HTTP_ENV)),
+        ),
 ) {
     private val baseClient: OkHttpClient =
         OkHttpClient
@@ -55,7 +97,28 @@ internal class WebhookHttpClientFactory(
         if (webhookUrl.startsWith("https://")) {
             return http1Client
         }
+        if (webhookUrl.startsWith("http://")) {
+            when (transportSecurityMode) {
+                TransportSecurityMode.TLS_REQUIRED ->
+                    throw IllegalArgumentException("cleartext HTTP webhook is disabled by transport security mode")
+
+                TransportSecurityMode.LOOPBACK_HTTP_ALLOWED -> {
+                    if (!isLoopbackWebhookUrl(webhookUrl)) {
+                        throw IllegalArgumentException(
+                            "cleartext HTTP webhook requires loopback host or IRIS_WEBHOOK_TRANSPORT_SECURITY_MODE=PRIVATE_OVERLAY_HTTP_ALLOWED",
+                        )
+                    }
+                }
+
+                TransportSecurityMode.PRIVATE_OVERLAY_HTTP_ALLOWED -> Unit
+            }
+        }
         return defaultClient
+    }
+
+    private fun isLoopbackWebhookUrl(webhookUrl: String): Boolean {
+        val host = webhookUrl.toHttpUrlOrNull()?.host?.lowercase() ?: return false
+        return host == "localhost" || host == "127.0.0.1" || host == "::1"
     }
 
     companion object {

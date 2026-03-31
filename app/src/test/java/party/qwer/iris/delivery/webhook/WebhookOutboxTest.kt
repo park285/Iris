@@ -87,7 +87,7 @@ class WebhookOutboxTest {
                 config = config,
                 store = store,
                 transportOverride = "http1",
-                pollIntervalMs = 50L,
+                deliveryPolicy = WebhookDeliveryPolicy(pollIntervalMs = 50L),
             ).use { dispatcher ->
                 dispatcher.start()
                 assertTrue(latch.await(5, TimeUnit.SECONDS))
@@ -164,7 +164,7 @@ class WebhookOutboxTest {
                 store = store,
                 transportOverride = "http1",
                 partitionCount = 2,
-                pollIntervalMs = 50L,
+                deliveryPolicy = WebhookDeliveryPolicy(pollIntervalMs = 50L),
             ).use { dispatcher ->
                 dispatcher.start()
                 assertTrue(latch.await(5, TimeUnit.SECONDS))
