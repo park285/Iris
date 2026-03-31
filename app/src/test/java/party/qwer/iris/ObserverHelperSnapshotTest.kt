@@ -260,7 +260,6 @@ class ObserverHelperSnapshotTest {
             roles = members.associate { UserId(it) to 2 },
             profileImages = profileImages.map { (k, v) -> UserId(k) to v }.toMap(),
         )
-
 }
 
 private fun snapshotCoordinatorMarkDirty(

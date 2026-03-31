@@ -1,5 +1,10 @@
 package party.qwer.iris.ingress
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import party.qwer.iris.ChatLogRepository
 import party.qwer.iris.ConfigProvider
 import party.qwer.iris.KakaoDB
@@ -8,10 +13,15 @@ import party.qwer.iris.delivery.webhook.RoutingGateway
 import party.qwer.iris.delivery.webhook.RoutingResult
 import party.qwer.iris.persistence.BatchedCheckpointJournal
 import party.qwer.iris.persistence.CheckpointJournal
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class CommandIngressServiceTest {
     private val config =
         object : ConfigProvider {
@@ -38,12 +48,15 @@ class CommandIngressServiceTest {
                 config = config,
                 checkpointJournal = FakeCheckpointJournal(),
                 routingGateway = FakeRoutingGateway(),
+                dispatchDispatcher = Dispatchers.Unconfined,
                 onMarkDirty = { chatId -> markDirtyCalls.add(chatId) },
             )
 
         ingress.checkChange()
 
         assertEquals(42L, ingress.lastObservedLogId())
+        assertEquals(42L, ingress.lastPolledLogId())
+        assertEquals(42L, ingress.lastBufferedLogId())
         assertEquals(null, db.lastPolledAfterLogId)
         assertTrue(markDirtyCalls.isEmpty())
         ingress.close()
@@ -60,6 +73,7 @@ class CommandIngressServiceTest {
                 config = config,
                 checkpointJournal = journal,
                 routingGateway = FakeRoutingGateway(),
+                dispatchDispatcher = Dispatchers.Unconfined,
                 onMarkDirty = {},
             )
 
@@ -67,6 +81,8 @@ class CommandIngressServiceTest {
         ingress.checkChange()
 
         assertEquals(5L, ingress.lastObservedLogId())
+        assertEquals(5L, ingress.lastPolledLogId())
+        assertEquals(5L, ingress.lastBufferedLogId())
         assertEquals(5L, db.lastPolledAfterLogId)
         ingress.close()
     }
@@ -86,6 +102,7 @@ class CommandIngressServiceTest {
                 config = config,
                 checkpointJournal = journal,
                 routingGateway = FakeRoutingGateway(result = RoutingResult.ACCEPTED),
+                dispatchDispatcher = Dispatchers.Unconfined,
                 onMarkDirty = {},
             )
 
@@ -123,6 +140,7 @@ class CommandIngressServiceTest {
                 config = config,
                 checkpointJournal = FakeCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
                 routingGateway = FakeRoutingGateway(),
+                dispatchDispatcher = Dispatchers.Unconfined,
                 onMarkDirty = { chatId -> markDirtyCalls.add(chatId) },
             )
 
@@ -146,6 +164,7 @@ class CommandIngressServiceTest {
                 config = config,
                 checkpointJournal = journal,
                 routingGateway = FakeRoutingGateway(result = RoutingResult.ACCEPTED),
+                dispatchDispatcher = Dispatchers.Unconfined,
                 onMarkDirty = {},
             )
 
@@ -170,6 +189,7 @@ class CommandIngressServiceTest {
                 config = config,
                 checkpointJournal = journal,
                 routingGateway = FakeRoutingGateway(result = RoutingResult.ACCEPTED),
+                dispatchDispatcher = Dispatchers.Unconfined,
                 onMarkDirty = {},
             )
 
@@ -189,6 +209,7 @@ class CommandIngressServiceTest {
                 config = config,
                 checkpointJournal = FakeCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
                 routingGateway = FakeRoutingGateway(),
+                dispatchDispatcher = Dispatchers.Unconfined,
                 onMarkDirty = { chatId -> markDirtyCalls.add(chatId) },
             )
 
@@ -197,6 +218,240 @@ class CommandIngressServiceTest {
         assertTrue(markDirtyCalls.isEmpty())
         ingress.close()
     }
+
+    @Test
+    fun `checkChange keeps routing batch off polling caller while dispatch is pending`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val db =
+                FakeChatLogRepository(
+                    latestLogId = 10L,
+                    polledLogs =
+                        listOf(
+                            webhookChatLogEntry(id = 11L, chatId = 100L, message = "!ping"),
+                            webhookChatLogEntry(id = 12L, chatId = 100L, message = "!pong"),
+                        ),
+                )
+            val routingGateway = FakeRoutingGateway(result = RoutingResult.ACCEPTED)
+            val ingress =
+                CommandIngressService(
+                    db = db,
+                    config = config,
+                    checkpointJournal = FakeCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
+                    routingGateway = routingGateway,
+                    dispatchDispatcher = dispatcher,
+                    onMarkDirty = {},
+                )
+
+            ingress.checkChange()
+            ingress.checkChange()
+            ingress.checkChange()
+
+            assertEquals(2, db.pollCalls)
+            assertTrue(routingGateway.commands.isEmpty())
+            assertEquals(10L, ingress.lastObservedLogId())
+            assertEquals(12L, ingress.lastPolledLogId())
+            assertEquals(12L, ingress.lastBufferedLogId())
+
+            runCurrent()
+
+            assertEquals(2, routingGateway.commands.size)
+            assertEquals(12L, ingress.lastObservedLogId())
+            ingress.close()
+        }
+
+    @Test
+    fun `partitioned dispatch keeps polling lane non blocking while a route is busy`() =
+        runTest {
+            val db =
+                FakeChatLogRepository(
+                    latestLogId = 10L,
+                    polledLogs = listOf(webhookChatLogEntry(id = 11L, chatId = 100L, message = "!ping")),
+                )
+            val ingress =
+                CommandIngressService(
+                    db = db,
+                    config = config,
+                    checkpointJournal = FakeCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
+                    routingGateway = FakeRoutingGateway(result = RoutingResult.RETRY_LATER),
+                    dispatchDispatcher = StandardTestDispatcher(testScheduler),
+                    dispatchConfig = CommandIngressDispatchConfig(partitionCount = 1, partitionQueueCapacity = 8),
+                    onMarkDirty = {},
+                )
+
+            ingress.checkChange()
+            ingress.checkChange()
+            runCurrent()
+
+            assertEquals(10L, ingress.lastObservedLogId())
+            assertEquals(11L, ingress.lastPolledLogId())
+            assertEquals(11L, ingress.lastBufferedLogId())
+
+            ingress.checkChange()
+            assertEquals(2, db.pollCalls)
+            assertEquals(11L, db.lastPolledAfterLogId)
+            ingress.close()
+        }
+
+    @Test
+    fun `bounded dispatch buffer stops polling only when capacity is saturated`() =
+        runTest {
+            val db =
+                FakeChatLogRepository(
+                    latestLogId = 10L,
+                    polledLogs = listOf(webhookChatLogEntry(id = 11L, chatId = 100L, message = "!ping")),
+                )
+            val ingress =
+                CommandIngressService(
+                    db = db,
+                    config = config,
+                    checkpointJournal = FakeCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
+                    routingGateway = FakeRoutingGateway(result = RoutingResult.RETRY_LATER),
+                    dispatchDispatcher = StandardTestDispatcher(testScheduler),
+                    dispatchConfig = CommandIngressDispatchConfig(partitionCount = 1, partitionQueueCapacity = 1, maxBufferedDispatches = 1),
+                    onMarkDirty = {},
+                )
+
+            ingress.checkChange()
+            ingress.checkChange()
+            runCurrent()
+
+            assertEquals(10L, ingress.lastObservedLogId())
+            assertEquals(1, db.pollCalls)
+            assertEquals(11L, ingress.lastPolledLogId())
+            assertEquals(11L, ingress.lastBufferedLogId())
+
+            ingress.checkChange()
+
+            assertEquals(1, db.pollCalls)
+            ingress.close()
+        }
+
+    @Test
+    fun `later logs keep buffering while an earlier partition is blocked`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val db =
+                FakeChatLogRepository(
+                    latestLogId = 10L,
+                    polledLogs =
+                        listOf(
+                            webhookChatLogEntry(id = 11L, chatId = 100L, message = "!first"),
+                            webhookChatLogEntry(id = 12L, chatId = 101L, message = "!second"),
+                            webhookChatLogEntry(id = 13L, chatId = 103L, message = "!third"),
+                        ),
+                )
+            val routingGateway =
+                object : RoutingGateway {
+                    override fun route(command: RoutingCommand): RoutingResult =
+                        if (command.sourceLogId == 11L) {
+                            RoutingResult.RETRY_LATER
+                        } else {
+                            RoutingResult.ACCEPTED
+                        }
+
+                    override fun close() {}
+                }
+            val ingress =
+                CommandIngressService(
+                    db = db,
+                    config = config,
+                    checkpointJournal = FakeCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
+                    routingGateway = routingGateway,
+                    dispatchDispatcher = dispatcher,
+                    dispatchConfig = CommandIngressDispatchConfig(partitionCount = 2, partitionQueueCapacity = 1, maxBufferedDispatches = 4),
+                    onMarkDirty = {},
+                )
+
+            ingress.checkChange()
+            ingress.checkChange()
+            runCurrent()
+
+            assertEquals(10L, ingress.lastObservedLogId())
+            assertEquals(13L, ingress.lastPolledLogId())
+            assertEquals(13L, ingress.lastBufferedLogId())
+
+            ingress.checkChange()
+            assertEquals(2, db.pollCalls)
+            assertEquals(13L, db.lastPolledAfterLogId)
+            assertEquals(
+                IngressProgressSnapshot(
+                    lastPolledLogId = 13L,
+                    lastBufferedLogId = 13L,
+                    lastCommittedLogId = 10L,
+                    bufferedCount = 3,
+                    blockedPartitionCount = 1,
+                    activeDispatchCount = 0,
+                ),
+                ingress.progressSnapshot(),
+            )
+            ingress.close()
+        }
+
+    @Test
+    fun `partitioned dispatch commits checkpoints in log order even when later partition finishes first`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val allowFirstLog = AtomicBoolean(false)
+            val routeCalls = ConcurrentHashMap<Long, AtomicInteger>()
+            val journal = FakeCheckpointJournal(initial = mapOf("chat_logs" to 10L))
+            val ingress =
+                CommandIngressService(
+                    db =
+                        FakeChatLogRepository(
+                            latestLogId = 10L,
+                            polledLogs =
+                                listOf(
+                                    webhookChatLogEntry(id = 11L, chatId = 100L, message = "!first"),
+                                    webhookChatLogEntry(id = 12L, chatId = 101L, message = "!second"),
+                                ),
+                        ),
+                    config = config,
+                    checkpointJournal = journal,
+                    routingGateway =
+                        object : RoutingGateway {
+                            override fun route(command: RoutingCommand): RoutingResult {
+                                routeCalls.computeIfAbsent(command.sourceLogId) { AtomicInteger(0) }.incrementAndGet()
+                                return when (command.sourceLogId) {
+                                    11L -> if (allowFirstLog.get()) RoutingResult.ACCEPTED else RoutingResult.RETRY_LATER
+                                    12L -> RoutingResult.ACCEPTED
+                                    else -> error("unexpected sourceLogId=${command.sourceLogId}")
+                                }
+                            }
+
+                            override fun close() {}
+                        },
+                    dispatchDispatcher = dispatcher,
+                    dispatchConfig = CommandIngressDispatchConfig(partitionCount = 2, partitionQueueCapacity = 8),
+                    onMarkDirty = {},
+                )
+
+            ingress.checkChange()
+            ingress.checkChange()
+            runCurrent()
+
+            assertEquals(10L, ingress.lastObservedLogId())
+            assertEquals(12L, ingress.lastPolledLogId())
+            assertEquals(10L, journal.saved["chat_logs"])
+            assertEquals(1, routeCalls[12L]?.get())
+            assertNotNull(routeCalls[11L])
+
+            ingress.checkChange()
+            runCurrent()
+
+            assertEquals(10L, ingress.lastObservedLogId())
+            assertEquals(1, routeCalls[12L]?.get())
+            assertTrue(routeCalls[11L]!!.get() >= 2)
+
+            allowFirstLog.set(true)
+            ingress.checkChange()
+            runCurrent()
+
+            assertEquals(12L, ingress.lastObservedLogId())
+            assertEquals(listOf("chat_logs" to 11L, "chat_logs" to 12L), journal.advanceCalls.takeLast(2))
+            assertEquals(1, routeCalls[12L]?.get())
+            ingress.close()
+        }
 }
 
 private class FakeChatLogRepository(
@@ -205,13 +460,15 @@ private class FakeChatLogRepository(
     var roomMetadata: KakaoDB.RoomMetadata = KakaoDB.RoomMetadata(),
 ) : ChatLogRepository {
     var lastPolledAfterLogId: Long? = null
+    var pollCalls: Int = 0
 
     override fun pollChatLogsAfter(
         afterLogId: Long,
         limit: Int,
     ): List<KakaoDB.ChatLogEntry> {
+        pollCalls++
         lastPolledAfterLogId = afterLogId
-        return polledLogs
+        return polledLogs.filter { it.id > afterLogId }.take(limit)
     }
 
     override fun resolveSenderName(userId: Long): String = userId.toString()

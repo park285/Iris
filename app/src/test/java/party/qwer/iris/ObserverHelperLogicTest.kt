@@ -1,5 +1,6 @@
 package party.qwer.iris
 
+import kotlinx.coroutines.Dispatchers
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -359,11 +360,11 @@ class ObserverHelperLogicTest {
                 memberRepo = memberRepository,
                 routingGateway = routingGateway,
                 learnFromTimestampCorrelation = learnFromTimestampCorrelation,
+                dispatchDispatcher = Dispatchers.Unconfined,
                 onMarkDirty = {},
             )
         return IngressBundle(ingress = ingress, journal = journal)
     }
-
 }
 
 private data class IngressBundle(
@@ -400,7 +401,7 @@ private class FakeChatLogRepository(
         limit: Int,
     ): List<KakaoDB.ChatLogEntry> {
         lastPolledAfterLogId = afterLogId
-        return polledLogs
+        return polledLogs.filter { it.id > afterLogId }.take(limit)
     }
 
     override fun resolveSenderName(userId: Long): String = userId.toString()
