@@ -5,7 +5,7 @@ use crate::config_sync;
 use crate::health;
 use crate::process;
 use crate::rollback;
-use crate::state::{State, StateMachine, Transition};
+use crate::state::{FailureKind, State, StateMachine, Transition};
 use anyhow::Result;
 use std::time::Duration;
 
@@ -13,6 +13,13 @@ struct WatchContext<'a> {
     cfg: &'a DaemonConfig,
     api: &'a iris_common::api::IrisApi,
     adb: &'a Adb,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProbeState {
+    Healthy,
+    LivenessFailed,
+    ReadinessFailed,
 }
 
 pub async fn run_watch(cfg: DaemonConfig) -> Result<()> {
@@ -28,6 +35,7 @@ pub async fn run_watch(cfg: DaemonConfig) -> Result<()> {
     };
     let mut sm = StateMachine::new(
         cfg.watch.health_fail_threshold,
+        cfg.watch.readiness_fail_threshold,
         cfg.rollback.max_consecutive_failures,
     );
     let mut interval = tokio::time::interval(Duration::from_secs(cfg.watch.check_interval_secs));
@@ -56,7 +64,8 @@ fn notify_ready(cfg: &DaemonConfig) {
     let _ = sd_notify::notify(&[sd_notify::NotifyState::Ready]);
     tracing::info!(
         check_interval = cfg.watch.check_interval_secs,
-        health_fail_threshold = cfg.watch.health_fail_threshold,
+        liveness_fail_threshold = cfg.watch.health_fail_threshold,
+        readiness_fail_threshold = cfg.watch.readiness_fail_threshold,
         "watch 모드 시작"
     );
 }
@@ -75,15 +84,22 @@ async fn run_watch_cycle(context: &WatchContext<'_>, sm: &mut StateMachine, cycl
 }
 
 fn log_probe_failures(report: &health::HealthReport, sm: &StateMachine) {
-    if !report.is_alive() {
-        tracing::warn!(
-            fail_count = sm.fail_count + 1,
-            state = %sm.state,
-            "liveness 실패"
-        );
-    }
-    if report.readiness != health::ProbeResult::Ok {
-        tracing::warn!("readiness probe 실패");
+    match probe_state(report) {
+        ProbeState::Healthy => {}
+        ProbeState::LivenessFailed => {
+            tracing::warn!(
+                fail_count = sm.liveness_fail_count + 1,
+                state = %sm.state,
+                "liveness 실패"
+            );
+        }
+        ProbeState::ReadinessFailed => {
+            tracing::warn!(
+                fail_count = sm.readiness_fail_count + 1,
+                state = %sm.state,
+                "readiness probe 실패"
+            );
+        }
     }
     if report.bridge != health::ProbeResult::Ok {
         tracing::warn!("bridge probe 실패");
@@ -91,10 +107,20 @@ fn log_probe_failures(report: &health::HealthReport, sm: &StateMachine) {
 }
 
 fn next_transition(sm: &mut StateMachine, report: &health::HealthReport) -> Option<Transition> {
-    if report.is_alive() {
-        sm.on_health_ok()
+    match probe_state(report) {
+        ProbeState::Healthy => sm.on_probe_ok(),
+        ProbeState::LivenessFailed => sm.on_probe_fail(FailureKind::Liveness),
+        ProbeState::ReadinessFailed => sm.on_probe_fail(FailureKind::Readiness),
+    }
+}
+
+fn probe_state(report: &health::HealthReport) -> ProbeState {
+    if !report.is_alive() {
+        ProbeState::LivenessFailed
+    } else if report.readiness != health::ProbeResult::Ok {
+        ProbeState::ReadinessFailed
     } else {
-        sm.on_health_fail()
+        ProbeState::Healthy
     }
 }
 
@@ -179,19 +205,41 @@ async fn handle_rollback_success(cfg: &DaemonConfig, sm: &mut StateMachine) {
 
 #[cfg(test)]
 mod tests {
-    use crate::state::{State, StateMachine};
+    use super::next_transition;
+    use crate::health::{HealthReport, ProbeResult};
+    use crate::state::{FailureKind, State, StateMachine};
 
     #[test]
     fn state_machine_integrates_with_daemon_flow() {
-        let mut sm = StateMachine::new(2, 3);
-        assert!(sm.on_health_ok().is_some());
+        let mut sm = StateMachine::new(2, 4, 3);
+        assert!(sm.on_probe_ok().is_some());
         assert_eq!(sm.state, State::Healthy);
-        assert!(sm.on_health_fail().is_none());
-        let t = sm.on_health_fail().unwrap();
+        assert!(sm.on_probe_fail(FailureKind::Liveness).is_none());
+        let t = sm.on_probe_fail(FailureKind::Liveness).unwrap();
         assert_eq!(t.to, State::Degraded);
-        let t = sm.on_health_fail().unwrap();
+        let t = sm.on_probe_fail(FailureKind::Liveness).unwrap();
         assert_eq!(t.to, State::Recovering);
-        let t = sm.on_health_ok().unwrap();
+        let t = sm.on_probe_ok().unwrap();
         assert_eq!(t.to, State::Healthy);
+    }
+
+    #[test]
+    fn next_transition_treats_readiness_failure_as_failure_signal() {
+        let mut sm = StateMachine::new(2, 2, 3);
+        let ready = HealthReport {
+            liveness: ProbeResult::Ok,
+            readiness: ProbeResult::Ok,
+            bridge: ProbeResult::Ok,
+        };
+        assert!(next_transition(&mut sm, &ready).is_some());
+        let degraded = HealthReport {
+            liveness: ProbeResult::Ok,
+            readiness: ProbeResult::Fail("bridge not ready".to_string()),
+            bridge: ProbeResult::Ok,
+        };
+        assert!(next_transition(&mut sm, &degraded).is_none());
+        let t = next_transition(&mut sm, &degraded).expect("should degrade");
+        assert_eq!(t.to, State::Degraded);
+        assert!(t.reason.contains("readiness"));
     }
 }

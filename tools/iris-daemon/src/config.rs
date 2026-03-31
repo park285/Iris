@@ -64,6 +64,8 @@ pub struct WatchConfig {
     pub check_interval_secs: u64,
     #[serde(default = "default_health_fail_threshold")]
     pub health_fail_threshold: u32,
+    #[serde(default = "default_readiness_fail_threshold")]
+    pub readiness_fail_threshold: u32,
     #[serde(default = "default_curl_timeout")]
     pub curl_timeout_secs: u64,
     #[serde(default = "default_config_check_every")]
@@ -75,6 +77,7 @@ impl Default for WatchConfig {
         Self {
             check_interval_secs: default_check_interval(),
             health_fail_threshold: default_health_fail_threshold(),
+            readiness_fail_threshold: default_readiness_fail_threshold(),
             curl_timeout_secs: default_curl_timeout(),
             config_check_every: default_config_check_every(),
         }
@@ -87,6 +90,10 @@ const fn default_check_interval() -> u64 {
 
 const fn default_health_fail_threshold() -> u32 {
     2
+}
+
+const fn default_readiness_fail_threshold() -> u32 {
+    4
 }
 
 const fn default_curl_timeout() -> u64 {
@@ -237,6 +244,7 @@ device = "10.0.0.2:5555"
 [watch]
 check_interval_secs = 15
 health_fail_threshold = 3
+readiness_fail_threshold = 5
 curl_timeout_secs = 5
 config_check_every = 5
 
@@ -261,6 +269,7 @@ apk_dest = "/data/Iris.apk"
     fn assert_watch_config(config: &DaemonConfig) {
         assert_eq!(config.watch.check_interval_secs, 15);
         assert_eq!(config.watch.health_fail_threshold, 3);
+        assert_eq!(config.watch.readiness_fail_threshold, 5);
     }
 
     fn assert_alert_config(config: &DaemonConfig) {
@@ -281,6 +290,7 @@ apk_dest = "/data/Iris.apk"
         assert_eq!(config.iris.health_url, "http://localhost:3000");
         assert_eq!(config.watch.check_interval_secs, 30);
         assert_eq!(config.watch.health_fail_threshold, 2);
+        assert_eq!(config.watch.readiness_fail_threshold, 4);
         assert_eq!(config.rollback.max_consecutive_failures, 5);
         assert!(!config.alert.enabled);
         assert!(!config.rollback.enabled);
@@ -301,6 +311,7 @@ device = "10.0.0.2:5555"
         assert_eq!(config.iris.shared_token, "test-token");
         assert_eq!(config.adb.device, "10.0.0.2:5555");
         assert_eq!(config.watch.check_interval_secs, 30);
+        assert_eq!(config.watch.readiness_fail_threshold, 4);
     }
 
     #[test]

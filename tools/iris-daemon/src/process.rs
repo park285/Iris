@@ -117,10 +117,7 @@ fn start_command(cfg: &DaemonConfig) -> String {
         main = IRIS_PROCESS_NAME,
         log_dest = shell_quote(&log_dest),
     );
-    format!(
-        "su root sh -c {}",
-        shell_quote(&launch_cmd),
-    )
+    format!("su root sh -c {}", shell_quote(&launch_cmd),)
 }
 
 async fn wait_for_process_start(adb: &Adb) -> Result<()> {
@@ -176,21 +173,28 @@ mod tests {
         let cfg = DaemonConfig::default();
         let command = start_command(&cfg);
 
-        assert!(command.contains(IRIS_PROCESS_NAME));
-        assert!(command.contains("su root sh -c"));
-        assert!(command.contains("mkdir -p "));
-        assert!(command.contains("/data/iris/logs"));
-        assert!(command.contains("KAKAOTALK_APP_UID=0"));
-        assert!(command.contains("IRIS_CONFIG_PATH="));
-        assert!(command.contains("config.json"));
-        assert!(command.contains("IRIS_BIND_HOST="));
-        assert!(command.contains("127.0.0.1"));
-        assert!(command.contains("IRIS_LOG_LEVEL="));
-        assert!(command.contains("INFO"));
-        assert!(command.contains("CLASSPATH="));
-        assert!(command.contains("Iris.apk"));
-        assert!(command.contains("iris.log"));
-        assert!(command.contains("2>&1 &"));
+        for expected in [
+            IRIS_PROCESS_NAME,
+            "su root sh -c",
+            "mkdir -p ",
+            "/data/iris/logs",
+            "KAKAOTALK_APP_UID=0",
+            "IRIS_CONFIG_PATH=",
+            "config.json",
+            "IRIS_BIND_HOST=",
+            "127.0.0.1",
+            "IRIS_LOG_LEVEL=",
+            "INFO",
+            "CLASSPATH=",
+            "Iris.apk",
+            "iris.log",
+            "2>&1 &",
+        ] {
+            assert!(
+                command.contains(expected),
+                "missing expected fragment: {expected}"
+            );
+        }
     }
 
     #[test]

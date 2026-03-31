@@ -21,6 +21,21 @@ impl fmt::Display for State {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureKind {
+    Liveness,
+    Readiness,
+}
+
+impl FailureKind {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Liveness => "liveness",
+            Self::Readiness => "readiness",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Transition {
     pub from: State,
@@ -30,28 +45,36 @@ pub struct Transition {
 
 pub struct StateMachine {
     pub state: State,
-    pub fail_count: u32,
+    pub liveness_fail_count: u32,
+    pub readiness_fail_count: u32,
     pub recovery_count: u32,
-    health_fail_threshold: u32,
+    liveness_fail_threshold: u32,
+    readiness_fail_threshold: u32,
     max_consecutive_failures: u32,
     rollback_attempted: bool,
 }
 
 impl StateMachine {
-    pub const fn new(health_fail_threshold: u32, max_consecutive_failures: u32) -> Self {
+    pub const fn new(
+        liveness_fail_threshold: u32,
+        readiness_fail_threshold: u32,
+        max_consecutive_failures: u32,
+    ) -> Self {
         Self {
             state: State::Starting,
-            fail_count: 0,
+            liveness_fail_count: 0,
+            readiness_fail_count: 0,
             recovery_count: 0,
-            health_fail_threshold,
+            liveness_fail_threshold,
+            readiness_fail_threshold,
             max_consecutive_failures,
             rollback_attempted: false,
         }
     }
 
-    pub fn on_health_ok(&mut self) -> Option<Transition> {
+    pub fn on_probe_ok(&mut self) -> Option<Transition> {
         let prev = self.state;
-        self.fail_count = 0;
+        self.reset_fail_counts();
         self.recovery_count = 0;
         self.rollback_attempted = false;
         if prev == State::Healthy {
@@ -66,19 +89,23 @@ impl StateMachine {
         }
     }
 
-    pub fn on_health_fail(&mut self) -> Option<Transition> {
-        self.fail_count += 1;
+    pub fn on_probe_fail(&mut self, kind: FailureKind) -> Option<Transition> {
+        self.bump_fail_count(kind);
         let prev = self.state;
         match prev {
             State::Starting | State::Healthy => {
-                if self.fail_count >= self.health_fail_threshold {
+                let fail_count = self.fail_count(kind);
+                let threshold = self.fail_threshold(kind);
+                if fail_count >= threshold {
                     self.state = State::Degraded;
                     Some(Transition {
                         from: prev,
                         to: State::Degraded,
                         reason: format!(
-                            "health check {}회 연속 실패 (임계값: {})",
-                            self.fail_count, self.health_fail_threshold
+                            "{} check {}회 연속 실패 (임계값: {})",
+                            kind.label(),
+                            fail_count,
+                            threshold
                         ),
                     })
                 } else {
@@ -91,7 +118,7 @@ impl StateMachine {
                 Some(Transition {
                     from: State::Degraded,
                     to: State::Recovering,
-                    reason: "recovery 시작".to_string(),
+                    reason: format!("{} 장애 recovery 시작", kind.label()),
                 })
             }
             State::Recovering => {
@@ -102,8 +129,10 @@ impl StateMachine {
                         from: State::Recovering,
                         to: State::RollbackNeeded,
                         reason: format!(
-                            "recovery {}회 반복 실패, 롤백 필요 (임계값: {})",
-                            self.recovery_count, self.max_consecutive_failures
+                            "{} 장애 recovery {}회 반복 실패, 롤백 필요 (임계값: {})",
+                            kind.label(),
+                            self.recovery_count,
+                            self.max_consecutive_failures
                         ),
                     })
                 } else {
@@ -114,9 +143,42 @@ impl StateMachine {
         }
     }
 
+    const fn reset_fail_counts(&mut self) {
+        self.liveness_fail_count = 0;
+        self.readiness_fail_count = 0;
+    }
+
+    const fn bump_fail_count(&mut self, kind: FailureKind) {
+        match kind {
+            FailureKind::Liveness => {
+                self.liveness_fail_count += 1;
+                self.readiness_fail_count = 0;
+            }
+            FailureKind::Readiness => {
+                self.readiness_fail_count += 1;
+                self.liveness_fail_count = 0;
+            }
+        }
+    }
+
+    const fn fail_count(&self, kind: FailureKind) -> u32 {
+        match kind {
+            FailureKind::Liveness => self.liveness_fail_count,
+            FailureKind::Readiness => self.readiness_fail_count,
+        }
+    }
+
+    const fn fail_threshold(&self, kind: FailureKind) -> u32 {
+        match kind {
+            FailureKind::Liveness => self.liveness_fail_threshold,
+            FailureKind::Readiness => self.readiness_fail_threshold,
+        }
+    }
+
     pub fn on_rollback_done(&mut self) -> Transition {
         let prev = self.state;
         self.rollback_attempted = true;
+        self.reset_fail_counts();
         self.recovery_count = 0;
         self.state = State::Recovering;
         Transition {
@@ -133,73 +195,97 @@ mod tests {
 
     #[test]
     fn starts_in_starting_state() {
-        let sm = StateMachine::new(2, 5);
+        let sm = StateMachine::new(2, 4, 5);
         assert_eq!(sm.state, State::Starting);
-        assert_eq!(sm.fail_count, 0);
+        assert_eq!(sm.liveness_fail_count, 0);
+        assert_eq!(sm.readiness_fail_count, 0);
     }
 
     #[test]
     fn transitions_to_healthy_on_first_success() {
-        let mut sm = StateMachine::new(2, 5);
-        let t = sm.on_health_ok().expect("should transition");
+        let mut sm = StateMachine::new(2, 4, 5);
+        let t = sm.on_probe_ok().expect("should transition");
         assert_eq!(t.from, State::Starting);
         assert_eq!(t.to, State::Healthy);
     }
 
     #[test]
     fn no_transition_when_already_healthy() {
-        let mut sm = StateMachine::new(2, 5);
-        sm.on_health_ok();
-        assert!(sm.on_health_ok().is_none());
+        let mut sm = StateMachine::new(2, 4, 5);
+        sm.on_probe_ok();
+        assert!(sm.on_probe_ok().is_none());
     }
 
     #[test]
-    fn single_fail_does_not_degrade() {
-        let mut sm = StateMachine::new(2, 5);
-        sm.on_health_ok();
-        assert!(sm.on_health_fail().is_none());
+    fn single_liveness_fail_does_not_degrade() {
+        let mut sm = StateMachine::new(2, 4, 5);
+        sm.on_probe_ok();
+        assert!(sm.on_probe_fail(FailureKind::Liveness).is_none());
         assert_eq!(sm.state, State::Healthy);
     }
 
     #[test]
-    fn degrades_at_threshold() {
-        let mut sm = StateMachine::new(2, 5);
-        sm.on_health_ok();
-        sm.on_health_fail();
-        let t = sm.on_health_fail().expect("should transition");
+    fn liveness_degrades_at_threshold() {
+        let mut sm = StateMachine::new(2, 4, 5);
+        sm.on_probe_ok();
+        sm.on_probe_fail(FailureKind::Liveness);
+        let t = sm
+            .on_probe_fail(FailureKind::Liveness)
+            .expect("should transition");
         assert_eq!(t.from, State::Healthy);
         assert_eq!(t.to, State::Degraded);
+        assert!(t.reason.contains("liveness"));
     }
 
     #[test]
-    fn degraded_to_recovering_on_next_fail() {
-        let mut sm = StateMachine::new(2, 5);
-        sm.on_health_ok();
-        sm.on_health_fail();
-        sm.on_health_fail();
-        let t = sm.on_health_fail().expect("should transition");
+    fn readiness_degrades_at_own_threshold() {
+        let mut sm = StateMachine::new(2, 3, 5);
+        sm.on_probe_ok();
+        sm.on_probe_fail(FailureKind::Readiness);
+        sm.on_probe_fail(FailureKind::Readiness);
+        let t = sm
+            .on_probe_fail(FailureKind::Readiness)
+            .expect("should transition");
+        assert_eq!(t.from, State::Healthy);
+        assert_eq!(t.to, State::Degraded);
+        assert!(t.reason.contains("readiness"));
+    }
+
+    #[test]
+    fn degraded_to_recovering_on_next_readiness_fail() {
+        let mut sm = StateMachine::new(2, 2, 5);
+        sm.on_probe_ok();
+        sm.on_probe_fail(FailureKind::Readiness);
+        sm.on_probe_fail(FailureKind::Readiness);
+        let t = sm
+            .on_probe_fail(FailureKind::Readiness)
+            .expect("should transition");
         assert_eq!(t.from, State::Degraded);
         assert_eq!(t.to, State::Recovering);
+        assert!(t.reason.contains("readiness"));
     }
 
     #[test]
-    fn recovering_to_rollback_after_max_failures() {
-        let mut sm = StateMachine::new(1, 2);
-        sm.on_health_ok();
-        sm.on_health_fail();
-        sm.on_health_fail();
-        sm.on_health_fail();
-        let t = sm.on_health_fail().expect("should transition");
+    fn recovering_to_rollback_after_repeated_readiness_failures() {
+        let mut sm = StateMachine::new(1, 1, 2);
+        sm.on_probe_ok();
+        sm.on_probe_fail(FailureKind::Readiness);
+        sm.on_probe_fail(FailureKind::Readiness);
+        sm.on_probe_fail(FailureKind::Readiness);
+        let t = sm
+            .on_probe_fail(FailureKind::Readiness)
+            .expect("should transition");
         assert_eq!(t.to, State::RollbackNeeded);
+        assert!(t.reason.contains("readiness"));
     }
 
     #[test]
     fn rollback_done_returns_to_recovering() {
-        let mut sm = StateMachine::new(1, 1);
-        sm.on_health_ok();
-        sm.on_health_fail();
-        sm.on_health_fail();
-        sm.on_health_fail();
+        let mut sm = StateMachine::new(1, 1, 1);
+        sm.on_probe_ok();
+        sm.on_probe_fail(FailureKind::Liveness);
+        sm.on_probe_fail(FailureKind::Liveness);
+        sm.on_probe_fail(FailureKind::Liveness);
         let t = sm.on_rollback_done();
         assert_eq!(t.from, State::RollbackNeeded);
         assert_eq!(t.to, State::Recovering);
@@ -208,28 +294,29 @@ mod tests {
 
     #[test]
     fn no_second_rollback_after_rollback_attempted() {
-        let mut sm = StateMachine::new(1, 1);
-        sm.on_health_ok();
-        sm.on_health_fail();
-        sm.on_health_fail();
-        sm.on_health_fail();
+        let mut sm = StateMachine::new(1, 1, 1);
+        sm.on_probe_ok();
+        sm.on_probe_fail(FailureKind::Liveness);
+        sm.on_probe_fail(FailureKind::Liveness);
+        sm.on_probe_fail(FailureKind::Liveness);
         sm.on_rollback_done();
-        sm.on_health_fail();
-        let t = sm.on_health_fail();
+        sm.on_probe_fail(FailureKind::Liveness);
+        let t = sm.on_probe_fail(FailureKind::Liveness);
         assert!(t.is_none());
         assert_eq!(sm.state, State::Recovering);
     }
 
     #[test]
-    fn health_ok_resets_everything() {
-        let mut sm = StateMachine::new(1, 1);
-        sm.on_health_ok();
-        sm.on_health_fail();
-        sm.on_health_fail();
-        let t = sm.on_health_ok().expect("should transition back");
+    fn probe_ok_resets_everything() {
+        let mut sm = StateMachine::new(1, 1, 1);
+        sm.on_probe_ok();
+        sm.on_probe_fail(FailureKind::Readiness);
+        sm.on_probe_fail(FailureKind::Readiness);
+        let t = sm.on_probe_ok().expect("should transition back");
         assert_eq!(t.from, State::Recovering);
         assert_eq!(t.to, State::Healthy);
-        assert_eq!(sm.fail_count, 0);
+        assert_eq!(sm.liveness_fail_count, 0);
+        assert_eq!(sm.readiness_fail_count, 0);
         assert_eq!(sm.recovery_count, 0);
     }
 
