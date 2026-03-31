@@ -8,4 +8,13 @@ data class ReplyImageMetadata(
     val room: String,
     val threadId: String? = null,
     val threadScope: Int? = null,
+    val images: List<ReplyImagePartSpec>,
+)
+
+@Serializable
+data class ReplyImagePartSpec(
+    val index: Int,
+    val sha256Hex: String,
+    val byteLength: Long,
+    val contentType: String,
 )

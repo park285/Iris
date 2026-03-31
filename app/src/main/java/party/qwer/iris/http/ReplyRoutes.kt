@@ -3,6 +3,7 @@ package party.qwer.iris.http
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.content.MultiPartData
 import io.ktor.http.content.PartData
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.receiveMultipart
@@ -16,10 +17,14 @@ import kotlinx.serialization.json.Json
 import party.qwer.iris.ApiRequestException
 import party.qwer.iris.MessageSender
 import party.qwer.iris.ReplyAdmissionStatus
+import party.qwer.iris.VerifiedImagePayloadHandle
 import party.qwer.iris.admitReply
+import party.qwer.iris.detectImageFormat
+import party.qwer.iris.imageFormatFromContentType
 import party.qwer.iris.invalidRequest
 import party.qwer.iris.model.ReplyAcceptedResponse
 import party.qwer.iris.model.ReplyImageMetadata
+import party.qwer.iris.model.ReplyImagePartSpec
 import party.qwer.iris.model.ReplyRequest
 import party.qwer.iris.model.ReplyStatusSnapshot
 import party.qwer.iris.model.ReplyType
@@ -27,12 +32,12 @@ import party.qwer.iris.replyAdmissionHttpStatus
 import party.qwer.iris.requestRejected
 import party.qwer.iris.sha256Hex
 import party.qwer.iris.supportsThreadReply
+import party.qwer.iris.validateReplyImageManifest
 import party.qwer.iris.validateReplyMarkdownThreadMetadata
 import party.qwer.iris.validateReplyThreadScope
-import java.io.ByteArrayOutputStream
 import java.util.UUID
 
-private const val MAX_REPLY_REQUEST_BODY_BYTES = 48 * 1024 * 1024
+private typealias MultipartImageStager = (PartData.FileItem, ReplyImagePartSpec, ReplyImageIngressPolicy) -> VerifiedImagePayloadHandle
 
 internal fun Route.installReplyRoutes(
     authSupport: AuthSupport,
@@ -40,6 +45,9 @@ internal fun Route.installReplyRoutes(
     notificationReferer: String,
     messageSender: MessageSender,
     replyStatusProvider: ((String) -> ReplyStatusSnapshot?)?,
+    replyImageIngressPolicy: ReplyImageIngressPolicy = ReplyImageIngressPolicy.fromEnv(),
+    multipartImageStager: MultipartImageStager = ::stageMultipartImagePart,
+    protectedBodyReader: ProtectedBodyReader = ::readProtectedBody,
 ) {
     post("/reply") {
         when {
@@ -50,19 +58,27 @@ internal fun Route.installReplyRoutes(
                         authSupport = authSupport,
                         serverJson = serverJson,
                         messageSender = messageSender,
+                        replyImageIngressPolicy = replyImageIngressPolicy,
+                        multipartImageStager = multipartImageStager,
                     ) ?: return@post
                 call.respond(HttpStatusCode.Accepted, response)
             }
 
             call.request.headers[HttpHeaders.ContentType]?.startsWith(ContentType.Application.Json.toString(), ignoreCase = true) == true -> {
-                readProtectedBody(call, MAX_REPLY_REQUEST_BODY_BYTES).use { rawBody ->
-                    if (!authSupport.requireBotControlSignature(call, method = "POST", bodySha256Hex = rawBody.sha256Hex)) {
-                        return@post
+                if (
+                    !withVerifiedProtectedBody(
+                        call = call,
+                        maxBodyBytes = replyImageIngressPolicy.imagePolicy.jsonReplyBodyMaxBytes,
+                        bodyReader = protectedBodyReader,
+                        precheck = { authSupport.precheckBotControlSignature(call, method = "POST") },
+                        finalize = { precheck, actualBodySha256Hex -> authSupport.finalizeSignature(call, precheck, actualBodySha256Hex) },
+                    ) { rawBody ->
+                        val replyRequest = rawBody.decodeJson(serverJson, ReplyRequest.serializer())
+                        val response = enqueueReply(replyRequest, notificationReferer, messageSender)
+                        call.respond(HttpStatusCode.Accepted, response)
                     }
-
-                    val replyRequest = rawBody.decodeJson(serverJson, ReplyRequest.serializer())
-                    val response = enqueueReply(replyRequest, notificationReferer, messageSender)
-                    call.respond(HttpStatusCode.Accepted, response)
+                ) {
+                    return@post
                 }
             }
 
@@ -87,95 +103,113 @@ private suspend fun enqueueMultipartReply(
     authSupport: AuthSupport,
     serverJson: Json,
     messageSender: MessageSender,
+    replyImageIngressPolicy: ReplyImageIngressPolicy,
+    multipartImageStager: MultipartImageStager,
 ): ReplyAcceptedResponse? {
-    val multipart = call.receiveMultipart(formFieldLimit = MAX_REPLY_REQUEST_BODY_BYTES.toLong())
-    var totalBytes = 0L
-    var metadataBytes: ByteArray? = null
-    val imageBytesList = mutableListOf<ByteArray>()
+    val imagePolicy = replyImageIngressPolicy.imagePolicy
+    val multipart = call.receiveMultipart(formFieldLimit = imagePolicy.maxMetadataBytes.toLong())
+    val imageHandles = mutableListOf<VerifiedImagePayloadHandle>()
+    try {
+        var metadata: ReplyImageMetadata? = null
+        var nextExpectedImageIndex = 0
+        var totalImageBytes = 0L
 
-    while (true) {
-        val part = multipart.readPart() ?: break
-        try {
-            when (part) {
-                is PartData.FormItem -> {
-                    if (part.name == "metadata") {
-                        val bytes = part.value.toByteArray(Charsets.UTF_8)
-                        totalBytes = accumulateReplyBodyBytes(totalBytes, bytes.size.toLong())
-                        metadataBytes = bytes
+        while (true) {
+            val part = multipart.readPart() ?: break
+            try {
+                when (part) {
+                    is PartData.FormItem -> {
+                        if (part.name != "metadata") continue
+                        if (metadata != null) {
+                            invalidRequest("duplicate metadata part")
+                        }
+                        val rawMetadata = part.value.toByteArray(Charsets.UTF_8)
+                        if (rawMetadata.size > imagePolicy.maxMetadataBytes) {
+                            requestRejected("metadata part too large", HttpStatusCode.PayloadTooLarge)
+                        }
+                        if (!authSupport.requireBotControlSignature(call, method = "POST", bodySha256Hex = sha256Hex(rawMetadata))) {
+                            discardRemainingMultipartParts(multipart)
+                            return null
+                        }
+                        metadata = decodeReplyImageMetadata(serverJson, rawMetadata)
+                        validateMultipartImageManifest(metadata, replyImageIngressPolicy)
                     }
-                }
 
-                is PartData.FileItem -> {
-                    if (part.name == "image") {
-                        val bytes = readImagePartBytes(part)
-                        totalBytes = accumulateReplyBodyBytes(totalBytes, bytes.size.toLong())
-                        imageBytesList += bytes
+                    is PartData.FileItem -> {
+                        if (part.name != "image") continue
+                        val currentMetadata = metadata ?: invalidRequest("metadata part must precede image parts")
+                        val expectedPart =
+                            currentMetadata.images.getOrNull(nextExpectedImageIndex)
+                                ?: invalidRequest("unexpected extra image part")
+                        validateExpectedPartIndex(expectedPart, nextExpectedImageIndex)
+                        val handle = multipartImageStager(part, expectedPart, replyImageIngressPolicy)
+                        totalImageBytes =
+                            accumulateReplyBodyBytes(
+                                current = totalImageBytes,
+                                partBytes = handle.sizeBytes,
+                                maxBytes = imagePolicy.maxTotalBytes.toLong(),
+                            )
+                        imageHandles += handle
+                        nextExpectedImageIndex += 1
                     }
-                }
 
-                else -> Unit
+                    else -> Unit
+                }
+            } finally {
+                part.dispose()
             }
-        } finally {
-            part.dispose()
         }
-    }
 
-    val rawMetadata = metadataBytes ?: invalidRequest("missing metadata part")
-    if (!authSupport.requireBotControlSignature(call, method = "POST", bodySha256Hex = sha256Hex(rawMetadata))) {
-        return null
-    }
-
-    val metadata =
-        try {
-            serverJson.decodeFromString(ReplyImageMetadata.serializer(), rawMetadata.decodeToString())
-        } catch (_: SerializationException) {
-            invalidRequest("invalid metadata part")
+        val currentMetadata = metadata ?: invalidRequest("missing metadata part")
+        if (imageHandles.size != currentMetadata.images.size) {
+            invalidRequest("missing image part")
         }
-    requireMultipartImageType(metadata.type)
-    if (imageBytesList.isEmpty()) {
-        invalidRequest("missing image part")
-    }
 
-    val requestId = "reply-${UUID.randomUUID()}"
-    val roomId = metadata.room.toLongOrNull() ?: invalidRequest("room must be a numeric string")
-    val threadId =
-        metadata.threadId?.let {
-            it.toLongOrNull() ?: invalidRequest("threadId must be a numeric string")
+        val requestId = "reply-${UUID.randomUUID()}"
+        val roomId = currentMetadata.room.toLongOrNull() ?: invalidRequest("room must be a numeric string")
+        val threadId =
+            currentMetadata.threadId?.let {
+                it.toLongOrNull() ?: invalidRequest("threadId must be a numeric string")
+            }
+        val threadScope =
+            try {
+                validateReplyThreadScope(currentMetadata.type, threadId, currentMetadata.threadScope)
+            } catch (e: IllegalArgumentException) {
+                invalidRequest(e.message ?: "invalid threadScope")
+            }
+        if (threadId != null && !supportsThreadReply(currentMetadata.type)) {
+            invalidRequest("threadId is not supported for this reply type")
         }
-    val threadScope =
-        try {
-            validateReplyThreadScope(metadata.type, threadId, metadata.threadScope)
-        } catch (e: IllegalArgumentException) {
-            invalidRequest(e.message ?: "invalid threadScope")
-        }
-    if (threadId != null && !supportsThreadReply(metadata.type)) {
-        invalidRequest("threadId is not supported for this reply type")
-    }
 
-    val admission =
-        messageSender.sendNativeMultiplePhotosBytesSuspend(
-            room = roomId,
-            imageBytesList = imageBytesList,
-            threadId = threadId,
-            threadScope = threadScope,
+        val admission =
+            messageSender.sendNativeMultiplePhotosHandlesSuspend(
+                room = roomId,
+                imageHandles = imageHandles.toList(),
+                threadId = threadId,
+                threadScope = threadScope,
+                requestId = requestId,
+            )
+        if (admission.status != ReplyAdmissionStatus.ACCEPTED) {
+            requestRejected(
+                admission.message ?: "reply request rejected",
+                replyAdmissionHttpStatus(admission.status),
+            )
+        }
+        imageHandles.clear()
+
+        return ReplyAcceptedResponse(
             requestId = requestId,
+            room = currentMetadata.room,
+            type = currentMetadata.type,
         )
-    if (admission.status != ReplyAdmissionStatus.ACCEPTED) {
-        requestRejected(
-            admission.message ?: "reply request rejected",
-            replyAdmissionHttpStatus(admission.status),
-        )
+    } finally {
+        imageHandles.forEach { handle ->
+            runCatching { handle.close() }
+        }
     }
-
-    return ReplyAcceptedResponse(
-        requestId = requestId,
-        room = metadata.room,
-        type = metadata.type,
-    )
 }
 
-private fun isMultipartFormData(call: ApplicationCall): Boolean =
-    call.request.headers[HttpHeaders.ContentType]?.startsWith("multipart/form-data", ignoreCase = true) == true
+private fun isMultipartFormData(call: ApplicationCall): Boolean = call.request.headers[HttpHeaders.ContentType]?.startsWith("multipart/form-data", ignoreCase = true) == true
 
 private fun requireMultipartImageType(type: ReplyType) {
     if (type != ReplyType.IMAGE && type != ReplyType.IMAGE_MULTIPLE) {
@@ -183,36 +217,125 @@ private fun requireMultipartImageType(type: ReplyType) {
     }
 }
 
-private fun readImagePartBytes(part: PartData.FileItem): ByteArray {
-    val output = ByteArrayOutputStream()
-    part.provider().toInputStream().use { input ->
-        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-        while (true) {
-            val read = input.read(buffer)
-            if (read < 0) {
-                break
-            }
-            if (read == 0) {
-                continue
-            }
-            output.write(buffer, 0, read)
-            if (output.size().toLong() > MAX_REPLY_REQUEST_BODY_BYTES) {
-                requestRejected("request body too large", HttpStatusCode.PayloadTooLarge)
-            }
-        }
-    }
-    return output.toByteArray()
-}
-
 private fun accumulateReplyBodyBytes(
     current: Long,
     partBytes: Long,
+    maxBytes: Long,
 ): Long {
     val next = current + partBytes
-    if (next > MAX_REPLY_REQUEST_BODY_BYTES) {
+    if (next > maxBytes) {
         requestRejected("request body too large", HttpStatusCode.PayloadTooLarge)
     }
     return next
+}
+
+private fun decodeReplyImageMetadata(
+    serverJson: Json,
+    rawMetadata: ByteArray,
+): ReplyImageMetadata =
+    try {
+        serverJson.decodeFromString(ReplyImageMetadata.serializer(), rawMetadata.decodeToString())
+    } catch (_: SerializationException) {
+        invalidRequest("invalid metadata part")
+    }
+
+private fun validateMultipartImageManifest(
+    metadata: ReplyImageMetadata,
+    replyImageIngressPolicy: ReplyImageIngressPolicy,
+) {
+    requireMultipartImageType(metadata.type)
+    try {
+        validateReplyImageManifest(metadata.type, metadata.images, replyImageIngressPolicy.imagePolicy)
+    } catch (error: IllegalArgumentException) {
+        invalidRequest(error.message ?: "invalid image metadata")
+    }
+}
+
+private fun validateExpectedPartIndex(
+    expectedPart: ReplyImagePartSpec,
+    expectedIndex: Int,
+) {
+    if (expectedPart.index != expectedIndex) {
+        invalidRequest("metadata images must be ordered by index")
+    }
+}
+
+internal fun stageMultipartImagePart(
+    part: PartData.FileItem,
+    expectedPart: ReplyImagePartSpec,
+    replyImageIngressPolicy: ReplyImageIngressPolicy,
+): VerifiedImagePayloadHandle {
+    val imagePolicy = replyImageIngressPolicy.imagePolicy
+    val actualContentType =
+        part.contentType
+            ?.toString()
+            ?.substringBefore(';')
+            ?.trim()
+            ?.lowercase()
+    val expectedContentType =
+        expectedPart.contentType
+            .substringBefore(';')
+            .trim()
+            .lowercase()
+    if (expectedContentType !in imagePolicy.allowedContentTypes) {
+        invalidRequest("unexpected image content type")
+    }
+    if (actualContentType == null || !expectedContentType.equals(actualContentType, ignoreCase = true)) {
+        invalidRequest("unexpected image content type")
+    }
+    val handle =
+        part.provider().toInputStream().use { input ->
+            readInputStreamWithStreamingDigest(
+                input = input,
+                declaredContentLength = expectedPart.byteLength,
+                maxBodyBytes = expectedPart.byteLength.toInt(),
+                bufferingPolicy = replyImageIngressPolicy.bufferingPolicy,
+            )
+        }
+    if (!handle.sha256Hex.equals(expectedPart.sha256Hex, ignoreCase = true)) {
+        runCatching { handle.close() }
+        invalidRequest("image digest mismatch")
+    }
+    if (handle.sizeBytes != expectedPart.byteLength) {
+        runCatching { handle.close() }
+        invalidRequest("image length mismatch")
+    }
+    val detectedFormat =
+        handle.openInputStream().use { input ->
+            detectImageFormat(input.readNBytes(32))
+        }
+    if (detectedFormat == null || detectedFormat != imageFormatFromContentType(expectedContentType)) {
+        runCatching { handle.close() }
+        invalidRequest("unknown or mismatched image format")
+    }
+    return VerifiedRequestBodyImageHandle(
+        delegate = handle,
+        format = detectedFormat,
+        contentType = expectedContentType,
+    )
+}
+
+private data class VerifiedRequestBodyImageHandle(
+    private val delegate: RequestBodyHandle,
+    override val format: party.qwer.iris.ImageFormat,
+    override val contentType: String,
+) : VerifiedImagePayloadHandle {
+    override val sha256Hex: String
+        get() = delegate.sha256Hex
+
+    override val sizeBytes: Long
+        get() = delegate.sizeBytes
+
+    override fun openInputStream() = delegate.openInputStream()
+
+    override fun close() = delegate.close()
+}
+
+private suspend fun discardRemainingMultipartParts(multipart: MultiPartData) {
+    while (true) {
+        val remainingPart = multipart.readPart() ?: break
+        remainingPart.dispose()
+    }
 }
 
 private suspend fun enqueueReply(

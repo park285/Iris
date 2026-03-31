@@ -6,6 +6,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import party.qwer.iris.delivery.webhook.WebhookOutboxDispatcher
+import party.qwer.iris.http.ReplyImageIngressPolicy
 import party.qwer.iris.ingress.CommandIngressService
 import party.qwer.iris.persistence.CheckpointJournal
 import party.qwer.iris.persistence.SnapshotStateStore
@@ -49,8 +50,15 @@ internal class AppRuntime(
         }
         configManager = ConfigManager()
         bridgeClient = UdsImageBridgeClient()
+        val replyImageIngressPolicy = ReplyImageIngressPolicy.fromEnv()
 
-        replyService = ReplyRuntimeFactory.create(configManager, bridgeClient).replyService
+        replyService =
+            ReplyRuntimeFactory
+                .create(
+                    config = configManager,
+                    bridgeClient = bridgeClient,
+                    imagePolicy = replyImageIngressPolicy.imagePolicy,
+                ).replyService
         runBlocking { replyService.startSuspend() }
         IrisLogger.info("Message sender thread started")
 
@@ -79,6 +87,7 @@ internal class AppRuntime(
                 webhookOutboxStore = webhookOutboxStore,
                 sseEventBus = sseEventBus,
                 snapshotStateStore = snapshotStateStore,
+                missingTombstoneTtlMs = runtimeOptions.snapshotMissingTombstoneTtlMs,
             )
         snapshotScope = snapshotRuntime.snapshotScope
         snapshotCoordinator = snapshotRuntime.snapshotCoordinator
@@ -129,6 +138,7 @@ internal class AppRuntime(
                     configManager,
                     notificationReferer,
                     replyService,
+                    replyImageIngressPolicy = replyImageIngressPolicy,
                     bridgeHealthProvider = bridgeHealthCache::current,
                     replyStatusProvider = replyService::replyStatusOrNull,
                     memberRepo = memberRepo,

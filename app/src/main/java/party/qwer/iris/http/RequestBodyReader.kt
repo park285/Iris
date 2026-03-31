@@ -8,6 +8,7 @@ import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readAvailable
 import party.qwer.iris.requestRejected
 import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
@@ -68,6 +69,49 @@ internal suspend fun readBodyWithStreamingDigest(
     }
 }
 
+internal fun readInputStreamWithStreamingDigest(
+    input: InputStream,
+    declaredContentLength: Long?,
+    maxBodyBytes: Int,
+    bufferingPolicy: RequestBodyBufferingPolicy = RequestBodyBufferingPolicy(),
+): RequestBodyHandle {
+    if (declaredContentLength != null && declaredContentLength > maxBodyBytes) {
+        requestRejected("request body too large", HttpStatusCode.PayloadTooLarge)
+    }
+
+    val digest = MessageDigest.getInstance("SHA-256")
+    val buffer = ByteArray(STREAM_BUFFER_BYTES)
+    var totalRead = 0
+
+    val requestBodySink = RequestBodySink(policy = bufferingPolicy)
+    try {
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) {
+                break
+            }
+            if (read == 0) {
+                continue
+            }
+            totalRead += read
+            if (totalRead > maxBodyBytes) {
+                requestRejected("request body too large", HttpStatusCode.PayloadTooLarge)
+            }
+            digest.update(buffer, 0, read)
+            requestBodySink.write(buffer, 0, read)
+        }
+
+        val hexDigest = digest.digest().joinToString("") { byte -> "%02x".format(byte) }
+        return requestBodySink.detachHandle(
+            sha256Hex = hexDigest,
+            sizeBytes = totalRead.toLong(),
+        )
+    } catch (error: Throwable) {
+        requestBodySink.close()
+        throw error
+    }
+}
+
 private class RequestBodySink(
     private val policy: RequestBodyBufferingPolicy = RequestBodyBufferingPolicy(),
 ) : AutoCloseable {
@@ -92,12 +136,13 @@ private class RequestBodySink(
         sha256Hex: String,
         sizeBytes: Long,
     ): RequestBodyHandle =
-        storage.also {
-            storage = DetachedRequestBodyStorage
-        }.toHandle(
-            sha256Hex = sha256Hex,
-            sizeBytes = sizeBytes,
-        )
+        storage
+            .also {
+                storage = DetachedRequestBodyStorage
+            }.toHandle(
+                sha256Hex = sha256Hex,
+                sizeBytes = sizeBytes,
+            )
 
     override fun close() {
         storage.close()
@@ -164,7 +209,9 @@ internal data class RequestBodyBufferingPolicy(
                     .ifBlank { defaultTmpDir }
             return RequestBodyBufferingPolicy(
                 maxInMemoryBytes = configuredMaxInMemoryBytes,
-                spillDirectory = java.nio.file.Paths.get(configuredSpillDirectory),
+                spillDirectory =
+                    java.nio.file.Paths
+                        .get(configuredSpillDirectory),
             )
         }
     }
