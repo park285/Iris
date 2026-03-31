@@ -94,6 +94,21 @@ class ConfigSerializationTest {
     }
 
     @Test
+    fun `preserves explicit bridge token field`() {
+        val decoded =
+            decodeConfigValues(
+                json,
+                """
+                {
+                  "bridgeToken": "explicit-bridge"
+                }
+                """.trimIndent(),
+            )
+
+        assertEquals("explicit-bridge", decoded.values.bridgeToken)
+    }
+
+    @Test
     fun `preserves multiple webhook routes while deriving default endpoint from default route`() {
         val decoded =
             decodeConfigValues(

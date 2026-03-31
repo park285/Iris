@@ -14,6 +14,7 @@ data class UserConfigValues(
     val inboundSigningSecret: String = "",
     val outboundWebhookToken: String = "",
     val botControlToken: String = "",
+    val bridgeToken: String = "",
     val dbPollingRate: Long = 100,
     val messageSendRate: Long = 50,
     val messageSendJitterMax: Long = 0,

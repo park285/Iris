@@ -67,6 +67,20 @@ class ConfigManagerPersistenceTest {
     }
 
     @Test
+    fun `bridge token survives load and save roundtrip`() {
+        val configDir = Files.createTempDirectory("iris-config-manager-bridge-token").toFile()
+        val configPath = configDir.resolve("config.json").absolutePath
+        configDir.resolve("config.json").writeText("""{"bridgeToken":"bridge-secret"}""")
+
+        val manager = ConfigManager(configPath = configPath)
+
+        assertTrue(manager.saveConfigNow())
+        val configText = configDir.resolve("config.json").readText()
+        assertTrue(configText.contains("bridge-secret"))
+        configDir.deleteRecursively()
+    }
+
+    @Test
     fun `missing config keeps routing maps empty after reload via facade`() {
         val configDir = Files.createTempDirectory("iris-config-manager-routing-defaults").toFile()
         val configPath = configDir.resolve("config.json").absolutePath

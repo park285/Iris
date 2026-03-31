@@ -44,7 +44,8 @@ class ConfigManager(
             "Loaded config from $configPath " +
                 "(inboundSigningSecretConfigured=${stateStore.current().snapshotUser.inboundSigningSecret.isNotBlank()}, " +
                 "outboundWebhookTokenConfigured=${stateStore.current().snapshotUser.outboundWebhookToken.isNotBlank()}, " +
-                "botControlTokenConfigured=${stateStore.current().snapshotUser.botControlToken.isNotBlank()})",
+                "botControlTokenConfigured=${stateStore.current().snapshotUser.botControlToken.isNotBlank()}, " +
+                "bridgeTokenConfigured=${stateStore.current().snapshotUser.bridgeToken.isNotBlank()})",
         )
         if (loaded.migratedLegacyEndpoint) {
             IrisLogger.info("Migrated legacy webhook config to route-aware model")
@@ -60,7 +61,8 @@ class ConfigManager(
             "Saving config to $configPath " +
                 "(inboundSigningSecretConfigured=${savedSnapshot.inboundSigningSecret.isNotBlank()}, " +
                 "outboundWebhookTokenConfigured=${savedSnapshot.outboundWebhookToken.isNotBlank()}, " +
-                "botControlTokenConfigured=${savedSnapshot.botControlToken.isNotBlank()})",
+                "botControlTokenConfigured=${savedSnapshot.botControlToken.isNotBlank()}, " +
+                "bridgeTokenConfigured=${savedSnapshot.bridgeToken.isNotBlank()})",
         )
         val success = persistence.save(savedSnapshot)
         if (success) {
@@ -159,15 +161,21 @@ class ConfigManager(
     override fun webhookEndpointFor(route: String): String = configuredWebhookEndpoint(stateStore.current().appliedUser.toLegacyConfigValues(), route)
 
     override val inboundSigningSecret: String
-        get() = stateStore.current().snapshotUser.inboundSigningSecret
+        get() = stateStore.current().appliedUser.inboundSigningSecret
 
     override val outboundWebhookToken: String
-        get() = stateStore.current().snapshotUser.outboundWebhookToken
+        get() = stateStore.current().appliedUser.outboundWebhookToken
 
     override val botControlToken: String
-        get() = stateStore.current().snapshotUser.botControlToken
+        get() = stateStore.current().appliedUser.botControlToken
 
-    internal fun signingSecret(): String = stateStore.current().snapshotUser.inboundSigningSecret
+    override fun activeInboundSigningSecret(): String = stateStore.current().appliedUser.inboundSigningSecret
+
+    override fun activeOutboundWebhookToken(): String = stateStore.current().appliedUser.outboundWebhookToken
+
+    override fun activeBotControlToken(): String = stateStore.current().appliedUser.botControlToken
+
+    internal fun signingSecret(): String = activeInboundSigningSecret()
 
     internal fun snapshotUserState(): UserConfigState = stateStore.current().snapshotUser
 

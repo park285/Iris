@@ -1,19 +1,13 @@
 package party.qwer.iris.config
 
-internal object ConfigPathPolicy {
-    private const val DEFAULT_DATA_DIR = "/data/iris"
-    private const val DEFAULT_CONFIG_FILENAME = "config.json"
-    private const val DEFAULT_LOG_DIR = "logs"
+import party.qwer.iris.IrisRuntimePathPolicy
 
+internal object ConfigPathPolicy {
     fun resolveConfigPath(
-        envConfigPath: String? = System.getenv("IRIS_CONFIG_PATH"),
-    ): String =
-        envConfigPath?.trim()?.takeIf { it.isNotEmpty() }
-            ?: "$DEFAULT_DATA_DIR/$DEFAULT_CONFIG_FILENAME"
+        env: Map<String, String> = System.getenv(),
+    ): String = IrisRuntimePathPolicy.resolve(env).configPath
 
     fun resolveLogDirectory(
-        envLogDir: String? = System.getenv("IRIS_LOG_DIR"),
-    ): String =
-        envLogDir?.trim()?.takeIf { it.isNotEmpty() }
-            ?: "$DEFAULT_DATA_DIR/$DEFAULT_LOG_DIR"
+        env: Map<String, String> = System.getenv(),
+    ): String = IrisRuntimePathPolicy.resolve(env).logDir
 }
