@@ -82,7 +82,7 @@ internal class UdsImageBridgeClient(
     private val socketName: String = ImageBridgeProtocol.SOCKET_NAME,
     private val connectTimeoutMs: Int = 5_000,
     private val readTimeoutMs: Int = 30_000,
-    private val bridgeToken: String = System.getenv("IRIS_BRIDGE_TOKEN") ?: "",
+    private val bridgeToken: String = resolveBridgeToken(),
     private val securityModeRaw: String? = System.getenv("IRIS_BRIDGE_SECURITY_MODE"),
     private val socketFactory: () -> BridgeSocket = { AndroidBridgeSocket() },
 ) {

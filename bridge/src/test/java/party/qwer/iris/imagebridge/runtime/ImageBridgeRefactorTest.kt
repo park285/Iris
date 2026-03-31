@@ -785,19 +785,14 @@ class BridgeSecurityTest {
     }
 
     @Test
-    fun `production mode rejects root uid without explicit allowlist`() {
+    fun `production mode allows root uid by default`() {
         val validator =
             BridgePeerIdentityValidator(
                 securityMode = BridgeSecurityMode.PRODUCTION,
                 extraUidsRaw = null,
             )
 
-        val error =
-            assertFailsWith<IllegalArgumentException> {
-                validator.validate(0)
-            }
-
-        assertEquals("unauthorized bridge client uid=0", error.message)
+        validator.validate(0)
     }
 
     @Test

@@ -24,7 +24,7 @@ internal class BridgePeerIdentityValidator(
         ): Set<Int> {
             val defaults =
                 when (securityMode) {
-                    BridgeSecurityMode.PRODUCTION -> linkedSetOf<Int>()
+                    BridgeSecurityMode.PRODUCTION -> linkedSetOf(Process.ROOT_UID)
                     BridgeSecurityMode.DEVELOPMENT ->
                         linkedSetOf(
                             Process.ROOT_UID,
@@ -40,7 +40,7 @@ internal class BridgePeerIdentityValidator(
             return defaults + configured
         }
 
-        internal fun defaultAllowedUids(raw: String?): Set<Int> = buildAllowedUids(BridgeSecurityMode.DEVELOPMENT, raw)
+        internal fun defaultAllowedUids(raw: String?): Set<Int> = buildAllowedUids(BridgeSecurityMode.PRODUCTION, raw)
     }
 }
 

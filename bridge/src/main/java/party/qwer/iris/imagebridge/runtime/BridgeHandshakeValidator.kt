@@ -3,7 +3,7 @@ package party.qwer.iris.imagebridge.runtime
 import party.qwer.iris.ImageBridgeProtocol
 
 internal class BridgeHandshakeValidator(
-    private val expectedToken: String = System.getenv("IRIS_BRIDGE_TOKEN").orEmpty(),
+    private val expectedToken: String = party.qwer.iris.resolveBridgeToken(),
     private val securityMode: BridgeSecurityMode = BridgeSecurityMode.fromEnv(),
 ) {
     fun validate(request: ImageBridgeProtocol.ImageBridgeRequest) {
