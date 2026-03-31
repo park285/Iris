@@ -57,7 +57,8 @@
 
 4.  **Config 설정**
 
-    `/data/local/tmp/config.json` (또는 `IRIS_CONFIG_PATH`)에 설정 파일을 배치하세요.
+    `/data/iris/config.json` (또는 `IRIS_CONFIG_PATH`)에 설정 파일을 배치하세요.
+    기본 런타임 베이스 디렉터리를 바꾸려면 `IRIS_DATA_DIR`를 사용하고, 개별 파일만 바꿀 때만 `IRIS_CONFIG_PATH`를 override하세요.
 
 ---
 
@@ -89,7 +90,7 @@ AppRuntime (lifecycle orchestrator)
 
 ### Iris 설정
 
-`/data/local/tmp/config.json` (또는 `IRIS_CONFIG_PATH`)에서 webhook을 설정합니다.
+`/data/iris/config.json` (또는 `IRIS_CONFIG_PATH`)에서 webhook을 설정합니다.
 
 ```json
 {
@@ -104,6 +105,7 @@ AppRuntime (lifecycle orchestrator)
   "inboundSigningSecret": "<REQUIRED_SHARED_TOKEN>",
   "outboundWebhookToken": "<REQUIRED_SHARED_TOKEN>",
   "botControlToken": "<REQUIRED_SHARED_TOKEN>",
+  "bridgeToken": "<REQUIRED_BRIDGE_TOKEN>",
   "dbPollingRate": 100,
   "messageSendRate": 50
 }
@@ -116,8 +118,10 @@ AppRuntime (lifecycle orchestrator)
 - `inboundSigningSecret`: `/config` 보호 API 호출 시 signed request HMAC 서명 키입니다.
 - `outboundWebhookToken`: outbound webhook 전송 시 `X-Iris-Token` 헤더로 전달되는 토큰입니다.
 - `botControlToken`: `/reply`, `/reply-status`, `/rooms*`, `/events/stream`, `/query/*`, `/diagnostics/*` 보호 API 호출 시 사용하는 control-plane 서명 키입니다.
+- `bridgeToken`: app process와 LSPosed bridge가 공유하는 UDS handshake 토큰입니다. 운영에서는 `config.json`의 명시 필드로 유지해야 합니다.
 - 역할별 secret이 비어 있으면 해당 보호 API는 `503 service unavailable`으로 거부됩니다.
 - `IRIS_BIND_HOST` 기본값은 `127.0.0.1`이고, `IRIS_HTTP_WORKER_THREADS`로 Netty worker 수를 조정할 수 있습니다.
+- snapshot missing tombstone prune는 `IRIS_SNAPSHOT_MISSING_TOMBSTONE_TTL_MS`를 설정했을 때만 활성화됩니다.
 - 기본값으로 image reply 준비 시 media scan broadcast를 수행합니다. 필요 시 `IRIS_IMAGE_MEDIA_SCAN=0`으로 비활성화할 수 있습니다.
 - image cleanup 주기는 `IRIS_IMAGE_DELETE_INTERVAL_MS`, 보관 기간은 `IRIS_IMAGE_RETENTION_MS`로 조정할 수 있으며 기본값은 각각 1시간, 1일입니다.
 
@@ -132,6 +136,8 @@ AppRuntime (lifecycle orchestrator)
 - `threadId`, `threadScope`는 optional 필드이며, observer 경로에서 thread metadata가 존재하면 webhook payload에 포함됩니다.
 - Iris는 헤더 `X-Iris-Route`, `X-Iris-Message-Id`, `X-Iris-Token`을 함께 전송합니다.
 - 전송 프로토콜 기본값은 h2c 입니다. 필요 시 `IRIS_WEBHOOK_TRANSPORT=http1`로 HTTP/1.1(및 HTTPS)로 강제할 수 있습니다.
+- `http://` cleartext webhook는 기본적으로 loopback 주소만 허용됩니다. 명시적으로 private overlay cleartext를 열려면 `IRIS_WEBHOOK_TRANSPORT_SECURITY_MODE=PRIVATE_OVERLAY_HTTP_ALLOWED`를 사용하세요.
+- 호환 목적의 기존 `IRIS_ALLOW_CLEARTEXT_HTTP=1`도 여전히 `PRIVATE_OVERLAY_HTTP_ALLOWED`로 해석됩니다.
 - 현재 route 기본값은 일반 webhook command가 `default`, `!질문`/`!이미지`/`!그림`/`!리셋`/`!관리자`/`!한강`이 `chatbotgo`, `!정산`/`!정산완료`가 `settlement` 입니다.
 - `command_route_prefixes`, `image_message_type_routes` 설정으로 route 규칙을 override할 수 있습니다.
 
@@ -197,11 +203,15 @@ curl -X POST "$HOST$PATH_URI" \
 
 *   **`/reply`**: 카카오톡 채팅방에 메시지 또는 사진을 전송 큐에 등록합니다.
 
+    현재 image reply는 JSON base64가 아니라 `multipart/form-data` + signed metadata manifest 경로를 사용합니다.
+    metadata는 먼저 와야 하고, 각 image part는 digest/length/content-type/known-image format 검증을 통과해야 합니다.
+    core 전송 경계는 handle-only이며, bytes 입력은 edge adapter에서만 handle로 변환됩니다.
+
     **요청 본문 (JSON):**
 
     ```json
     {
-      "type": "text",  // 또는 "image", "image_multiple", "markdown"
+      "type": "text",  // 또는 "markdown"
       "room": "[CHAT_ID]",  // 채팅방 ID (숫자 문자열)
       "data": "[MESSAGE_TEXT]"
     }
