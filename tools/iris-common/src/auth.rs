@@ -62,6 +62,7 @@ pub fn signed_headers_with(
     headers.insert("X-Iris-Timestamp", HeaderValue::from_str(timestamp_ms)?);
     headers.insert("X-Iris-Nonce", HeaderValue::from_str(nonce)?);
     headers.insert("X-Iris-Signature", HeaderValue::from_str(&signature)?);
+    headers.insert("X-Iris-Body-Sha256", HeaderValue::from_str(&body_hash)?);
     Ok(headers)
 }
 
@@ -108,6 +109,10 @@ mod tests {
         assert_eq!(headers["X-Iris-Timestamp"], "1000");
         assert_eq!(headers["X-Iris-Nonce"], "nonce-1");
         assert!(headers.contains_key("X-Iris-Signature"));
+        assert_eq!(
+            headers["X-Iris-Body-Sha256"],
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
         assert!(!headers.contains_key("X-Bot-Token"));
     }
 

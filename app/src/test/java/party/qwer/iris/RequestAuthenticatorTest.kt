@@ -195,6 +195,92 @@ class RequestAuthenticatorTest {
     }
 
     @Test
+    fun `preverify and finalize authorize valid signed request`() {
+        val authenticator = RequestAuthenticator(nowEpochMs = { 1_000L })
+        val body = """{"endpoint":"http://example"}"""
+        val bodySha256Hex = sha256Hex(body.toByteArray())
+        val timestamp = "1000"
+        val nonce = "nonce-preverify"
+        val signature =
+            signIrisRequestWithBodyHash(
+                secret = "secret",
+                method = "POST",
+                path = "/config/endpoint",
+                timestamp = timestamp,
+                nonce = nonce,
+                bodySha256Hex = bodySha256Hex,
+            )
+
+        val preverify =
+            authenticator.preverify(
+                method = "POST",
+                path = "/config/endpoint",
+                declaredBodySha256Hex = bodySha256Hex,
+                expectedSecret = "secret",
+                timestampHeader = timestamp,
+                nonceHeader = nonce,
+                signatureHeader = signature,
+            )
+        assertEquals(AuthResult.AUTHORIZED, preverify.result)
+
+        val finalize =
+            authenticator.finalizeAuthorized(
+                precheck = checkNotNull(preverify.precheck),
+                actualBodySha256Hex = bodySha256Hex,
+            )
+        assertEquals(AuthResult.AUTHORIZED, finalize)
+    }
+
+    @Test
+    fun `body hash mismatch does not consume nonce before finalize succeeds`() {
+        val authenticator = RequestAuthenticator(nowEpochMs = { 1_000L })
+        val body = """{"endpoint":"http://example"}"""
+        val bodySha256Hex = sha256Hex(body.toByteArray())
+        val timestamp = "1000"
+        val nonce = "nonce-hash-mismatch"
+        val signature =
+            signIrisRequestWithBodyHash(
+                secret = "secret",
+                method = "POST",
+                path = "/config/endpoint",
+                timestamp = timestamp,
+                nonce = nonce,
+                bodySha256Hex = bodySha256Hex,
+            )
+
+        val preverify =
+            authenticator.preverify(
+                method = "POST",
+                path = "/config/endpoint",
+                declaredBodySha256Hex = bodySha256Hex,
+                expectedSecret = "secret",
+                timestampHeader = timestamp,
+                nonceHeader = nonce,
+                signatureHeader = signature,
+            )
+        assertEquals(AuthResult.AUTHORIZED, preverify.result)
+
+        val mismatch =
+            authenticator.finalizeAuthorized(
+                precheck = checkNotNull(preverify.precheck),
+                actualBodySha256Hex = sha256Hex("""{"endpoint":"http://other"}""".toByteArray()),
+            )
+        assertEquals(AuthResult.UNAUTHORIZED, mismatch)
+
+        val authenticated =
+            authenticator.authenticate(
+                method = "POST",
+                path = "/config/endpoint",
+                body = body,
+                expectedSecret = "secret",
+                timestampHeader = timestamp,
+                nonceHeader = nonce,
+                signatureHeader = signature,
+            )
+        assertEquals(AuthResult.AUTHORIZED, authenticated)
+    }
+
+    @Test
     fun `rejects new nonce when cache is at capacity`() {
         var now = 1_000L
         val authenticator =

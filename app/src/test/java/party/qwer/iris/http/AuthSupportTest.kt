@@ -5,6 +5,7 @@ import party.qwer.iris.ConfigProvider
 import party.qwer.iris.RequestAuthenticator
 import party.qwer.iris.sha256Hex
 import party.qwer.iris.signIrisRequest
+import party.qwer.iris.signIrisRequestWithBodyHash
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -186,5 +187,99 @@ class AuthSupportTest {
 
         assertEquals(AuthResult.UNAUTHORIZED, inboundResult)
         assertEquals(AuthResult.AUTHORIZED, controlResult)
+    }
+
+    @Test
+    fun `precheckRequest rejects POST without declared body hash`() {
+        val authSupport =
+            AuthSupport(
+                authenticator = RequestAuthenticator(nowEpochMs = { 1_000L }),
+                config = config(inboundSecret = "secret"),
+            )
+        val body = """{"endpoint":"http://example"}"""
+        val timestamp = "1000"
+        val nonce = "nonce-preauth"
+        val signature =
+            signIrisRequest(
+                secret = "secret",
+                method = "POST",
+                path = "/config/endpoint",
+                timestamp = timestamp,
+                nonce = nonce,
+                body = body,
+            )
+
+        val result =
+            authSupport.precheckRequest(
+                role = AuthSupport.SecretRole.INBOUND,
+                method = "POST",
+                path = "/config/endpoint",
+                timestampHeader = timestamp,
+                nonceHeader = nonce,
+                signatureHeader = signature,
+                declaredBodySha256HexHeader = null,
+            )
+
+        assertEquals(AuthResult.UNAUTHORIZED, result.result)
+    }
+
+    @Test
+    fun `precheckRequest and finalizeRequestAuthorization split signature verification from nonce commit`() {
+        val authSupport =
+            AuthSupport(
+                authenticator = RequestAuthenticator(nowEpochMs = { 1_000L }),
+                config = config(inboundSecret = "secret"),
+            )
+        val body = """{"endpoint":"http://example"}"""
+        val bodySha256Hex = sha256Hex(body.toByteArray())
+        val timestamp = "1000"
+        val nonce = "nonce-precheck"
+        val signature =
+            signIrisRequestWithBodyHash(
+                secret = "secret",
+                method = "POST",
+                path = "/config/endpoint",
+                timestamp = timestamp,
+                nonce = nonce,
+                bodySha256Hex = bodySha256Hex,
+            )
+
+        val precheck =
+            authSupport.precheckRequest(
+                role = AuthSupport.SecretRole.INBOUND,
+                method = "POST",
+                path = "/config/endpoint",
+                timestampHeader = timestamp,
+                nonceHeader = nonce,
+                signatureHeader = signature,
+                declaredBodySha256HexHeader = bodySha256Hex,
+            )
+        assertEquals(AuthResult.AUTHORIZED, precheck.result)
+
+        val mismatch =
+            authSupport.finalizeRequestAuthorization(
+                precheck = checkNotNull(precheck.precheck),
+                actualBodySha256Hex = sha256Hex("""{"endpoint":"http://other"}""".toByteArray()),
+            )
+        assertEquals(AuthResult.UNAUTHORIZED, mismatch)
+
+        val secondPrecheck =
+            authSupport.precheckRequest(
+                role = AuthSupport.SecretRole.INBOUND,
+                method = "POST",
+                path = "/config/endpoint",
+                timestampHeader = timestamp,
+                nonceHeader = nonce,
+                signatureHeader = signature,
+                declaredBodySha256HexHeader = bodySha256Hex,
+            )
+        assertEquals(AuthResult.AUTHORIZED, secondPrecheck.result)
+
+        val authorized =
+            authSupport.finalizeRequestAuthorization(
+                precheck = checkNotNull(secondPrecheck.precheck),
+                actualBodySha256Hex = bodySha256Hex,
+            )
+        assertEquals(AuthResult.AUTHORIZED, authorized)
     }
 }
