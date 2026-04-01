@@ -36,6 +36,9 @@
     ```
 
     `iris_control`은 Linux host 기준 스크립트입니다.
+    기본적으로 `IRIS_ENV_FILE`, `../llm/configs/iris/iris.env`, `/root/work/arm-iris-runtime/configs/iris/iris.env`
+    순서로 runtime SSOT를 자동 로드합니다.
+    원격 호스트에서는 `/root/work/arm-iris-runtime/configs/iris/iris.env`만 정본으로 취급하고, `.env`가 있더라도 호환용 링크로만 유지하세요.
 
 2.  **로컬 빌드 artifact 사용**
 
@@ -54,6 +57,7 @@
 
     `iris_control`은 `install/start/status/stop` 명령어를 제공합니다.
     완전 무로그가 필요하면 `IRIS_LOG_LEVEL=NONE ./iris_control start`처럼 실행할 수 있습니다.
+    다른 runtime SSOT를 쓰려면 `IRIS_ENV_FILE=/path/to/iris.env ./iris_control start`로 명시하세요.
 
 4.  **Config 설정**
 

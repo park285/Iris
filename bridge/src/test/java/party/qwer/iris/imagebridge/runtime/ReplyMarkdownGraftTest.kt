@@ -104,6 +104,31 @@ class ReplyMarkdownPendingContextStoreTest {
     }
 
     @Test
+    fun `session specific match ignores message drift when session id is present`() {
+        val store = ReplyMarkdownPendingContextStore()
+        val context =
+            ReplyMarkdownPendingContext(
+                roomId = 9L,
+                messageText = "[KST 02:42:31]\n\n원본 답변",
+                threadId = 10L,
+                threadScope = 2,
+                sessionId = "session-1",
+                createdAtEpochMs = 1L,
+            )
+
+        store.remember(context)
+
+        assertEquals(
+            context,
+            store.match(
+                roomId = 9L,
+                messageText = "[KST 02:42:31] 원본 답변",
+                sessionId = "session-1",
+            ),
+        )
+    }
+
+    @Test
     fun `session specific match prefers exact session over older sessionless entry`() {
         val store = ReplyMarkdownPendingContextStore()
         val sessionless =
@@ -128,7 +153,7 @@ class ReplyMarkdownPendingContextStoreTest {
         store.remember(sessionless)
         store.remember(sessionSpecific)
 
-        assertEquals(sessionSpecific, store.match(roomId = 9L, messageText = "same", sessionId = "session-1"))
+        assertEquals(sessionSpecific, store.match(roomId = 9L, messageText = "mutated", sessionId = "session-1"))
         assertEquals(sessionless, store.match(roomId = 9L, messageText = "same"))
     }
 

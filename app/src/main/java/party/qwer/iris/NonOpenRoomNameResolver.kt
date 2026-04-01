@@ -17,7 +17,7 @@ internal class NonOpenRoomNameResolver(
     private val botId: Long,
 ) {
     fun resolve(
-        chatId: Long,
+        chatId: ChatId,
         roomType: String?,
         meta: String?,
         members: String?,
@@ -27,7 +27,7 @@ internal class NonOpenRoomNameResolver(
             return titleFromMeta
         }
 
-        val observedRoomName = observedProfile.resolveProfileByChatId(ChatId(chatId))?.roomName
+        val observedRoomName = observedProfile.resolveProfileByChatId(chatId)?.roomName
         if (!observedRoomName.isNullOrBlank()) {
             return observedRoomName
         }
@@ -41,12 +41,12 @@ internal class NonOpenRoomNameResolver(
             return roomType
         }
         val names =
-            resolveNicknamesBatch(memberIds, null, ChatId(chatId))
+            resolveNicknamesBatch(memberIds, null, chatId)
                 .values
                 .filter { it.isNotBlank() }
         if (names.isEmpty()) {
             return roomType
         }
-        return if (roomType == "DirectChat") names.first() else names.joinToString(", ")
+        return if (KakaoRoomType.isDirectChat(roomType)) names.first() else names.joinToString(", ")
     }
 }

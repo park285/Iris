@@ -242,4 +242,127 @@ class MemberRepositoryQueryTest {
         assertEquals(1, rooms.rooms.size)
         assertEquals(42L, rooms.rooms[0].chatId)
     }
+
+    @Test
+    fun `listMembers query count is bounded`() {
+        val queryCount =
+            java.util.concurrent.atomic
+                .AtomicInteger(0)
+        val repo =
+            buildRepoFromLegacy(
+                executeQueryTyped =
+                    legacyQuery { sql, _, _ ->
+                        queryCount.incrementAndGet()
+                        when {
+                            sql.contains("chat_rooms") ->
+                                listOf(
+                                    mapOf(
+                                        "id" to "42",
+                                        "type" to "MultiChat",
+                                        "active_members_count" to "3",
+                                        "link_id" to null,
+                                        "meta" to null,
+                                        "members" to "[10,20,30]",
+                                        "blinded_member_ids" to null,
+                                        "link_name" to null,
+                                        "link_url" to null,
+                                        "member_limit" to null,
+                                        "searchable" to null,
+                                        "bot_role" to null,
+                                    ),
+                                )
+                            sql.contains("friends") ->
+                                listOf(
+                                    mapOf("id" to "10", "name" to "Alice", "enc" to "0"),
+                                    mapOf("id" to "20", "name" to "Bob", "enc" to "0"),
+                                    mapOf("id" to "30", "name" to "Carol", "enc" to "0"),
+                                )
+                            else -> emptyList()
+                        }
+                    },
+                decrypt = { _, s, _ -> s },
+                botId = 1L,
+            )
+
+        queryCount.set(0)
+        val result = repo.listMembers(42L)
+        assertTrue(result.members.isNotEmpty(), "listMembers should return members")
+        assertTrue(queryCount.get() <= 6, "listMembers should use bounded queries, got ${queryCount.get()}")
+    }
+
+    @Test
+    fun `roomSummary query count is bounded`() {
+        val queryCount =
+            java.util.concurrent.atomic
+                .AtomicInteger(0)
+        val repo =
+            buildRepoFromLegacy(
+                executeQueryTyped =
+                    legacyQuery { sql, _, _ ->
+                        queryCount.incrementAndGet()
+                        when {
+                            sql.contains("chat_rooms") ->
+                                listOf(
+                                    mapOf(
+                                        "id" to "42",
+                                        "type" to "MultiChat",
+                                        "active_members_count" to "3",
+                                        "link_id" to null,
+                                        "meta" to null,
+                                        "members" to "[10,20]",
+                                        "blinded_member_ids" to null,
+                                        "link_name" to null,
+                                        "link_url" to null,
+                                        "member_limit" to null,
+                                        "searchable" to null,
+                                        "bot_role" to null,
+                                    ),
+                                )
+                            else -> emptyList()
+                        }
+                    },
+                decrypt = { _, s, _ -> s },
+                botId = 1L,
+            )
+
+        queryCount.set(0)
+        val result = repo.roomSummary(42L)
+        assertEquals(42L, result?.chatId)
+        assertTrue(queryCount.get() <= 4, "roomSummary should use bounded queries, got ${queryCount.get()}")
+    }
+
+    @Test
+    fun `roomStats query count is bounded`() {
+        val queryCount =
+            java.util.concurrent.atomic
+                .AtomicInteger(0)
+        val repo =
+            buildRepoFromLegacy(
+                executeQueryTyped =
+                    legacyQuery { sql, _, _ ->
+                        queryCount.incrementAndGet()
+                        when {
+                            sql.contains("chat_rooms") ->
+                                listOf(
+                                    mapOf(
+                                        "id" to "42",
+                                        "type" to "MultiChat",
+                                        "active_members_count" to "3",
+                                        "link_id" to null,
+                                        "meta" to null,
+                                        "members" to "[10,20]",
+                                        "blinded_member_ids" to null,
+                                    ),
+                                )
+                            else -> emptyList()
+                        }
+                    },
+                decrypt = { _, s, _ -> s },
+                botId = 1L,
+            )
+
+        queryCount.set(0)
+        val result = repo.roomStats(42L, "7d", 10)
+        assertTrue(queryCount.get() <= 4, "roomStats should use bounded queries, got ${queryCount.get()}")
+    }
 }

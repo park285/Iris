@@ -89,8 +89,23 @@ class H2cDispatcherClientConfigTest {
             )
 
         assertFailsWith<IllegalArgumentException> {
-            factory.clientFor("http://100.100.1.3:30001/webhook/iris")
+            factory.clientFor("http://8.8.8.8:30001/webhook/iris")
         }
+    }
+
+    @Test
+    fun `private overlay cleartext webhook is allowed in loopback mode`() {
+        val factory =
+            WebhookHttpClientFactory(
+                transport = WebhookTransport.H2C,
+                sharedDispatcher = okhttp3.Dispatcher(),
+                sharedConnectionPool = okhttp3.ConnectionPool(),
+                transportSecurityMode = TransportSecurityMode.LOOPBACK_HTTP_ALLOWED,
+            )
+
+        val client = factory.clientFor("http://100.100.1.3:30001/webhook/iris")
+        val h2cClient = readClientField(factory, "h2cClient")
+        assertSame(h2cClient, client)
     }
 
     @Test

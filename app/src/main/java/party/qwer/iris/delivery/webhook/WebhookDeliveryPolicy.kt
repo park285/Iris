@@ -1,13 +1,17 @@
 package party.qwer.iris.delivery.webhook
 
 internal data class WebhookDeliveryPolicy(
-    val maxDeliveryAttempts: Int = 6,
+    val maxDeliveryAttempts: Int = DEFAULT_MAX_DELIVERY_ATTEMPTS,
     val maxClaimBatchSize: Int = 64,
     val pollIntervalMs: Long = 200L,
     val partitionQueueCapacity: Int = 64,
     val claimRecoveryIntervalMs: Long = 30_000L,
     val claimExpirationMs: Long = 60_000L,
 ) {
+    companion object {
+        const val DEFAULT_MAX_DELIVERY_ATTEMPTS = 6
+    }
+
     init {
         require(maxDeliveryAttempts > 0) { "maxDeliveryAttempts must be positive" }
         require(maxClaimBatchSize > 0) { "maxClaimBatchSize must be positive" }

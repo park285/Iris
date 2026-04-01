@@ -2,20 +2,70 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 IRIS_PROCESS_NAME="party.qwer.iris.Main"
 IRIS_PROCESS_KEYWORD="app_process"
 IRIS_APK_URL="https://github.com/park285/Iris/releases/latest/download/Iris.apk"
 IRIS_APK_PATH="/data/local/tmp/Iris.apk"
 IRIS_APK_LOCAL_FILE="Iris.apk"
 IRIS_MD5_URL="${IRIS_APK_URL}.MD5"
+IRIS_ENV_FILE="${IRIS_ENV_FILE:-}"
 IRIS_CONFIG_PATH="${IRIS_CONFIG_PATH:-/data/local/tmp/config.json}"
 IRIS_ADB_DEVICE="${IRIS_ADB_DEVICE:-${ANDROID_SERIAL:-}}"
+IRIS_ALLOW_CLEARTEXT_HTTP="${IRIS_ALLOW_CLEARTEXT_HTTP:-}"
+IRIS_WEBHOOK_TRANSPORT_SECURITY_MODE="${IRIS_WEBHOOK_TRANSPORT_SECURITY_MODE:-}"
 IRIS_WEBHOOK_TRANSPORT="${IRIS_WEBHOOK_TRANSPORT:-}"
 IRIS_WEBHOOK_TOKEN="${IRIS_WEBHOOK_TOKEN:-}"
 IRIS_BOT_TOKEN="${IRIS_BOT_TOKEN:-}"
 IRIS_LOG_LEVEL="${IRIS_LOG_LEVEL:-}"
+IRIS_BIND_HOST="${IRIS_BIND_HOST:-}"
 
 declare -a ADB_CMD=()
+
+load_iris_env() {
+  local -a candidates=()
+  local candidate
+  local loaded=""
+
+  if [[ -n "$IRIS_ENV_FILE" ]]; then
+    candidates+=("$IRIS_ENV_FILE")
+  fi
+  candidates+=(
+    "$SCRIPT_DIR/../llm/configs/iris/iris.env"
+    "$SCRIPT_DIR/../arm-iris-runtime/configs/iris/iris.env"
+    "/root/work/arm-iris-runtime/configs/iris/iris.env"
+  )
+
+  for candidate in "${candidates[@]}"; do
+    if [[ -f "$candidate" ]]; then
+      set -a
+      # shellcheck source=/dev/null
+      . "$candidate"
+      set +a
+      loaded="$candidate"
+      break
+    fi
+  done
+
+  if [[ -n "$IRIS_ENV_FILE" && -z "$loaded" ]]; then
+    echo "Error: IRIS_ENV_FILE not found: $IRIS_ENV_FILE"
+    return 1
+  fi
+
+  if [[ -n "$loaded" ]]; then
+    echo "Loaded iris.env: $loaded"
+  fi
+
+  if [[ -z "$IRIS_ADB_DEVICE" && -n "${IRIS_DEVICE:-}" ]]; then
+    IRIS_ADB_DEVICE="$IRIS_DEVICE"
+  fi
+  if [[ -z "$IRIS_WEBHOOK_TOKEN" && -n "${IRIS_SHARED_TOKEN:-}" ]]; then
+    IRIS_WEBHOOK_TOKEN="$IRIS_SHARED_TOKEN"
+  fi
+  if [[ -z "$IRIS_BOT_TOKEN" && -n "${IRIS_SHARED_TOKEN:-}" ]]; then
+    IRIS_BOT_TOKEN="$IRIS_SHARED_TOKEN"
+  fi
+}
 
 check_linux_host() {
   if [[ "$(uname -s)" != "Linux" ]]; then
@@ -135,7 +185,7 @@ iris_status() {
 build_remote_runtime_command() {
   local redirect_suffix="${1:-}"
   cat <<EOF
-IRIS_CONFIG_PATH="$IRIS_CONFIG_PATH" IRIS_WEBHOOK_TRANSPORT="$IRIS_WEBHOOK_TRANSPORT" IRIS_WEBHOOK_TOKEN="$IRIS_WEBHOOK_TOKEN" IRIS_BOT_TOKEN="$IRIS_BOT_TOKEN" IRIS_LOG_LEVEL="$IRIS_LOG_LEVEL" CLASSPATH="$IRIS_APK_PATH" app_process / party.qwer.iris.Main$redirect_suffix
+IRIS_CONFIG_PATH="$IRIS_CONFIG_PATH" IRIS_ALLOW_CLEARTEXT_HTTP="$IRIS_ALLOW_CLEARTEXT_HTTP" IRIS_WEBHOOK_TRANSPORT_SECURITY_MODE="$IRIS_WEBHOOK_TRANSPORT_SECURITY_MODE" IRIS_WEBHOOK_TRANSPORT="$IRIS_WEBHOOK_TRANSPORT" IRIS_WEBHOOK_TOKEN="$IRIS_WEBHOOK_TOKEN" IRIS_BOT_TOKEN="$IRIS_BOT_TOKEN" IRIS_LOG_LEVEL="$IRIS_LOG_LEVEL" IRIS_BIND_HOST="$IRIS_BIND_HOST" CLASSPATH="$IRIS_APK_PATH" app_process / party.qwer.iris.Main$redirect_suffix
 EOF
 }
 
@@ -277,6 +327,7 @@ cleanup_install_artifacts() {
 }
 
 main() {
+  load_iris_env || exit 1
   check_linux_host || exit 1
 
   case "${1:-}" in

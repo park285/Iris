@@ -452,6 +452,54 @@ class CommandIngressServiceTest {
             assertEquals(1, routeCalls[12L]?.get())
             ingress.close()
         }
+
+    @Test
+    fun `image message forwards direct thread metadata from db columns`() =
+        runTest {
+            val gateway = FakeRoutingGateway()
+            val db =
+                FakeChatLogRepository(
+                    latestLogId = 10L,
+                    polledLogs =
+                        listOf(
+                            KakaoDB.ChatLogEntry(
+                                id = 12L,
+                                chatLogId = "img-log-456",
+                                chatId = 100L,
+                                userId = 200L,
+                                message = "사진",
+                                metadata = "{\"enc\":0,\"origin\":\"CHATLOG\"}",
+                                createdAt = "1711111112",
+                                messageType = "2",
+                                threadId = "cmd-log-123",
+                                threadScope = 2,
+                                attachment = "{\"url\":\"https://example.com/img.jpg\"}",
+                            ),
+                        ),
+                )
+            val ingress =
+                CommandIngressService(
+                    db = db,
+                    config = config,
+                    checkpointJournal = FakeCheckpointJournal(),
+                    routingGateway = gateway,
+                    dispatchDispatcher = StandardTestDispatcher(testScheduler),
+                    onMarkDirty = {},
+                )
+
+            ingress.checkChange()
+            ingress.checkChange()
+            testScheduler.runCurrent()
+
+            val commands = gateway.commands
+            assertEquals(1, commands.size, "Expected 1 routed image command")
+
+            val imageCmd = commands[0]
+            assertEquals("2", imageCmd.messageType)
+            assertEquals("cmd-log-123", imageCmd.threadId)
+            assertEquals(2, imageCmd.threadScope)
+            ingress.close()
+        }
 }
 
 private class FakeChatLogRepository(

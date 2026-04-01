@@ -844,6 +844,73 @@ class SnapshotCoordinatorTest {
             assertEquals(1, diffEngine.calls)
             scope.cancel()
         }
+
+    @Test
+    fun `pruneMissing removes confirmed rooms from in-memory state via delta`() =
+        runBlocking {
+            val stateStore = InMemorySnapshotStateStore()
+            val rooms = mutableListOf(100L, 200L)
+            val reader =
+                StubSnapshotReader(
+                    roomsProvider = { rooms.map(::ChatId) },
+                    snapshots =
+                        mapOf(
+                            100L to listOf(snapshot(100L, setOf(1L), nicknames = mapOf(1L to "Alice"))),
+                            200L to listOf(snapshot(200L, setOf(2L), nicknames = mapOf(2L to "Bob"))),
+                        ),
+                )
+            val emitter = RecordingEmitter()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            val coordinator =
+                SnapshotCoordinator(
+                    scope,
+                    reader,
+                    RoomSnapshotManager(),
+                    emitter,
+                    stateStore = stateStore,
+                    missingPolicy = immediateMissingPolicy(),
+                )
+
+            // 시드: 방 100, 200 추가
+            coordinator.send(SnapshotCommand.SeedCache)
+            yield()
+
+            // 방 100 삭제 → missing 확정
+            rooms.remove(100L)
+            coordinator.send(SnapshotCommand.FullReconcile)
+            yield()
+            coordinator.send(SnapshotCommand.Drain(budget = 10))
+            yield()
+
+            val leaveEvents = emitter.emittedEvents.filterIsInstance<MemberEvent>()
+            assertEquals(1, leaveEvents.size)
+            assertEquals("leave", leaveEvents[0].event)
+            assertEquals(100L, leaveEvents[0].chatId)
+            emitter.emittedEvents.clear()
+
+            // prune: cutoff을 미래로 설정하여 방 100의 confirmed missing을 제거
+            coordinator.send(SnapshotCommand.PruneMissing(cutoffEpochMs = Long.MAX_VALUE))
+            yield()
+
+            // prune 후 방 200은 여전히 정상, 방 100은 인메모리에서 제거됨
+            val debugSnapshot = coordinator.debugSnapshotSuspend()
+            assertEquals(1, debugSnapshot.cachedRoomCount)
+
+            // 방 100이 다시 나타나도 restored 이벤트 없음 (이미 prune됨)
+            rooms.add(100L)
+            coordinator.send(SnapshotCommand.FullReconcile)
+            yield()
+            coordinator.send(SnapshotCommand.Drain(budget = 10))
+            yield()
+
+            // 새로운 방으로 취급되어 seedCache처럼 처음 보는 방이 됨 — diff 이벤트 없음
+            val postPruneEvents = emitter.emittedEvents.filterIsInstance<MemberEvent>()
+            assertTrue(
+                postPruneEvents.none { it.event == "join" && it.chatId == 100L && it.estimated },
+                "Pruned room should not emit estimated join events on reappearance",
+            )
+            scope.cancel()
+        }
 }
 
 private class StubSnapshotReader(

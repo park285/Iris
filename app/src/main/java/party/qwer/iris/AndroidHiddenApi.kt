@@ -9,6 +9,9 @@ import android.os.IBinder
 @SuppressLint("PrivateApi")
 class AndroidHiddenApi {
     companion object {
+        private const val serviceLookupAttempts = 20
+        private const val serviceLookupRetryDelayMs = 100L
+
         val startService: (Intent) -> Unit by lazy {
             getStartServiceMethod()
         }
@@ -263,10 +266,48 @@ class AndroidHiddenApi {
             )
         }
 
-        private fun getService(name: String): IBinder {
-            val method = Class.forName("android.os.ServiceManager").getMethod("getService", String::class.java)
+        private fun getService(name: String): IBinder =
+            requireLookupValue(
+                label = "system service '$name'",
+                attempts = serviceLookupAttempts,
+                retryDelayMs = serviceLookupRetryDelayMs,
+            ) {
+                lookupServiceBinder(name)
+            }
 
-            return method.invoke(null, name) as IBinder
+        private fun lookupServiceBinder(name: String): IBinder? {
+            val serviceManagerClass = Class.forName("android.os.ServiceManager")
+            val getServiceMethod = serviceManagerClass.getMethod("getService", String::class.java)
+
+            val checkServiceMethod =
+                runCatching {
+                    serviceManagerClass.getMethod("checkService", String::class.java)
+                }.getOrNull()
+
+            val binder =
+                (checkServiceMethod?.invoke(null, name) as? IBinder)
+                    ?: (getServiceMethod.invoke(null, name) as? IBinder)
+            return binder
         }
     }
+}
+
+internal fun <T : Any> requireLookupValue(
+    label: String,
+    attempts: Int,
+    retryDelayMs: Long,
+    loader: () -> T?,
+): T {
+    require(attempts > 0) { "attempts must be positive" }
+
+    repeat(attempts) { attempt ->
+        loader()?.let { return it }
+
+        if (attempt + 1 < attempts && retryDelayMs > 0) {
+            Thread.sleep(retryDelayMs)
+        }
+    }
+
+    IrisLogger.error("[AndroidHiddenApi] $label unavailable after $attempts attempts")
+    throw IllegalStateException("$label unavailable after $attempts attempts")
 }

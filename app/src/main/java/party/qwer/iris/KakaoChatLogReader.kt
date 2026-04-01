@@ -13,7 +13,7 @@ internal class KakaoChatLogReader(
             db
                 .rawQuery(
                     """
-                    SELECT _id, id, chat_id, user_id, message, v, created_at, type, thread_id, supplement, attachment
+                    SELECT _id, id, chat_id, user_id, message, v, created_at, type, thread_id, scope, supplement, attachment
                     FROM chat_logs
                     WHERE _id > ?
                     ORDER BY _id ASC
@@ -31,6 +31,7 @@ internal class KakaoChatLogReader(
                     val createdAtIndex = cursor.getColumnIndexOrThrow("created_at")
                     val messageTypeIndex = cursor.getColumnIndex("type")
                     val threadIdIndex = cursor.getColumnIndex("thread_id")
+                    val threadScopeIndex = cursor.getColumnIndex("scope")
                     val supplementIndex = cursor.getColumnIndex("supplement")
                     val attachmentIndex = cursor.getColumnIndex("attachment")
                     while (cursor.moveToNext()) {
@@ -45,6 +46,7 @@ internal class KakaoChatLogReader(
                                 createdAt = cursor.getString(createdAtIndex),
                                 messageType = cursor.getOptionalString(messageTypeIndex),
                                 threadId = cursor.getOptionalString(threadIdIndex),
+                                threadScope = cursor.getOptionalInt(threadScopeIndex),
                                 supplement = cursor.getOptionalString(supplementIndex),
                                 attachment = cursor.getOptionalString(attachmentIndex),
                             ),

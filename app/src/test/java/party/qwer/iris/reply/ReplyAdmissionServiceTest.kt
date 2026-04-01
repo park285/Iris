@@ -281,6 +281,43 @@ class ReplyAdmissionServiceTest {
         }
 
     @Test
+    fun `concurrent enqueue during shutdown returns shutdown status`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val service =
+                ReplyAdmissionService(
+                    maxWorkers = 16,
+                    perWorkerQueueCapacity = 16,
+                    workerIdleTimeoutMs = 60_000L,
+                    dispatcher = dispatcher,
+                )
+            service.startSuspend()
+
+            val key = ReplyQueueKey(chatId = 1L, threadId = null)
+            val started = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val blockingRequest = controlledPipelineRequest(started, release)
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, service.enqueueSuspend(key, blockingRequest).status)
+            advanceUntilIdle()
+            started.await()
+
+            // 워커가 활성 상태에서 shutdown 시작
+            service.shutdownSuspend()
+
+            // shutdown 후 enqueue는 SHUTDOWN 반환
+            val postShutdown = service.enqueueSuspend(key, stubPipelineRequest())
+            assertEquals(ReplyAdmissionStatus.SHUTDOWN, postShutdown.status)
+
+            // 다른 키로도 SHUTDOWN 반환
+            val otherKey = ReplyQueueKey(chatId = 2L, threadId = null)
+            val otherResult = service.enqueueSuspend(otherKey, stubPipelineRequest())
+            assertEquals(ReplyAdmissionStatus.SHUTDOWN, otherResult.status)
+
+            release.complete(Unit)
+            advanceUntilIdle()
+        }
+
+    @Test
     fun `debugSnapshotSuspend exposes queue depth and worker age`() =
         runTest {
             val dispatcher = StandardTestDispatcher(testScheduler)

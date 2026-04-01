@@ -10,14 +10,14 @@ internal class ThreadListingService(
     private val decrypt: (Int, String, Long) -> String,
     private val botId: Long,
 ) {
-    fun listThreads(chatId: Long): ThreadListResponse {
-        val room = roomDirectory.findRoomById(ChatId(chatId))
-        val isOpenChat = room?.type?.startsWith("O") == true
+    fun listThreads(chatId: ChatId): ThreadListResponse {
+        val room = roomDirectory.findRoomById(chatId)
+        val isOpenChat = KakaoRoomType.isOpenChat(room?.type)
         if (!isOpenChat) {
-            return ThreadListResponse(chatId = chatId, threads = emptyList())
+            return ThreadListResponse(chatId = chatId.value, threads = emptyList())
         }
 
-        val rows = threadQueries.listThreads(ChatId(chatId))
+        val rows = threadQueries.listThreads(chatId)
         val threads =
             rows.map { row ->
                 val decryptedOrigin =
@@ -39,6 +39,6 @@ internal class ThreadListingService(
                     lastActiveAt = row.lastActiveAt,
                 )
             }
-        return ThreadListResponse(chatId = chatId, threads = threads)
+        return ThreadListResponse(chatId = chatId.value, threads = threads)
     }
 }

@@ -24,7 +24,7 @@ internal class RoomCatalogService(
                     linkName =
                         row.linkName
                             ?: metadata.resolveNonOpenRoomName(
-                                chatId = row.id.value,
+                                chatId = row.id,
                                 roomType = row.type,
                                 meta = row.meta,
                                 members = row.members,
@@ -52,8 +52,8 @@ internal class RoomCatalogService(
         )
     }
 
-    fun roomSummary(chatId: Long): RoomSummary? {
-        val roomRow = roomDirectory.findRoomById(ChatId(chatId)) ?: return null
+    fun roomSummary(chatId: ChatId): RoomSummary? {
+        val roomRow = roomDirectory.findRoomById(chatId) ?: return null
         val openLink = roomRow.linkId?.let(roomDirectory::loadOpenLink)
         return RoomSummary(
             chatId = roomRow.id.value,
@@ -63,7 +63,7 @@ internal class RoomCatalogService(
             linkName =
                 openLink?.name
                     ?: metadata.resolveNonOpenRoomName(
-                        chatId = roomRow.id.value,
+                        chatId = roomRow.id,
                         roomType = roomRow.type,
                         meta = roomRow.meta,
                         members = roomRow.members,
@@ -75,10 +75,10 @@ internal class RoomCatalogService(
         )
     }
 
-    fun roomInfo(chatId: Long): RoomInfoResponse {
+    fun roomInfo(chatId: ChatId): RoomInfoResponse {
         val roomRow =
-            roomDirectory.findRoomForInfo(ChatId(chatId))
-                ?: return RoomInfoResponse(chatId, null, null, emptyList(), emptyList(), emptyList())
+            roomDirectory.findRoomForInfo(chatId)
+                ?: return RoomInfoResponse(chatId.value, null, null, emptyList(), emptyList(), emptyList())
 
         val linkId = roomRow.linkId
         val notices = metadata.parseNotices(roomRow.meta)
@@ -107,7 +107,7 @@ internal class RoomCatalogService(
             }
 
         return RoomInfoResponse(
-            chatId = chatId,
+            chatId = chatId.value,
             type = roomRow.type,
             linkId = linkId?.value,
             notices = notices,

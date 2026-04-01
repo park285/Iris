@@ -17,7 +17,7 @@ internal sealed interface DeliveryRetrySchedule {
 
 internal fun nextDeliveryRetrySchedule(
     attempt: Int,
-    maxDeliveryAttempts: Int = 6,
+    maxDeliveryAttempts: Int = WebhookDeliveryPolicy.DEFAULT_MAX_DELIVERY_ATTEMPTS,
     backoffDelayProvider: (Int) -> Long = ::nextBackoffDelayMs,
 ): DeliveryRetrySchedule =
     if (attempt < maxDeliveryAttempts - 1) {

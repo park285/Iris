@@ -5,6 +5,9 @@ import okhttp3.Dispatcher
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
+import java.net.Inet4Address
+import java.net.Inet6Address
+import java.net.InetAddress
 import java.util.concurrent.TimeUnit
 
 private const val ALLOW_CLEARTEXT_HTTP_ENV = "IRIS_ALLOW_CLEARTEXT_HTTP"
@@ -103,7 +106,7 @@ internal class WebhookHttpClientFactory(
                     throw IllegalArgumentException("cleartext HTTP webhook is disabled by transport security mode")
 
                 TransportSecurityMode.LOOPBACK_HTTP_ALLOWED -> {
-                    if (!isLoopbackWebhookUrl(webhookUrl)) {
+                    if (!isTrustedPrivateWebhookUrl(webhookUrl)) {
                         throw IllegalArgumentException(
                             "cleartext HTTP webhook requires loopback host or IRIS_WEBHOOK_TRANSPORT_SECURITY_MODE=PRIVATE_OVERLAY_HTTP_ALLOWED",
                         )
@@ -116,9 +119,39 @@ internal class WebhookHttpClientFactory(
         return defaultClient
     }
 
-    private fun isLoopbackWebhookUrl(webhookUrl: String): Boolean {
+    private fun isTrustedPrivateWebhookUrl(webhookUrl: String): Boolean {
         val host = webhookUrl.toHttpUrlOrNull()?.host?.lowercase() ?: return false
-        return host == "localhost" || host == "127.0.0.1" || host == "::1"
+        if (host == "localhost") {
+            return true
+        }
+        val address =
+            runCatching { InetAddress.getByName(host) }
+                .getOrNull()
+                ?: return false
+        return when (address) {
+            is Inet4Address -> isTrustedPrivateIpv4(address)
+            is Inet6Address -> address.isLoopbackAddress || address.isSiteLocalAddress || isUniqueLocalIpv6(address)
+            else -> false
+        }
+    }
+
+    private fun isTrustedPrivateIpv4(address: Inet4Address): Boolean {
+        val octets = address.address
+        val first = octets[0].toInt() and 0xFF
+        val second = octets[1].toInt() and 0xFF
+        return when {
+            address.isLoopbackAddress -> true
+            first == 10 -> true
+            first == 172 && second in 16..31 -> true
+            first == 192 && second == 168 -> true
+            first == 100 && second in 64..127 -> true
+            else -> false
+        }
+    }
+
+    private fun isUniqueLocalIpv6(address: Inet6Address): Boolean {
+        val first = address.address[0].toInt() and 0xFF
+        return (first and 0xFE) == 0xFC
     }
 
     companion object {

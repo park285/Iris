@@ -1,17 +1,15 @@
 use crate::adb::Adb;
 use crate::config::DaemonConfig;
 use anyhow::{Result, bail};
-use std::path::Path;
 use std::time::Duration;
+use tokio::process::Command;
 
 const IRIS_PROCESS_NAME: &str = "party.qwer.iris.Main";
 const KAKAOTALK_PACKAGE: &str = "com.kakao.talk";
 const SIGTERM_WAIT_SECS: u64 = 5;
 const STARTUP_RETRY_COUNT: usize = 10;
 const KILL_RETRY_WAIT_SECS: u64 = 1;
-const DEFAULT_IRIS_BIND_HOST: &str = "127.0.0.1";
-const DEFAULT_IRIS_LOG_LEVEL: &str = "INFO";
-const DEFAULT_IRIS_LOG_DEST: &str = "/data/iris/logs/iris.log";
+const DEFAULT_IRIS_CONTROL_PATH: &str = "/root/work/Iris/iris_control";
 
 pub async fn iris_pid(adb: &Adb) -> Option<u32> {
     let output = adb
@@ -78,10 +76,12 @@ pub async fn stop_iris(adb: &Adb) -> Result<()> {
         return Ok(());
     };
 
-    tracing::info!(pid = pid, "Iris 프로세스 종료 시도 (SIGTERM)");
-    send_kill(adb, pid, None).await;
+    tracing::info!(pid = pid, control = iris_control_path(), "iris_control stop 호출");
+    run_iris_control("stop").await?;
     wait_for_process_exit(SIGTERM_WAIT_SECS).await;
-    force_kill_if_needed(adb, pid).await?;
+    if iris_pid(adb).await.is_some() {
+        force_kill_if_needed(adb, pid).await?;
+    }
     tracing::info!(pid = pid, "Iris 프로세스 종료 완료");
     Ok(())
 }
@@ -94,30 +94,27 @@ fn env_or_default(key: &str, fallback: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| fallback.to_string())
 }
 
-fn start_command(cfg: &DaemonConfig) -> String {
-    let bind_host = env_or_default("IRIS_BIND_HOST", DEFAULT_IRIS_BIND_HOST);
-    let log_level = env_or_default("IRIS_LOG_LEVEL", DEFAULT_IRIS_LOG_LEVEL);
-    let log_dest = env_or_default("IRIS_LOG_PATH", DEFAULT_IRIS_LOG_DEST);
-    let log_dir = Path::new(&log_dest)
-        .parent()
-        .and_then(|path| path.to_str())
-        .unwrap_or("/data/iris/logs");
-    let launch_cmd = format!(
-        "mkdir -p {log_dir}; KAKAOTALK_APP_UID=0 \
-         IRIS_CONFIG_PATH={config} \
-         IRIS_BIND_HOST={bind_host} \
-         IRIS_LOG_LEVEL={log_level} \
-         CLASSPATH={apk} \
-         app_process / {main} > {log_dest} 2>&1 &",
-        log_dir = shell_quote(log_dir),
-        config = shell_quote(&cfg.init.config_dest),
-        bind_host = shell_quote(&bind_host),
-        log_level = shell_quote(&log_level),
-        apk = shell_quote(&cfg.init.apk_dest),
-        main = IRIS_PROCESS_NAME,
-        log_dest = shell_quote(&log_dest),
-    );
-    format!("su root sh -c {}", shell_quote(&launch_cmd),)
+fn iris_control_path() -> String {
+    env_or_default("IRIS_CONTROL_PATH", DEFAULT_IRIS_CONTROL_PATH)
+}
+
+async fn run_iris_control(subcommand: &str) -> Result<()> {
+    let output = Command::new(iris_control_path())
+        .arg(subcommand)
+        .output()
+        .await?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    bail!(
+        "iris_control {} failed (status={}): stdout={} stderr={}",
+        subcommand,
+        output.status,
+        String::from_utf8_lossy(&output.stdout).trim(),
+        String::from_utf8_lossy(&output.stderr).trim(),
+    )
 }
 
 async fn wait_for_process_start(adb: &Adb) -> Result<()> {
@@ -137,8 +134,9 @@ pub async fn start_iris(adb: &Adb, cfg: &DaemonConfig) -> Result<()> {
         return Ok(());
     }
 
-    adb.shell(&start_command(cfg)).await?;
-    tracing::info!("Iris 프로세스 시작 명령 전송");
+    let _ = cfg;
+    tracing::info!(control = iris_control_path(), "iris_control start 호출");
+    run_iris_control("start").await?;
     wait_for_process_start(adb).await
 }
 
@@ -170,42 +168,14 @@ mod tests {
 
     #[test]
     fn start_command_includes_runtime_arguments() {
-        let cfg = DaemonConfig::default();
-        let command = start_command(&cfg);
-
-        for expected in [
-            IRIS_PROCESS_NAME,
-            "su root sh -c",
-            "mkdir -p ",
-            "/data/iris/logs",
-            "KAKAOTALK_APP_UID=0",
-            "IRIS_CONFIG_PATH=",
-            "config.json",
-            "IRIS_BIND_HOST=",
-            "127.0.0.1",
-            "IRIS_LOG_LEVEL=",
-            "INFO",
-            "CLASSPATH=",
-            "Iris.apk",
-            "iris.log",
-            "2>&1 &",
-        ] {
-            assert!(
-                command.contains(expected),
-                "missing expected fragment: {expected}"
-            );
-        }
+        assert_eq!(iris_control_path(), DEFAULT_IRIS_CONTROL_PATH);
     }
 
     #[test]
     fn start_command_excludes_token_env_vars() {
-        let mut cfg = DaemonConfig::default();
-        cfg.iris.shared_token = "shared-token".to_string();
-        let command = start_command(&cfg);
-
-        // 토큰은 config.json에서만 공급됨, env var 주입 제거됨
-        assert!(!command.contains("IRIS_WEBHOOK_TOKEN"));
-        assert!(!command.contains("IRIS_BOT_TOKEN"));
+        let path = iris_control_path();
+        assert!(!path.contains("IRIS_WEBHOOK_TOKEN"));
+        assert!(!path.contains("IRIS_BOT_TOKEN"));
     }
 
     #[test]

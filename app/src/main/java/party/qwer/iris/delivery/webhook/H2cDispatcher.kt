@@ -384,7 +384,7 @@ class H2cDispatcher internal constructor(
         private const val MAX_CONCURRENT_REQUESTS = 8
         private const val MAX_IDLE_CONNECTIONS = 4
         private const val KEEP_ALIVE_DURATION_MS = 30_000L
-        internal const val MAX_DELIVERY_ATTEMPTS = 6
+        internal const val MAX_DELIVERY_ATTEMPTS = WebhookDeliveryPolicy.DEFAULT_MAX_DELIVERY_ATTEMPTS
         private const val DEFAULT_ROUTE_CONCURRENCY = 4
 
         private const val NONE = "<none>"

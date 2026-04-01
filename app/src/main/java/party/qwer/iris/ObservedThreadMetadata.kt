@@ -15,29 +15,22 @@ internal fun resolveObservedThreadMetadata(
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
     val supplementThreadId =
-        if (logEntry.messageType == "1") {
-            THREAD_ID_PATTERN
-                .find(supplement.orEmpty())
-                ?.groupValues
-                ?.getOrNull(1)
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() }
-        } else {
-            null
-        }
+        THREAD_ID_PATTERN
+            .find(supplement.orEmpty())
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
     val resolvedThreadId = directThreadId ?: supplementThreadId ?: return null
 
     val resolvedScope =
-        if (logEntry.messageType == "1") {
-            SCOPE_PATTERN
+        logEntry.threadScope?.takeIf { it > 0 }
+            ?: SCOPE_PATTERN
                 .find(supplement.orEmpty())
                 ?.groupValues
                 ?.getOrNull(1)
                 ?.toIntOrNull()
                 ?.takeIf { it > 0 }
-        } else {
-            null
-        }
 
     return ObservedThreadMetadata(
         threadId = resolvedThreadId,

@@ -40,35 +40,43 @@ internal class ReplyMarkdownPendingContextStore(
     ): ReplyMarkdownPendingContext? {
         pruneExpiredLocked()
         if (sessionId != null) {
-            findAndRemoveMatchingLocked(roomId, messageText, sessionId, allowSessionlessFallback = false)?.let { return it }
+            findAndRemoveBySessionIdLocked(roomId, sessionId)?.let { return it }
+            return findAndRemoveByMessageLocked(roomId, messageText, sessionlessOnly = true)
         }
-        return findAndRemoveMatchingLocked(roomId, messageText, sessionId, allowSessionlessFallback = true)
+        return findAndRemoveByMessageLocked(roomId, messageText, sessionlessOnly = false)
     }
 
-    private fun findAndRemoveMatchingLocked(
+    private fun findAndRemoveBySessionIdLocked(
         roomId: Long,
-        messageText: String,
-        sessionId: String?,
-        allowSessionlessFallback: Boolean,
+        sessionId: String,
     ): ReplyMarkdownPendingContext? {
         val iterator = entries.iterator()
         while (iterator.hasNext()) {
             val entry = iterator.next()
-            if (
-                entry.context.roomId == roomId &&
-                entry.context.messageText == messageText &&
-                (
-                    sessionId == null ||
-                        entry.context.sessionId == sessionId ||
-                        (
-                            allowSessionlessFallback &&
-                                entry.context.sessionId == null
-                        )
-                )
-            ) {
+            if (entry.context.roomId == roomId && entry.context.sessionId == sessionId) {
                 iterator.remove()
                 return entry.context
             }
+        }
+        return null
+    }
+
+    private fun findAndRemoveByMessageLocked(
+        roomId: Long,
+        messageText: String,
+        sessionlessOnly: Boolean,
+    ): ReplyMarkdownPendingContext? {
+        val iterator = entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            if (entry.context.roomId != roomId || entry.context.messageText != messageText) {
+                continue
+            }
+            if (sessionlessOnly && entry.context.sessionId != null) {
+                continue
+            }
+            iterator.remove()
+            return entry.context
         }
         return null
     }

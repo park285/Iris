@@ -25,19 +25,18 @@ internal class MemberListingService(
     private val learnObservedProfileMappings: (Long, List<MemberInfo>) -> Unit,
     private val botId: Long,
 ) {
-    fun listMembers(chatId: Long): MemberListResponse {
-        val roomId = ChatId(chatId)
-        val roomRow = roomDirectory.findRoomForListMembers(roomId)
+    fun listMembers(chatId: ChatId): MemberListResponse {
+        val roomRow = roomDirectory.findRoomForListMembers(chatId)
         val linkId = roomRow?.linkId
         val roomType = roomRow?.type.orEmpty()
         if (roomRow == null) {
-            return MemberListResponse(chatId, null, emptyList(), 0)
+            return MemberListResponse(chatId.value, null, emptyList(), 0)
         }
 
         if (linkId != null) {
             val openMembers = memberIdentity.loadOpenMembers(linkId)
             val memberIds = openMembers.map { it.userId }.distinct()
-            val activityByUser = memberActivityLookup.loadByUser(roomId, memberIds)
+            val activityByUser = memberActivityLookup.loadByUser(chatId, memberIds)
             val members =
                 openMembers.map { row ->
                     val activity = activityByUser[row.userId]
@@ -51,8 +50,8 @@ internal class MemberListingService(
                         lastActiveAt = activity?.lastActive,
                     )
                 }
-            learnObservedProfileMappings(chatId, members)
-            return MemberListResponse(chatId, linkId.value, members, members.size)
+            learnObservedProfileMappings(chatId.value, members)
+            return MemberListResponse(chatId.value, linkId.value, members, members.size)
         }
 
         val roomMemberIds = parseJsonLongArray(roomRow.members).map(::UserId)
@@ -65,22 +64,22 @@ internal class MemberListingService(
             }.toList()
         val activityByUser =
             if (scopedMemberIds.isNotEmpty()) {
-                memberActivityLookup.loadByUser(roomId, scopedMemberIds)
+                memberActivityLookup.loadByUser(chatId, scopedMemberIds)
             } else {
-                roomStats.loadAllActivity(roomId).associateBy { it.userId }
+                roomStats.loadAllActivity(chatId).associateBy { it.userId }
             }
         val userIds =
             ((if (scopedMemberIds.isNotEmpty()) scopedMemberIds else activityByUser.keys.toList()) + activityByUser.keys)
                 .sortedByDescending { activityByUser[it]?.lastActive ?: Long.MIN_VALUE }
                 .distinct()
         val directChatParticipantId =
-            if (roomType == "DirectChat") {
+            if (KakaoRoomType.isDirectChat(roomType)) {
                 userIds.filter { it.value != botId }.distinct().singleOrNull()
             } else {
                 null
             }
-        val observedProfileHint = observedProfile.resolveProfileByChatId(roomId)
-        val nicknameByUser = prepareNicknameLookup(userIds, null, roomId)
+        val observedProfileHint = observedProfile.resolveProfileByChatId(chatId)
+        val nicknameByUser = prepareNicknameLookup(userIds, null, chatId)
         val members =
             userIds.map { userId ->
                 val roleCode = if (userId.value == botId) 8 else 2
@@ -88,7 +87,7 @@ internal class MemberListingService(
                 val resolvedNickname = nicknameByUser[userId] ?: userId.value.toString()
                 val nickname =
                     if (
-                        roomType == "DirectChat" &&
+                        KakaoRoomType.isDirectChat(roomType) &&
                         userId == directChatParticipantId &&
                         resolvedNickname == userId.value.toString()
                     ) {
@@ -106,8 +105,8 @@ internal class MemberListingService(
                     lastActiveAt = activity?.lastActive,
                 )
             }
-        learnObservedProfileMappings(chatId, members)
+        learnObservedProfileMappings(chatId.value, members)
         val totalCount = roomRow.activeMembersCount ?: members.size
-        return MemberListResponse(chatId, null, members, maxOf(totalCount, members.size))
+        return MemberListResponse(chatId.value, null, members, maxOf(totalCount, members.size))
     }
 }

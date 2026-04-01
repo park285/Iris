@@ -33,7 +33,7 @@ internal class MemberRepositoryMetadata(
     fun parseNotices(meta: String?): List<NoticeInfo> = roomMetaParser.parseNotices(meta)
 
     fun resolveNonOpenRoomName(
-        chatId: Long,
+        chatId: ChatId,
         roomType: String?,
         meta: String?,
         members: String?,

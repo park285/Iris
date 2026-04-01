@@ -88,11 +88,11 @@ class MemberRepository internal constructor(
 
     fun listRooms(): RoomListResponse = roomCatalogService.listRooms()
 
-    fun roomSummary(chatId: Long): RoomSummary? = roomCatalogService.roomSummary(chatId)
+    fun roomSummary(chatId: Long): RoomSummary? = roomCatalogService.roomSummary(ChatId(chatId))
 
-    fun listMembers(chatId: Long): MemberListResponse = memberListingService.listMembers(chatId)
+    fun listMembers(chatId: Long): MemberListResponse = memberListingService.listMembers(ChatId(chatId))
 
-    fun roomInfo(chatId: Long): RoomInfoResponse = roomCatalogService.roomInfo(chatId)
+    fun roomInfo(chatId: Long): RoomInfoResponse = roomCatalogService.roomInfo(ChatId(chatId))
 
     fun resolveDisplayName(
         userId: Long,
@@ -129,7 +129,7 @@ class MemberRepository internal constructor(
             period = periodSpecParser.parse(period),
         )
 
-    fun listThreads(chatId: Long): ThreadListResponse = threadListingService.listThreads(chatId)
+    fun listThreads(chatId: Long): ThreadListResponse = threadListingService.listThreads(ChatId(chatId))
 
     internal fun resolveNicknamesBatch(
         userIds: Collection<UserId>,

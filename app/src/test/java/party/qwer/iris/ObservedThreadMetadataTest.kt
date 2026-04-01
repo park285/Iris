@@ -5,7 +5,7 @@ import kotlin.test.assertEquals
 
 class ObservedThreadMetadataTest {
     @Test
-    fun `prefers explicit thread_id for text messages`() {
+    fun `prefers direct thread columns for text messages`() {
         val logEntry =
             KakaoDB.ChatLogEntry(
                 id = 1L,
@@ -16,11 +16,12 @@ class ObservedThreadMetadataTest {
                 createdAt = "2026-03-15T00:00:00",
                 messageType = "1",
                 threadId = "12345",
+                threadScope = 2,
                 supplement = "{}",
             )
 
         assertEquals(
-            ObservedThreadMetadata(threadId = "12345"),
+            ObservedThreadMetadata(threadId = "12345", threadScope = 2),
             resolveObservedThreadMetadata(logEntry, enc = 0),
         )
     }
@@ -58,17 +59,18 @@ class ObservedThreadMetadataTest {
                 createdAt = "2026-03-21T00:00:00",
                 messageType = "2",
                 threadId = "12345",
+                threadScope = 2,
                 supplement = "{}",
             )
 
         assertEquals(
-            ObservedThreadMetadata(threadId = "12345"),
+            ObservedThreadMetadata(threadId = "12345", threadScope = 2),
             resolveObservedThreadMetadata(logEntry, enc = 0),
         )
     }
 
     @Test
-    fun `ignores supplement thread metadata for non-text messages`() {
+    fun `falls back to supplement thread metadata for non-text messages`() {
         val logEntry =
             KakaoDB.ChatLogEntry(
                 id = 1L,
@@ -78,12 +80,13 @@ class ObservedThreadMetadataTest {
                 metadata = """{"enc":0,"origin":"CHATLOG"}""",
                 createdAt = "2026-03-15T00:00:00",
                 messageType = "2",
-                threadId = "12345",
-                supplement = """{"threadId":"67890","scope":3}""",
+                threadId = null,
+                threadScope = null,
+                supplement = """{"threadId":"67890","scope":2}""",
             )
 
         assertEquals(
-            ObservedThreadMetadata(threadId = "12345"),
+            ObservedThreadMetadata(threadId = "67890", threadScope = 2),
             resolveObservedThreadMetadata(logEntry, enc = 0),
         )
     }
