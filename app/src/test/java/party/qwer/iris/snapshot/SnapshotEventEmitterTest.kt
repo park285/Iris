@@ -6,6 +6,11 @@ import party.qwer.iris.delivery.webhook.RoutingGateway
 import party.qwer.iris.delivery.webhook.RoutingResult
 import party.qwer.iris.model.MemberEvent
 import party.qwer.iris.model.NicknameChangeEvent
+import party.qwer.iris.model.ProfileChangeEvent
+import party.qwer.iris.model.RoleChangeEvent
+import party.qwer.iris.persistence.IrisDatabaseSchema
+import party.qwer.iris.persistence.JdbcSqliteHelper
+import party.qwer.iris.persistence.SqliteRoomEventStore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -129,6 +134,82 @@ class SnapshotEventEmitterTest {
         emitter.emit(listOf(event))
 
         assertEquals(1, bus.replayFrom(0).size)
+    }
+
+    // --- RoomEventStore 통합 테스트 ---
+
+    @Test
+    fun `emitter with store persists all room event types`() {
+        val bus = SseEventBus(bufferSize = 10)
+        val helper = JdbcSqliteHelper.inMemory()
+        IrisDatabaseSchema.createRoomEventsTable(helper)
+        val store = SqliteRoomEventStore(helper)
+        val emitter = SnapshotEventEmitter(bus, routingGateway = null, eventStore = store)
+
+        val events: List<party.qwer.iris.model.RoomEvent> = listOf(
+            MemberEvent(event = "join", chatId = 100L, linkId = 1100L, userId = 1L, nickname = "Alice", timestamp = 1000L),
+            NicknameChangeEvent(chatId = 100L, linkId = 1100L, userId = 2L, oldNickname = "Bob", newNickname = "Bobby", timestamp = 2000L),
+            RoleChangeEvent(chatId = 200L, linkId = 1200L, userId = 3L, oldRole = "member", newRole = "admin", timestamp = 3000L),
+            ProfileChangeEvent(chatId = 200L, linkId = 1200L, userId = 4L, timestamp = 4000L),
+        )
+        emitter.emit(events)
+
+        // room 100 이벤트 2개
+        val room100 = store.listByChatId(100L, limit = 100)
+        assertEquals(2, room100.size)
+        assertEquals("member_event", room100[0].eventType)
+        assertEquals(1L, room100[0].userId)
+        assertEquals("nickname_change", room100[1].eventType)
+        assertEquals(2L, room100[1].userId)
+
+        // room 200 이벤트 2개
+        val room200 = store.listByChatId(200L, limit = 100)
+        assertEquals(2, room200.size)
+        assertEquals("role_change", room200[0].eventType)
+        assertEquals("profile_change", room200[1].eventType)
+
+        // payload에 원본 JSON 포함 확인
+        assertTrue(room100[0].payload.contains("\"event\":\"join\""))
+        assertTrue(room100[1].payload.contains("\"oldNickname\":\"Bob\""))
+
+        // createdAt은 이벤트 자체의 timestamp와 일치해야 함 (서버 clock이 아님)
+        assertEquals(1000L, room100[0].createdAt)
+        assertEquals(2000L, room100[1].createdAt)
+        assertEquals(3000L, room200[0].createdAt)
+        assertEquals(4000L, room200[1].createdAt)
+
+        helper.close()
+    }
+
+    @Test
+    fun `emitter without store still works`() {
+        val bus = SseEventBus(bufferSize = 10)
+        val emitter = SnapshotEventEmitter(bus, routingGateway = null, eventStore = null)
+
+        val event = MemberEvent(event = "join", chatId = 100L, linkId = 1100L, userId = 1L, nickname = "Alice", timestamp = 1L)
+        emitter.emit(listOf(event))
+
+        assertEquals(1, bus.replayFrom(0).size)
+    }
+
+    @Test
+    fun `emitter persists to store and emits to bus simultaneously`() {
+        val bus = SseEventBus(bufferSize = 10)
+        val gateway = RecordingGateway()
+        val helper = JdbcSqliteHelper.inMemory()
+        IrisDatabaseSchema.createRoomEventsTable(helper)
+        val store = SqliteRoomEventStore(helper)
+        val emitter = SnapshotEventEmitter(bus, gateway, eventStore = store)
+
+        val event = MemberEvent(event = "leave", chatId = 300L, linkId = 1300L, userId = 5L, nickname = "Charlie", estimated = true, timestamp = 5000L)
+        emitter.emit(listOf(event))
+
+        // 3가지 경로 모두 동작 확인
+        assertEquals(1, bus.replayFrom(0).size)
+        assertEquals(1, gateway.commands.size)
+        assertEquals(1, store.listByChatId(300L, limit = 100).size)
+
+        helper.close()
     }
 }
 

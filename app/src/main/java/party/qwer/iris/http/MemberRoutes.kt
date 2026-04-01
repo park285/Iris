@@ -10,6 +10,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import party.qwer.iris.MemberRepository
 import party.qwer.iris.SseEventBus
 import party.qwer.iris.invalidRequest
+import party.qwer.iris.persistence.RoomEventStore
 
 private const val SSE_HEARTBEAT_INTERVAL_MS = 30_000L
 
@@ -17,6 +18,7 @@ internal fun Route.installMemberRoutes(
     authSupport: AuthSupport,
     memberRepo: MemberRepository?,
     sseEventBus: SseEventBus?,
+    roomEventStore: RoomEventStore? = null,
 ) {
     val repo = memberRepo ?: return
     val bus = sseEventBus
@@ -54,6 +56,16 @@ internal fun Route.installMemberRoutes(
         if (!authSupport.requireBotControlSignature(call, method = "GET")) return@get
         val chatId = call.parameters["chatId"]?.toLongOrNull() ?: invalidRequest("chatId must be a number")
         call.respond(repo.listThreads(chatId))
+    }
+
+    if (roomEventStore != null) {
+        get("/rooms/{chatId}/events") {
+            if (!authSupport.requireBotControlSignature(call, method = "GET")) return@get
+            val chatId = call.parameters["chatId"]?.toLongOrNull() ?: invalidRequest("chatId must be a number")
+            val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 50
+            val after = call.request.queryParameters["after"]?.toLongOrNull() ?: 0L
+            call.respond(roomEventStore.listByChatId(chatId, limit.coerceIn(1, 500), after))
+        }
     }
 
     if (bus != null) {
