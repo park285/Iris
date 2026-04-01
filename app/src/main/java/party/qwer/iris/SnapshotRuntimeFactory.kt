@@ -7,6 +7,7 @@ import party.qwer.iris.delivery.webhook.OutboxRoutingGateway
 import party.qwer.iris.ingress.CommandIngressService
 import party.qwer.iris.persistence.CheckpointJournal
 import party.qwer.iris.persistence.SnapshotStateStore
+import party.qwer.iris.persistence.RoomEventStore
 import party.qwer.iris.persistence.WebhookDeliveryStore
 import party.qwer.iris.snapshot.RoomSnapshotReader
 import party.qwer.iris.snapshot.SnapshotCommand
@@ -25,6 +26,7 @@ internal data class SnapshotRuntime(
 )
 
 internal object SnapshotRuntimeFactory {
+    private const val DEFAULT_EVENT_RETENTION_MS = 7L * 24 * 60 * 60 * 1000 // 7일
     fun create(
         configManager: ConfigManager,
         kakaoDb: KakaoDB,
@@ -34,6 +36,7 @@ internal object SnapshotRuntimeFactory {
         webhookOutboxStore: WebhookDeliveryStore,
         sseEventBus: SseEventBus,
         snapshotStateStore: SnapshotStateStore,
+        roomEventStore: RoomEventStore? = null,
         missingTombstoneTtlMs: Long? = null,
     ): SnapshotRuntime {
         val routingGateway = OutboxRoutingGateway(configManager, webhookOutboxStore)
@@ -48,7 +51,7 @@ internal object SnapshotRuntimeFactory {
                 scope = snapshotScope,
                 roomSnapshotReader = roomSnapshotReader,
                 diffEngine = RoomSnapshotManager(),
-                emitter = SnapshotEventEmitter(sseEventBus, routingGateway),
+                emitter = SnapshotEventEmitter(sseEventBus, routingGateway, eventStore = roomEventStore),
                 stateStore = snapshotStateStore,
             )
         val ingressService =
@@ -75,7 +78,12 @@ internal object SnapshotRuntimeFactory {
             ingressService = ingressService,
             observerHelper = observerHelper,
             dbObserver = DBObserver(observerHelper, configManager),
-            snapshotObserver = SnapshotObserver(snapshotCoordinator, checkpointJournal, missingTombstoneTtlMs = missingTombstoneTtlMs),
+            snapshotObserver = SnapshotObserver(
+                snapshotCoordinator, checkpointJournal,
+                missingTombstoneTtlMs = missingTombstoneTtlMs,
+                roomEventStore = roomEventStore,
+                eventRetentionMs = DEFAULT_EVENT_RETENTION_MS,
+            ),
         )
     }
 

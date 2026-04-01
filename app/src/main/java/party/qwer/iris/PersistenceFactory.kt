@@ -9,7 +9,11 @@ import party.qwer.iris.persistence.SnapshotStateStore
 import party.qwer.iris.persistence.SqliteCheckpointJournal
 import party.qwer.iris.persistence.SqliteDriver
 import party.qwer.iris.persistence.SqliteSnapshotStateStore
+import party.qwer.iris.persistence.SqliteRoomEventStore
+import party.qwer.iris.persistence.SqliteSseEventStore
 import party.qwer.iris.persistence.SqliteWebhookDeliveryStore
+import party.qwer.iris.persistence.RoomEventStore
+import party.qwer.iris.persistence.SseEventStore
 import party.qwer.iris.persistence.WebhookDeliveryStore
 import java.io.File
 
@@ -18,6 +22,8 @@ internal data class PersistenceRuntime(
     val webhookOutboxStore: WebhookDeliveryStore,
     val checkpointJournal: CheckpointJournal,
     val snapshotStateStore: SnapshotStateStore,
+    val sseEventStore: SseEventStore,
+    val roomEventStore: RoomEventStore,
 )
 
 internal object PersistenceFactory {
@@ -54,6 +60,8 @@ internal object PersistenceFactory {
                     clock = clock,
                 ),
             snapshotStateStore = SqliteSnapshotStateStore(driver, clock),
+            sseEventStore = SqliteSseEventStore(driver),
+            roomEventStore = SqliteRoomEventStore(driver),
         )
     }
 }

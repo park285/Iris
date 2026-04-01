@@ -13,7 +13,9 @@ import party.qwer.iris.delivery.webhook.RoutingGateway
 import party.qwer.iris.delivery.webhook.RoutingResult
 import party.qwer.iris.model.MemberEvent
 import party.qwer.iris.model.RoomEvent
+import party.qwer.iris.model.RoomEventRecord
 import party.qwer.iris.persistence.BatchedCheckpointJournal
+import party.qwer.iris.persistence.RoomEventStore
 import party.qwer.iris.snapshot.RoomDiffEngine
 import party.qwer.iris.snapshot.RoomSnapshotReadResult
 import party.qwer.iris.snapshot.RoomSnapshotReader
@@ -92,6 +94,127 @@ class SnapshotObserverTest {
                 assertTrue(diffEngine.diffCalls >= 1)
                 assertTrue(diffEngine.diffedChatIds.contains(100L))
                 assertTrue(snapshotReader.snapshotCalls.contains(200L))
+            } finally {
+                bus.close()
+                coordinatorScope.cancel()
+            }
+        }
+
+    @Test
+    fun `event store prune runs after configured interval`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val diffEngine = SnapshotObserverTestDiffEngine()
+            val snapshotReader =
+                SnapshotObserverTestSnapshotReader(
+                    rooms = listOf(100L),
+                    snapshots =
+                        mapOf(
+                            100L to listOf(
+                                snapshotObserverTestSnapshot(chatId = 100L, members = setOf(1L)),
+                            ),
+                        ),
+                )
+            val checkpointJournal =
+                BatchedCheckpointJournal(
+                    store = SnapshotObserverTestCheckpointStore(),
+                    flushIntervalMs = Long.MAX_VALUE,
+                    clock = { testScheduler.currentTime },
+                )
+            val bus = SseEventBus(bufferSize = 16)
+            val coordinatorScope = CoroutineScope(SupervisorJob() + dispatcher)
+            val coordinator =
+                SnapshotCoordinator(
+                    scope = coordinatorScope,
+                    roomSnapshotReader = snapshotReader,
+                    diffEngine = diffEngine,
+                    emitter = SnapshotEventEmitter(bus, SnapshotObserverTestRoutingGateway()),
+                )
+            val eventStore = RecordingRoomEventStore()
+            val observer =
+                SnapshotObserver(
+                    snapshotCoordinator = coordinator,
+                    checkpointJournal = checkpointJournal,
+                    intervalMs = 50L,
+                    fullReconcileIntervalMs = Long.MAX_VALUE,
+                    eventRetentionMs = 100L,
+                    eventPruneIntervalMs = 200L,
+                    roomEventStore = eventStore,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            coordinator.send(party.qwer.iris.snapshot.SnapshotCommand.SeedCache)
+            runCurrent()
+            try {
+                observer.start()
+                // 200ms 후 첫 prune 발생해야 함
+                advanceTimeBy(250L)
+                runCurrent()
+                observer.stopSuspend()
+
+                assertTrue(eventStore.pruneCalls.isNotEmpty(), "pruneOlderThan이 호출되어야 함")
+                // cutoff = currentTime - retentionMs
+                val lastCutoff = eventStore.pruneCalls.last()
+                assertTrue(lastCutoff > 0, "cutoff는 양수여야 함")
+            } finally {
+                bus.close()
+                coordinatorScope.cancel()
+            }
+        }
+
+    @Test
+    fun `event store prune does not run when retention is null`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val diffEngine = SnapshotObserverTestDiffEngine()
+            val snapshotReader =
+                SnapshotObserverTestSnapshotReader(
+                    rooms = listOf(100L),
+                    snapshots =
+                        mapOf(
+                            100L to listOf(
+                                snapshotObserverTestSnapshot(chatId = 100L, members = setOf(1L)),
+                            ),
+                        ),
+                )
+            val checkpointJournal =
+                BatchedCheckpointJournal(
+                    store = SnapshotObserverTestCheckpointStore(),
+                    flushIntervalMs = Long.MAX_VALUE,
+                    clock = { testScheduler.currentTime },
+                )
+            val bus = SseEventBus(bufferSize = 16)
+            val coordinatorScope = CoroutineScope(SupervisorJob() + dispatcher)
+            val coordinator =
+                SnapshotCoordinator(
+                    scope = coordinatorScope,
+                    roomSnapshotReader = snapshotReader,
+                    diffEngine = diffEngine,
+                    emitter = SnapshotEventEmitter(bus, SnapshotObserverTestRoutingGateway()),
+                )
+            val eventStore = RecordingRoomEventStore()
+            val observer =
+                SnapshotObserver(
+                    snapshotCoordinator = coordinator,
+                    checkpointJournal = checkpointJournal,
+                    intervalMs = 50L,
+                    fullReconcileIntervalMs = Long.MAX_VALUE,
+                    eventRetentionMs = null,
+                    roomEventStore = eventStore,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            coordinator.send(party.qwer.iris.snapshot.SnapshotCommand.SeedCache)
+            runCurrent()
+            try {
+                observer.start()
+                advanceTimeBy(250L)
+                runCurrent()
+                observer.stopSuspend()
+
+                assertTrue(eventStore.pruneCalls.isEmpty(), "retention=null일 때 prune 호출되면 안됨")
             } finally {
                 bus.close()
                 coordinatorScope.cancel()
@@ -224,6 +347,21 @@ private class SnapshotObserverTestCheckpointStore(
         lastLogId: Long,
     ) {
         saved[streamName] = lastLogId
+    }
+}
+
+private class RecordingRoomEventStore : RoomEventStore {
+    val pruneCalls = CopyOnWriteArrayList<Long>()
+
+    override fun insert(chatId: Long, eventType: String, userId: Long, payload: String, createdAtMs: Long): Long = 0L
+
+    override fun listByChatId(chatId: Long, limit: Int, afterId: Long): List<RoomEventRecord> = emptyList()
+
+    override fun maxId(): Long = 0L
+
+    override fun pruneOlderThan(cutoffMs: Long): Int {
+        pruneCalls += cutoffMs
+        return 0
     }
 }
 

@@ -11,6 +11,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import party.qwer.iris.persistence.CheckpointJournal
+import party.qwer.iris.persistence.RoomEventStore
 import party.qwer.iris.snapshot.SnapshotCommand
 import party.qwer.iris.snapshot.SnapshotCoordinator
 
@@ -21,6 +22,9 @@ internal class SnapshotObserver(
     private val maxRoomsPerTick: Int = 32,
     private val fullReconcileIntervalMs: Long = 60_000L,
     private val missingTombstoneTtlMs: Long? = null,
+    private val roomEventStore: RoomEventStore? = null,
+    private val eventRetentionMs: Long? = null,
+    private val eventPruneIntervalMs: Long = 3_600_000L,
     private val clock: () -> Long = System::currentTimeMillis,
     dispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
@@ -32,10 +36,14 @@ internal class SnapshotObserver(
     @Volatile
     private var nextFullReconcileAtMs: Long = 0L
 
+    @Volatile
+    private var nextEventPruneAtMs: Long = 0L
+
     @Synchronized
     fun start() {
         if (job?.isActive == true) return
         nextFullReconcileAtMs = clock() + fullReconcileIntervalMs
+        nextEventPruneAtMs = clock() + eventPruneIntervalMs
         job =
             coroutineScope.launch {
                 while (isActive) {
@@ -55,6 +63,11 @@ internal class SnapshotObserver(
                         missingTombstoneTtlMs?.let { ttlMs ->
                             val cutoffEpochMs = (clock() - ttlMs).coerceAtLeast(0L)
                             snapshotCoordinator.send(SnapshotCommand.PruneMissing(cutoffEpochMs))
+                        }
+                        if (eventRetentionMs != null && roomEventStore != null && clock() >= nextEventPruneAtMs) {
+                            val cutoff = (clock() - eventRetentionMs).coerceAtLeast(0L)
+                            roomEventStore.pruneOlderThan(cutoff)
+                            nextEventPruneAtMs = clock() + eventPruneIntervalMs
                         }
                         checkpointJournal.flushIfDirty()
                     } catch (e: Exception) {

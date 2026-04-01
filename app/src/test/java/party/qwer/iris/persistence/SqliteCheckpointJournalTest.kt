@@ -23,6 +23,8 @@ class SqliteCheckpointJournalTest {
                 "CREATE INDEX IF NOT EXISTS idx_webhook_outbox_ready\nON ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE} (status, next_attempt_at, id)",
                 "CREATE TABLE IF NOT EXISTS ${IrisDatabaseSchema.CHECKPOINT_TABLE} (\n    stream TEXT PRIMARY KEY,\n    cursor_value INTEGER NOT NULL,\n    updated_at INTEGER NOT NULL\n)",
                 "CREATE TABLE IF NOT EXISTS ${IrisDatabaseSchema.SNAPSHOT_STATE_TABLE} (\n    chat_id INTEGER PRIMARY KEY,\n    state TEXT NOT NULL,\n    snapshot_json TEXT,\n    updated_at INTEGER NOT NULL\n)",
+                "CREATE TABLE IF NOT EXISTS ${IrisDatabaseSchema.ROOM_EVENTS_TABLE} (\n    id INTEGER PRIMARY KEY AUTOINCREMENT,\n    chat_id INTEGER NOT NULL,\n    event_type TEXT NOT NULL,\n    user_id INTEGER NOT NULL,\n    payload TEXT NOT NULL,\n    created_at INTEGER NOT NULL\n)",
+                "CREATE INDEX IF NOT EXISTS idx_room_events_chat_id\nON ${IrisDatabaseSchema.ROOM_EVENTS_TABLE} (chat_id, id)",
             ),
             helper.executedSql,
         )

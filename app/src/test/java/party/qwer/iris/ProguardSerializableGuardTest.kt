@@ -4,12 +4,7 @@ import java.io.File
 import kotlin.test.Test
 import kotlin.test.fail
 
-/**
- * proguard-rules.pro가 party.qwer.iris.model.** 범위만 keep하므로,
- * 이 패키지 밖에 @Serializable 클래스가 추가되면 R8 release에서 깨집니다.
- *
- * 이 테스트는 소스 트리를 스캔하여 model 패키지 밖의 @Serializable 사용을 차단합니다.
- */
+// 이 테스트는 소스 트리를 스캔하여 model 패키지 밖의 serializable 사용을 차단합니다.
 class ProguardSerializableGuardTest {
     private val allowedPaths =
         setOf(

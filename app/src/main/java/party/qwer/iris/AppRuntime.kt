@@ -87,6 +87,7 @@ internal class AppRuntime(
                 webhookOutboxStore = webhookOutboxStore,
                 sseEventBus = sseEventBus,
                 snapshotStateStore = snapshotStateStore,
+                roomEventStore = persistenceRuntime.roomEventStore,
                 missingTombstoneTtlMs = runtimeOptions.snapshotMissingTombstoneTtlMs,
             )
         snapshotScope = snapshotRuntime.snapshotScope
@@ -143,6 +144,7 @@ internal class AppRuntime(
                     replyStatusProvider = replyService::replyStatusOrNull,
                     memberRepo = memberRepo,
                     sseEventBus = sseEventBus,
+                    roomEventStore = persistenceRuntime.roomEventStore,
                     bindHost = runtimeOptions.bindHost,
                     nettyWorkerThreads = runtimeOptions.httpWorkerThreads,
                 ).also {

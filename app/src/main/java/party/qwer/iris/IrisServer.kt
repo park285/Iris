@@ -29,6 +29,7 @@ import party.qwer.iris.model.CommonErrorResponse
 import party.qwer.iris.model.ImageBridgeHealthResult
 import party.qwer.iris.model.ReplyStatusSnapshot
 import party.qwer.iris.model.ReplyType
+import party.qwer.iris.persistence.RoomEventStore
 
 internal const val NETTY_NO_NATIVE_PROPERTY = "io.netty.transport.noNative"
 
@@ -49,6 +50,7 @@ internal class IrisServer(
     private val replyStatusProvider: ((String) -> ReplyStatusSnapshot?)? = null,
     private val memberRepo: MemberRepository? = null,
     private val sseEventBus: SseEventBus? = null,
+    private val roomEventStore: RoomEventStore? = null,
     private val chatRoomIntrospectProvider: ((Long) -> String?)? = null,
     private val bindHost: String = DEFAULT_BIND_HOST,
     private val nettyWorkerThreads: Int = DEFAULT_NETTY_WORKER_THREADS,
@@ -181,7 +183,7 @@ internal class IrisServer(
                 replyImageIngressPolicy = replyImageIngressPolicy,
             )
             installQueryRoutes(authSupport, serverJson, memberRepo)
-            installMemberRoutes(authSupport, memberRepo, sseEventBus)
+            installMemberRoutes(authSupport, memberRepo, sseEventBus, roomEventStore)
         }
     }
 
