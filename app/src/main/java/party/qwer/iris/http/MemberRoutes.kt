@@ -6,9 +6,12 @@ import io.ktor.server.response.respondBytesWriter
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.utils.io.writeStringUtf8
+import kotlinx.coroutines.withTimeoutOrNull
 import party.qwer.iris.MemberRepository
 import party.qwer.iris.SseEventBus
 import party.qwer.iris.invalidRequest
+
+private const val SSE_HEARTBEAT_INTERVAL_MS = 30_000L
 
 internal fun Route.installMemberRoutes(
     authSupport: AuthSupport,
@@ -62,9 +65,22 @@ internal fun Route.installMemberRoutes(
                 flush()
                 val channel = bus.openSubscriberChannelSuspend()
                 try {
-                    for (envelope in channel) {
-                        writeStringUtf8("id: ${envelope.id}\nevent: ${envelope.eventType}\ndata: ${envelope.payload}\n\n")
-                        flush()
+                    while (true) {
+                        val result = withTimeoutOrNull(SSE_HEARTBEAT_INTERVAL_MS) {
+                            channel.receiveCatching()
+                        }
+                        when {
+                            result == null -> {
+                                writeStringUtf8(": keepalive\n\n")
+                                flush()
+                            }
+                            result.isSuccess -> {
+                                val envelope = result.getOrThrow()
+                                writeStringUtf8("id: ${envelope.id}\nevent: ${envelope.eventType}\ndata: ${envelope.payload}\n\n")
+                                flush()
+                            }
+                            else -> break
+                        }
                     }
                 } finally {
                     bus.removeSubscriberSuspend(channel)

@@ -158,4 +158,61 @@ mod tests {
         assert_eq!(last_id.load(Ordering::Relaxed), 23);
         assert!(saw_last_event_id.load(Ordering::Relaxed));
     }
+
+    #[test]
+    fn parse_message_ignores_event_field_and_parses_data() {
+        let last_id = Arc::new(AtomicI64::new(0));
+        let message =
+            "id: 42\nevent: member_event\ndata: {\"type\":\"member_event\",\"event\":\"leave\",\"timestamp\":2}";
+
+        let event = parse_message(message, &last_id).expect("event should parse despite event: field");
+
+        assert_eq!(last_id.load(Ordering::Relaxed), 42);
+        assert_eq!(event.event_type, "member_event");
+        assert_eq!(event.event.as_deref(), Some("leave"));
+    }
+
+    #[test]
+    fn parse_message_returns_none_for_comment_line() {
+        let last_id = Arc::new(AtomicI64::new(5));
+        let message = ": connected";
+
+        let result = parse_message(message, &last_id);
+
+        assert!(result.is_none(), "comment-only message should return None");
+        assert_eq!(last_id.load(Ordering::Relaxed), 5, "last_id should be unchanged");
+    }
+
+    #[test]
+    fn parse_message_returns_none_for_keepalive() {
+        let last_id = Arc::new(AtomicI64::new(10));
+        let message = ": keepalive";
+
+        let result = parse_message(message, &last_id);
+
+        assert!(result.is_none(), "keepalive comment should return None");
+        assert_eq!(last_id.load(Ordering::Relaxed), 10, "last_id should be unchanged");
+    }
+
+    #[test]
+    fn parse_message_without_id_parses_data_only() {
+        let last_id = Arc::new(AtomicI64::new(99));
+        let message = "data: {\"type\":\"member_event\",\"event\":\"join\",\"timestamp\":3}";
+
+        let event = parse_message(message, &last_id).expect("event should parse without id");
+
+        assert_eq!(last_id.load(Ordering::Relaxed), 99, "last_id should remain unchanged");
+        assert_eq!(event.event_type, "member_event");
+    }
+
+    #[test]
+    fn parse_message_returns_none_for_malformed_json() {
+        let last_id = Arc::new(AtomicI64::new(0));
+        let message = "id: 50\ndata: {not valid json}";
+
+        let result = parse_message(message, &last_id);
+
+        assert!(result.is_none(), "malformed JSON should return None");
+        assert_eq!(last_id.load(Ordering::Relaxed), 50, "id should still be updated");
+    }
 }
