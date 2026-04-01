@@ -13,7 +13,10 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import party.qwer.iris.ConfigProvider
+import party.qwer.iris.IrisLogger
+import party.qwer.iris.persistence.ClaimTransitionResult
 import party.qwer.iris.persistence.ClaimedDelivery
+import party.qwer.iris.persistence.FailureOutcome
 import party.qwer.iris.persistence.WebhookDeliveryStore
 import java.io.Closeable
 import java.util.concurrent.ConcurrentHashMap
@@ -24,6 +27,13 @@ internal class WebhookOutboxDispatcher(
     transportOverride: String? = null,
     private val partitionCount: Int = 4,
     private val deliveryPolicy: WebhookDeliveryPolicy = WebhookDeliveryPolicy(),
+    private val claimTransitionObserver: ClaimTransitionObserver = ClaimTransitionObserver { operation, entry, result ->
+        if (result == ClaimTransitionResult.STALE_CLAIM) {
+            IrisLogger.warn(
+                "[OutboxDispatcher] Stale claim ignored: operation=$operation, id=${entry.id}, messageId=${entry.messageId}",
+            )
+        }
+    },
     private val backoffDelayProvider: (Int) -> Long = ::nextBackoffDelayMs,
     private val clock: () -> Long = System::currentTimeMillis,
     dispatcher: CoroutineDispatcher = Dispatchers.IO,
@@ -113,10 +123,26 @@ internal class WebhookOutboxDispatcher(
         )
 
     private suspend fun processEntry(entry: ClaimedDelivery) {
+        var attemptStarted = false
         try {
             val url = config.webhookEndpointFor(entry.route).takeIf { it.isNotBlank() }
             if (url.isNullOrBlank()) {
-                store.markDead(entry.id, entry.claimToken, "no webhook URL configured for route=${entry.route}")
+                observeResult(
+                    "resolveFailure", entry,
+                    store.resolveFailure(
+                        entry.id, entry.claimToken,
+                        FailureOutcome.RejectedBeforeAttempt("no webhook URL configured for route=${entry.route}"),
+                    ),
+                )
+                return
+            }
+
+            if (shuttingDown) {
+                releaseClaimIfOutstanding(
+                    entry = entry,
+                    nextAttemptAt = clock(),
+                    reason = "dispatcher shutdown before delivery attempt",
+                )
                 return
             }
 
@@ -127,35 +153,39 @@ internal class WebhookOutboxDispatcher(
                         messageId = entry.messageId,
                         route = entry.route,
                         payloadJson = entry.payloadJson,
-                        attempt = entry.attemptCount,
+                        attempt = entry.failedAttemptCount,
                     ),
                 )
 
-            val statusCode =
-                try {
-                    deliveryClient.execute(request, url)
-                } catch (error: Exception) {
-                    if (shuttingDown) {
-                        releaseClaimIfOutstanding(entry = entry, nextAttemptAt = clock(), reason = "dispatcher shutdown")
-                        return
-                    }
-                    scheduleRetryOrDead(entry, error.message)
-                    return
-                }
-
-            if (shuttingDown) {
-                releaseClaimIfOutstanding(entry = entry, nextAttemptAt = clock(), reason = "dispatcher shutdown")
-                return
-            }
+            attemptStarted = true
+            val statusCode = deliveryClient.execute(request, url)
 
             when {
-                statusCode in 200..299 -> store.markSent(entry.id, entry.claimToken)
+                statusCode in 200..299 -> observeResult("markSent", entry, store.markSent(entry.id, entry.claimToken))
                 shouldRetryStatus(statusCode) -> scheduleRetryOrDead(entry, "status=$statusCode")
-                else -> store.markDead(entry.id, entry.claimToken, "status=$statusCode")
+                else -> observeResult("resolveFailure", entry, store.resolveFailure(entry.id, entry.claimToken, FailureOutcome.PermanentFailure("status=$statusCode")))
             }
         } catch (cancelled: CancellationException) {
-            releaseClaimIfOutstanding(entry = entry, nextAttemptAt = clock(), reason = "dispatcher shutdown")
+            if (!attemptStarted) {
+                releaseClaimIfOutstanding(
+                    entry = entry,
+                    nextAttemptAt = clock(),
+                    reason = "dispatcher shutdown before delivery attempt",
+                )
+            } else if (outstandingClaims.remove(entry.id, entry)) {
+                scheduleRetryOrDead(entry, "delivery cancelled after attempt start")
+            }
             throw cancelled
+        } catch (error: Exception) {
+            if (!attemptStarted) {
+                releaseClaimIfOutstanding(
+                    entry = entry,
+                    nextAttemptAt = clock(),
+                    reason = "unexpected error before delivery attempt: ${error.message}",
+                )
+            } else {
+                scheduleRetryOrDead(entry, error.message)
+            }
         } finally {
             outstandingClaims.remove(entry.id, entry)
         }
@@ -165,29 +195,27 @@ internal class WebhookOutboxDispatcher(
         entry: ClaimedDelivery,
         reason: String?,
     ) {
-        when (
-            val retrySchedule =
-                nextDeliveryRetrySchedule(
-                    attempt = entry.attemptCount,
-                    maxDeliveryAttempts = deliveryPolicy.maxDeliveryAttempts,
-                    backoffDelayProvider = backoffDelayProvider,
-                )
-        ) {
-            is DeliveryRetrySchedule.RetryAttempt ->
-                store.markRetry(
-                    id = entry.id,
-                    claimToken = entry.claimToken,
-                    nextAttemptAt = clock() + retrySchedule.delayMs,
-                    reason = reason,
-                )
+        val outcome =
+            when (
+                val retrySchedule =
+                    nextDeliveryRetrySchedule(
+                        attempt = entry.failedAttemptCount,
+                        maxDeliveryAttempts = deliveryPolicy.maxDeliveryAttempts,
+                        backoffDelayProvider = backoffDelayProvider,
+                    )
+            ) {
+                is DeliveryRetrySchedule.RetryAttempt ->
+                    FailureOutcome.Retry(
+                        nextAttemptAt = clock() + retrySchedule.delayMs,
+                        reason = reason,
+                    )
 
-            is DeliveryRetrySchedule.Exhausted ->
-                store.markDead(
-                    id = entry.id,
-                    claimToken = entry.claimToken,
-                    reason = reason ?: "delivery attempts exhausted",
-                )
-        }
+                is DeliveryRetrySchedule.Exhausted ->
+                    FailureOutcome.PermanentFailure(
+                        reason = reason ?: "delivery attempts exhausted",
+                    )
+            }
+        observeResult("resolveFailure", entry, store.resolveFailure(entry.id, entry.claimToken, outcome))
     }
 
     override fun close() {
@@ -204,12 +232,12 @@ internal class WebhookOutboxDispatcher(
                 partition.channel.close()
             }
         }
-        releaseOutstandingClaims()
         routePartitions.values.forEach { route ->
             route.partitions.forEach { partition ->
                 partition.job.cancelAndJoin()
             }
         }
+        releaseOutstandingClaims()
         scopeJob.cancelAndJoin()
         clientFactory
             .clientFor("http://127.0.0.1")
@@ -233,11 +261,14 @@ internal class WebhookOutboxDispatcher(
         if (!outstandingClaims.remove(entry.id, entry)) {
             return false
         }
-        store.releaseClaim(
-            id = entry.id,
-            claimToken = entry.claimToken,
-            nextAttemptAt = nextAttemptAt,
-            reason = reason,
+        observeResult(
+            "requeueClaim", entry,
+            store.requeueClaim(
+                id = entry.id,
+                claimToken = entry.claimToken,
+                nextAttemptAt = nextAttemptAt,
+                reason = reason,
+            ),
         )
         return true
     }
@@ -252,4 +283,13 @@ internal class WebhookOutboxDispatcher(
         val channel: Channel<ClaimedDelivery>,
         val job: Job,
     )
+
+    private fun observeResult(
+        operation: String,
+        entry: ClaimedDelivery,
+        result: ClaimTransitionResult,
+    ): ClaimTransitionResult {
+        claimTransitionObserver.onResult(operation, entry, result)
+        return result
+    }
 }

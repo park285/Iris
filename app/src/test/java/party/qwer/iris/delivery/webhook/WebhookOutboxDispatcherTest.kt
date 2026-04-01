@@ -9,7 +9,9 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import party.qwer.iris.ConfigManager
 import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
+import party.qwer.iris.persistence.ClaimTransitionResult
 import party.qwer.iris.persistence.ClaimedDelivery
+import party.qwer.iris.persistence.FailureOutcome
 import party.qwer.iris.persistence.PendingWebhookDelivery
 import party.qwer.iris.persistence.WebhookDeliveryStore
 import java.net.InetSocketAddress
@@ -158,15 +160,15 @@ class WebhookOutboxDispatcherTest {
         }
 
     @Test
-    fun `close releases outstanding claims immediately without incrementing attempt`() {
+    fun `close after attempt start resolves failure instead of requeue`() {
         val requestStarted = CountDownLatch(1)
-        val releaseLatch = CountDownLatch(1)
+        val retryLatch = CountDownLatch(1)
         val port = reservePort()
         val server =
             HttpServer.create(InetSocketAddress("127.0.0.1", port), 0).apply {
                 createContext("/webhook/iris") { exchange ->
                     requestStarted.countDown()
-                    CountDownLatch(1).await(300, TimeUnit.MILLISECONDS)
+                    CountDownLatch(1).await(5, TimeUnit.SECONDS)
                     exchange.sendResponseHeaders(204, -1)
                     exchange.close()
                 }
@@ -179,7 +181,7 @@ class WebhookOutboxDispatcherTest {
         val store =
             RecordingWebhookDeliveryStore(
                 claimedEntries = listOf(claimedEntry(id = 1L, roomId = 1L, messageId = "msg-1")),
-                onRelease = { releaseLatch.countDown() },
+                onRetry = { retryLatch.countDown() },
             )
         val outboxDispatcher =
             WebhookOutboxDispatcher(
@@ -198,7 +200,7 @@ class WebhookOutboxDispatcherTest {
             outboxDispatcher.start()
             assertTrue(requestStarted.await(5, TimeUnit.SECONDS), "dispatcher should start processing claimed entry")
             runBlocking { outboxDispatcher.closeSuspend() }
-            assertTrue(releaseLatch.await(5, TimeUnit.SECONDS), "dispatcher should release claim during shutdown")
+            assertTrue(retryLatch.await(5, TimeUnit.SECONDS), "dispatcher should resolve failure during shutdown")
         } finally {
             server.stop(0)
             (server.executor as? java.util.concurrent.ExecutorService)
@@ -206,9 +208,282 @@ class WebhookOutboxDispatcherTest {
             Files.deleteIfExists(Path.of(configPath))
         }
 
-        assertEquals(listOf(1L), store.releasedIds.toList())
-        assertTrue(store.releaseReasons.contains("dispatcher shutdown"))
-        assertTrue(store.retriedIds.isEmpty(), "graceful close should not increment retry attempt")
+        assertTrue(store.releasedIds.isEmpty(), "post-attempt shutdown must not requeue")
+        assertTrue(store.retriedIds.contains(1L), "post-attempt shutdown should resolve as retry")
+        assertTrue(store.resolvedOutcomes.single() is FailureOutcome.Retry)
+    }
+
+    @Test
+    fun `shutdown after successful http attempt still marks sent`() {
+        val requestStarted = CountDownLatch(1)
+        val sentLatch = CountDownLatch(1)
+        val port = reservePort()
+        val server =
+            HttpServer.create(InetSocketAddress("127.0.0.1", port), 0).apply {
+                createContext("/webhook/iris") { exchange ->
+                    requestStarted.countDown()
+                    exchange.sendResponseHeaders(204, -1)
+                    exchange.close()
+                }
+                executor = Executors.newSingleThreadExecutor()
+                start()
+            }
+        val configPath = Files.createTempFile("iris-outbox-sent-shutdown", ".json").toFile().absolutePath
+        val config = ConfigManager(configPath = configPath)
+        config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, "http://127.0.0.1:$port/webhook/iris")
+        val store =
+            RecordingWebhookDeliveryStore(
+                claimedEntries = listOf(claimedEntry(id = 1L, roomId = 1L, messageId = "msg-sent-shutdown")),
+                onMarkSent = { sentLatch.countDown() },
+            )
+
+        try {
+            WebhookOutboxDispatcher(
+                config = config,
+                store = store,
+                transportOverride = "http1",
+                deliveryPolicy = WebhookDeliveryPolicy(pollIntervalMs = 25L, maxClaimBatchSize = 1),
+                clock = fakeClock::get,
+            ).use { dispatcher ->
+                dispatcher.start()
+                assertTrue(sentLatch.await(5, TimeUnit.SECONDS), "dispatcher should markSent even if shutdown is imminent")
+            }
+        } finally {
+            server.stop(0)
+            (server.executor as? java.util.concurrent.ExecutorService)?.shutdownNow()
+            Files.deleteIfExists(Path.of(configPath))
+        }
+
+        assertTrue(store.releasedIds.isEmpty(), "successful delivery must not requeue")
+        assertTrue(store.resolvedOutcomes.isEmpty(), "successful delivery must not resolveFailure")
+    }
+
+    @Test
+    fun `shutdown requeues queued entries that never started attempt`() {
+        val requestStarted = CountDownLatch(1)
+        val port = reservePort()
+        val server =
+            HttpServer.create(InetSocketAddress("127.0.0.1", port), 0).apply {
+                createContext("/webhook/iris") { exchange ->
+                    requestStarted.countDown()
+                    CountDownLatch(1).await(10, TimeUnit.SECONDS)
+                    exchange.sendResponseHeaders(204, -1)
+                    exchange.close()
+                }
+                executor = Executors.newSingleThreadExecutor()
+                start()
+            }
+        val configPath = Files.createTempFile("iris-outbox-pre-attempt", ".json").toFile().absolutePath
+        val config = ConfigManager(configPath = configPath)
+        config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, "http://127.0.0.1:$port/webhook/iris")
+        val releaseLatch = CountDownLatch(1)
+        val store =
+            RecordingWebhookDeliveryStore(
+                claimedEntries =
+                    listOf(
+                        claimedEntry(id = 1L, roomId = 1L, messageId = "msg-inflight"),
+                        claimedEntry(id = 2L, roomId = 1L, messageId = "msg-queued"),
+                    ),
+                onRelease = { releaseLatch.countDown() },
+            )
+
+        try {
+            val outboxDispatcher =
+                WebhookOutboxDispatcher(
+                    config = config,
+                    store = store,
+                    transportOverride = "http1",
+                    partitionCount = 1,
+                    deliveryPolicy =
+                        WebhookDeliveryPolicy(
+                            pollIntervalMs = 25L,
+                            maxClaimBatchSize = 10,
+                        ),
+                    clock = fakeClock::get,
+                )
+
+            outboxDispatcher.start()
+            assertTrue(requestStarted.await(5, TimeUnit.SECONDS), "first entry should start HTTP attempt")
+            runBlocking { outboxDispatcher.closeSuspend() }
+            assertTrue(releaseLatch.await(5, TimeUnit.SECONDS), "queued entry should be released")
+        } finally {
+            server.stop(0)
+            (server.executor as? java.util.concurrent.ExecutorService)?.shutdownNow()
+            Files.deleteIfExists(Path.of(configPath))
+        }
+
+        assertTrue(store.retriedIds.contains(1L), "in-flight entry should resolve as retry, not requeue")
+        assertTrue(store.releasedIds.contains(2L), "queued entry should be requeued without attempt count")
+        assertTrue(store.resolvedOutcomes.all { it is FailureOutcome.Retry }, "only in-flight entry generates resolvedOutcome")
+    }
+
+    @Test
+    fun `missing webhook URL resolves as RejectedBeforeAttempt`() {
+        val configPath = Files.createTempFile("iris-outbox-no-url", ".json").toFile().absolutePath
+        val config = ConfigManager(configPath = configPath)
+        val latch = CountDownLatch(1)
+        val store =
+            RecordingWebhookDeliveryStore(
+                claimedEntries = listOf(claimedEntry(id = 1L, roomId = 1L, messageId = "msg-no-url")),
+                onDead = { latch.countDown() },
+            )
+
+        try {
+            WebhookOutboxDispatcher(
+                config = config,
+                store = store,
+                deliveryPolicy = WebhookDeliveryPolicy(pollIntervalMs = 25L, maxClaimBatchSize = 1),
+                clock = fakeClock::get,
+            ).use { dispatcher ->
+                dispatcher.start()
+                assertTrue(latch.await(5, TimeUnit.SECONDS))
+            }
+        } finally {
+            Files.deleteIfExists(Path.of(configPath))
+        }
+
+        assertEquals(1, store.resolvedOutcomes.size)
+        assertTrue(store.resolvedOutcomes.single() is FailureOutcome.RejectedBeforeAttempt)
+    }
+
+    @Test
+    fun `non retryable status resolves as PermanentFailure`() {
+        val port = reservePort()
+        val server =
+            HttpServer.create(InetSocketAddress("127.0.0.1", port), 0).apply {
+                createContext("/webhook/iris") { exchange ->
+                    exchange.sendResponseHeaders(400, -1)
+                    exchange.close()
+                }
+                executor = Executors.newSingleThreadExecutor()
+                start()
+            }
+        val configPath = Files.createTempFile("iris-outbox-400", ".json").toFile().absolutePath
+        val config = ConfigManager(configPath = configPath)
+        config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, "http://127.0.0.1:$port/webhook/iris")
+        val latch = CountDownLatch(1)
+        val store =
+            RecordingWebhookDeliveryStore(
+                claimedEntries = listOf(claimedEntry(id = 1L, roomId = 1L, messageId = "msg-400")),
+                onDead = { latch.countDown() },
+            )
+
+        try {
+            WebhookOutboxDispatcher(
+                config = config,
+                store = store,
+                transportOverride = "http1",
+                deliveryPolicy = WebhookDeliveryPolicy(pollIntervalMs = 25L, maxClaimBatchSize = 1),
+                clock = fakeClock::get,
+            ).use { dispatcher ->
+                dispatcher.start()
+                assertTrue(latch.await(5, TimeUnit.SECONDS))
+            }
+        } finally {
+            server.stop(0)
+            (server.executor as? java.util.concurrent.ExecutorService)?.shutdownNow()
+            Files.deleteIfExists(Path.of(configPath))
+        }
+
+        assertEquals(1, store.resolvedOutcomes.size)
+        assertTrue(store.resolvedOutcomes.single() is FailureOutcome.PermanentFailure)
+    }
+
+    @Test
+    fun `retryable status resolves as Retry before exhaustion`() {
+        val port = reservePort()
+        val server =
+            HttpServer.create(InetSocketAddress("127.0.0.1", port), 0).apply {
+                createContext("/webhook/iris") { exchange ->
+                    exchange.sendResponseHeaders(503, -1)
+                    exchange.close()
+                }
+                executor = Executors.newSingleThreadExecutor()
+                start()
+            }
+        val configPath = Files.createTempFile("iris-outbox-503-retry", ".json").toFile().absolutePath
+        val config = ConfigManager(configPath = configPath)
+        config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, "http://127.0.0.1:$port/webhook/iris")
+        val retryLatch = CountDownLatch(1)
+        val store =
+            RecordingWebhookDeliveryStore(
+                claimedEntries = listOf(claimedEntry(id = 1L, roomId = 1L, messageId = "msg-503-retry")),
+                onRetry = { retryLatch.countDown() },
+            )
+
+        try {
+            WebhookOutboxDispatcher(
+                config = config,
+                store = store,
+                transportOverride = "http1",
+                deliveryPolicy =
+                    WebhookDeliveryPolicy(
+                        pollIntervalMs = 25L,
+                        maxClaimBatchSize = 1,
+                        maxDeliveryAttempts = 6,
+                    ),
+                clock = fakeClock::get,
+            ).use { dispatcher ->
+                dispatcher.start()
+                assertTrue(retryLatch.await(5, TimeUnit.SECONDS))
+            }
+        } finally {
+            server.stop(0)
+            (server.executor as? java.util.concurrent.ExecutorService)?.shutdownNow()
+            Files.deleteIfExists(Path.of(configPath))
+        }
+
+        assertEquals(1, store.resolvedOutcomes.size)
+        assertTrue(store.resolvedOutcomes.single() is FailureOutcome.Retry)
+    }
+
+    @Test
+    fun `dispatcher surfaces stale markSent result to observer`() {
+        val observed = CopyOnWriteArrayList<String>()
+        val observer =
+            ClaimTransitionObserver { operation, _, result ->
+                if (result == ClaimTransitionResult.STALE_CLAIM) observed += operation
+            }
+        val port = reservePort()
+        val server =
+            HttpServer.create(InetSocketAddress("127.0.0.1", port), 0).apply {
+                createContext("/webhook/iris") { exchange ->
+                    exchange.sendResponseHeaders(204, -1)
+                    exchange.close()
+                }
+                executor = Executors.newSingleThreadExecutor()
+                start()
+            }
+        val configPath = Files.createTempFile("iris-outbox-stale", ".json").toFile().absolutePath
+        val config = ConfigManager(configPath = configPath)
+        config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, "http://127.0.0.1:$port/webhook/iris")
+        val sentLatch = CountDownLatch(1)
+        val store =
+            RecordingWebhookDeliveryStore(
+                claimedEntries = listOf(claimedEntry(id = 1L, roomId = 1L, messageId = "msg-stale")),
+                markSentResult = ClaimTransitionResult.STALE_CLAIM,
+                onMarkSent = { sentLatch.countDown() },
+            )
+
+        try {
+            WebhookOutboxDispatcher(
+                config = config,
+                store = store,
+                transportOverride = "http1",
+                deliveryPolicy = WebhookDeliveryPolicy(pollIntervalMs = 25L, maxClaimBatchSize = 1),
+                claimTransitionObserver = observer,
+                clock = fakeClock::get,
+            ).use { dispatcher ->
+                dispatcher.start()
+                assertTrue(sentLatch.await(5, TimeUnit.SECONDS))
+            }
+        } finally {
+            server.stop(0)
+            (server.executor as? java.util.concurrent.ExecutorService)?.shutdownNow()
+            Files.deleteIfExists(Path.of(configPath))
+        }
+
+        assertEquals(listOf("markSent"), observed.toList())
     }
 
     @Test
@@ -254,6 +529,7 @@ class WebhookOutboxDispatcherTest {
         assertEquals(listOf(1L), store.deadIds.toList())
         assertTrue(store.retriedIds.isEmpty())
         assertTrue(store.deadReasons.any { it.contains("status=503") })
+        assertTrue(store.resolvedOutcomes.single() is FailureOutcome.PermanentFailure)
     }
 
     private fun claimedEntry(
@@ -267,7 +543,7 @@ class WebhookOutboxDispatcherTest {
             route = DEFAULT_WEBHOOK_ROUTE,
             messageId = messageId,
             payloadJson = """{"messageId":"$messageId"}""",
-            attemptCount = 0,
+            failedAttemptCount = 0,
             claimToken = "test-token",
         )
 
@@ -279,6 +555,10 @@ class WebhookOutboxDispatcherTest {
 
 private class RecordingWebhookDeliveryStore(
     private val claimedEntries: List<ClaimedDelivery>,
+    private val markSentResult: ClaimTransitionResult = ClaimTransitionResult.APPLIED,
+    private val resolveFailureResult: ClaimTransitionResult = ClaimTransitionResult.APPLIED,
+    private val requeueResult: ClaimTransitionResult = ClaimTransitionResult.APPLIED,
+    private val onMarkSent: () -> Unit = {},
     private val onRetry: () -> Unit = {},
     private val onRelease: () -> Unit = {},
     private val onDead: () -> Unit = {},
@@ -290,6 +570,7 @@ private class RecordingWebhookDeliveryStore(
     val releaseReasons = CopyOnWriteArrayList<String>()
     val deadIds = CopyOnWriteArrayList<Long>()
     val deadReasons = CopyOnWriteArrayList<String>()
+    val resolvedOutcomes = CopyOnWriteArrayList<FailureOutcome>()
     val recoverOlderThanMs = CopyOnWriteArrayList<Long>()
     val recoverCallCount = AtomicInteger(0)
 
@@ -304,38 +585,47 @@ private class RecordingWebhookDeliveryStore(
     override fun markSent(
         id: Long,
         claimToken: String,
-    ) {}
+    ): ClaimTransitionResult {
+        onMarkSent()
+        return markSentResult
+    }
 
-    override fun markRetry(
+    override fun resolveFailure(
+        id: Long,
+        claimToken: String,
+        outcome: FailureOutcome,
+    ): ClaimTransitionResult {
+        resolvedOutcomes += outcome
+        when (outcome) {
+            is FailureOutcome.Retry -> {
+                retriedIds += id
+                retryReasons += outcome.reason.orEmpty()
+                onRetry()
+            }
+            is FailureOutcome.PermanentFailure -> {
+                deadIds += id
+                deadReasons += outcome.reason.orEmpty()
+                onDead()
+            }
+            is FailureOutcome.RejectedBeforeAttempt -> {
+                deadIds += id
+                deadReasons += outcome.reason.orEmpty()
+                onDead()
+            }
+        }
+        return resolveFailureResult
+    }
+
+    override fun requeueClaim(
         id: Long,
         claimToken: String,
         nextAttemptAt: Long,
         reason: String?,
-    ) {
-        retriedIds += id
-        retryReasons += reason.orEmpty()
-        onRetry()
-    }
-
-    override fun markDead(
-        id: Long,
-        claimToken: String,
-        reason: String?,
-    ) {
-        deadIds += id
-        deadReasons += reason.orEmpty()
-        onDead()
-    }
-
-    override fun releaseClaim(
-        id: Long,
-        claimToken: String,
-        nextAttemptAt: Long,
-        reason: String?,
-    ) {
+    ): ClaimTransitionResult {
         releasedIds += id
         releaseReasons += reason.orEmpty()
         onRelease()
+        return requeueResult
     }
 
     override fun recoverExpiredClaims(olderThanMs: Long): Int {

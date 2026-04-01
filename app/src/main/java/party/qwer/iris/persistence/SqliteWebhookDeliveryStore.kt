@@ -24,99 +24,104 @@ class SqliteWebhookDeliveryStore(
     override fun claimReady(limit: Int): List<ClaimedDelivery> =
         db.inImmediateTransaction {
             val now = clock()
-            val claimToken = UUID.randomUUID().toString()
-            val readyIds =
+            val rows =
                 query(
-                    """SELECT id FROM ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE}
+                    """SELECT id, message_id, room_id, route, payload_json, attempt_count
+                       FROM ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE}
                        WHERE status IN ('PENDING', 'RETRY') AND next_attempt_at <= ?
                        ORDER BY id LIMIT ?""",
                     listOf(now, limit),
-                ) { row -> row.getLong(0) }
-            if (readyIds.isEmpty()) {
-                return@inImmediateTransaction emptyList()
-            }
-
-            val placeholders = readyIds.joinToString(",") { "?" }
-            update(
-                """UPDATE ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE}
-                   SET status = 'CLAIMED', claim_token = ?, claimed_at = ?, updated_at = ?
-                   WHERE id IN ($placeholders)""",
-                listOf(claimToken, now, now) + readyIds,
-            )
-
-            query(
-                """SELECT id, message_id, room_id, route, payload_json, attempt_count
-                   FROM ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE}
-                   WHERE id IN ($placeholders) ORDER BY id""",
-                readyIds,
-            ) { row ->
-                ClaimedDelivery(
-                    id = row.getLong(0),
-                    messageId = row.getString(1),
-                    roomId = row.getLong(2),
-                    route = row.getString(3),
-                    payloadJson = row.getString(4),
-                    attemptCount = row.getInt(5),
-                    claimToken = claimToken,
-                )
-            }
+                ) { row ->
+                    val id = row.getLong(0)
+                    val claimToken = UUID.randomUUID().toString()
+                    update(
+                        """UPDATE ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE}
+                           SET status = 'CLAIMED', claim_token = ?, claimed_at = ?, updated_at = ?
+                           WHERE id = ? AND status IN ('PENDING', 'RETRY')""",
+                        listOf(claimToken, now, now, id),
+                    )
+                    ClaimedDelivery(
+                        id = id,
+                        messageId = row.getString(1),
+                        roomId = row.getLong(2),
+                        route = row.getString(3),
+                        payloadJson = row.getString(4),
+                        failedAttemptCount = row.getInt(5),
+                        claimToken = claimToken,
+                    )
+                }
+            rows
         }
 
     override fun markSent(
         id: Long,
         claimToken: String,
-    ) {
-        db.update(
-            """UPDATE ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE}
-               SET status = 'SENT', claim_token = NULL, claimed_at = NULL, updated_at = ?
-               WHERE id = ? AND claim_token = ?""",
-            listOf(clock(), id, claimToken),
+    ): ClaimTransitionResult =
+        transitionResult(
+            db.update(
+                """UPDATE ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE}
+                   SET status = 'SENT', last_error = NULL,
+                       claim_token = NULL, claimed_at = NULL, updated_at = ?
+                   WHERE id = ? AND claim_token = ? AND status = 'CLAIMED'""",
+                listOf(clock(), id, claimToken),
+            ),
         )
-    }
 
-    override fun markRetry(
+    override fun resolveFailure(
+        id: Long,
+        claimToken: String,
+        outcome: FailureOutcome,
+    ): ClaimTransitionResult =
+        transitionResult(
+            when (outcome) {
+                is FailureOutcome.Retry ->
+                    db.update(
+                        """UPDATE ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE}
+                           SET status = 'RETRY', attempt_count = attempt_count + 1,
+                               next_attempt_at = ?, last_error = ?,
+                               claim_token = NULL, claimed_at = NULL, updated_at = ?
+                           WHERE id = ? AND claim_token = ? AND status = 'CLAIMED'""",
+                        listOf(outcome.nextAttemptAt, outcome.reason, clock(), id, claimToken),
+                    )
+
+                is FailureOutcome.PermanentFailure ->
+                    db.update(
+                        """UPDATE ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE}
+                           SET status = 'DEAD', attempt_count = attempt_count + 1,
+                               last_error = ?,
+                               claim_token = NULL, claimed_at = NULL, updated_at = ?
+                           WHERE id = ? AND claim_token = ? AND status = 'CLAIMED'""",
+                        listOf(outcome.reason, clock(), id, claimToken),
+                    )
+
+                is FailureOutcome.RejectedBeforeAttempt ->
+                    db.update(
+                        """UPDATE ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE}
+                           SET status = 'DEAD',
+                               last_error = ?,
+                               claim_token = NULL, claimed_at = NULL, updated_at = ?
+                           WHERE id = ? AND claim_token = ? AND status = 'CLAIMED'""",
+                        listOf(outcome.reason, clock(), id, claimToken),
+                    )
+            },
+        )
+
+    override fun requeueClaim(
         id: Long,
         claimToken: String,
         nextAttemptAt: Long,
         reason: String?,
-    ) {
-        db.update(
-            """UPDATE ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE}
-               SET status = 'RETRY', attempt_count = attempt_count + 1,
-                   next_attempt_at = ?, last_error = ?, claim_token = NULL, claimed_at = NULL, updated_at = ?
-               WHERE id = ? AND claim_token = ?""",
-            listOf(nextAttemptAt, reason, clock(), id, claimToken),
+    ): ClaimTransitionResult =
+        transitionResult(
+            db.update(
+                """UPDATE ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE}
+                   SET status = 'RETRY',
+                       next_attempt_at = ?, last_error = ?,
+                       claim_token = NULL, claimed_at = NULL, updated_at = ?
+                   WHERE id = ? AND claim_token = ? AND status = 'CLAIMED'""",
+                listOf(nextAttemptAt, reason, clock(), id, claimToken),
+            ),
         )
-    }
-
-    override fun releaseClaim(
-        id: Long,
-        claimToken: String,
-        nextAttemptAt: Long,
-        reason: String?,
-    ) {
-        db.update(
-            """UPDATE ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE}
-               SET status = 'RETRY',
-                   next_attempt_at = ?, last_error = ?, claim_token = NULL, claimed_at = NULL, updated_at = ?
-               WHERE id = ? AND claim_token = ?""",
-            listOf(nextAttemptAt, reason, clock(), id, claimToken),
-        )
-    }
-
-    override fun markDead(
-        id: Long,
-        claimToken: String,
-        reason: String?,
-    ) {
-        db.update(
-            """UPDATE ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE}
-               SET status = 'DEAD', attempt_count = attempt_count + 1,
-                   last_error = ?, claim_token = NULL, claimed_at = NULL, updated_at = ?
-               WHERE id = ? AND claim_token = ?""",
-            listOf(reason, clock(), id, claimToken),
-        )
-    }
 
     override fun recoverExpiredClaims(olderThanMs: Long): Int {
         val cutoff = clock() - olderThanMs
@@ -129,4 +134,7 @@ class SqliteWebhookDeliveryStore(
     }
 
     override fun close() {}
+
+    private fun transitionResult(affectedRows: Int): ClaimTransitionResult =
+        if (affectedRows > 0) ClaimTransitionResult.APPLIED else ClaimTransitionResult.STALE_CLAIM
 }

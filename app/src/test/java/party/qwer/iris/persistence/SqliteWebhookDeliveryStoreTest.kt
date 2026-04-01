@@ -30,13 +30,13 @@ class SqliteWebhookDeliveryStoreTest {
                         roomId = delivery.roomId,
                         route = delivery.route,
                         payloadJson = delivery.payloadJson,
-                        attemptCount = 0,
+                        failedAttemptCount = 0,
                         claimToken = claimed.single().claimToken,
                     ),
                     claimed.single(),
                 )
 
-                store.markSent(id, claimed.single().claimToken)
+                assertEquals(ClaimTransitionResult.APPLIED, store.markSent(id, claimed.single().claimToken))
 
                 assertTrue(store.claimReady(limit = 10).isEmpty())
             }
@@ -75,7 +75,7 @@ class SqliteWebhookDeliveryStoreTest {
     }
 
     @Test
-    fun `markRetry increments attempt and delays next claim`() {
+    fun `resolveFailure Retry increments attempt and delays next claim`() {
         var now = 1000L
         val (helper, store) = createStore(clock = { now })
 
@@ -91,11 +91,13 @@ class SqliteWebhookDeliveryStoreTest {
                 )
 
                 val firstClaim = store.claimReady(limit = 1).single()
-                store.markRetry(
-                    id = firstClaim.id,
-                    claimToken = firstClaim.claimToken,
-                    nextAttemptAt = 6000L,
-                    reason = "temporary failure",
+                assertEquals(
+                    ClaimTransitionResult.APPLIED,
+                    store.resolveFailure(
+                        id = firstClaim.id,
+                        claimToken = firstClaim.claimToken,
+                        outcome = FailureOutcome.Retry(nextAttemptAt = 6000L, reason = "temporary failure"),
+                    ),
                 )
 
                 now = 3000L
@@ -103,14 +105,14 @@ class SqliteWebhookDeliveryStoreTest {
 
                 now = 6000L
                 val secondClaim = store.claimReady(limit = 1).single()
-                assertEquals(1, secondClaim.attemptCount)
+                assertEquals(1, secondClaim.failedAttemptCount)
                 assertEquals(firstClaim.id, secondClaim.id)
             }
         }
     }
 
     @Test
-    fun `releaseClaim preserves attempt count and makes entry immediately claimable`() {
+    fun `requeueClaim preserves attempt count and makes entry immediately claimable`() {
         var now = 1000L
         val (helper, store) = createStore(clock = { now })
 
@@ -126,22 +128,25 @@ class SqliteWebhookDeliveryStoreTest {
                 )
 
                 val firstClaim = store.claimReady(limit = 1).single()
-                store.releaseClaim(
-                    id = firstClaim.id,
-                    claimToken = firstClaim.claimToken,
-                    nextAttemptAt = now,
-                    reason = "graceful shutdown",
+                assertEquals(
+                    ClaimTransitionResult.APPLIED,
+                    store.requeueClaim(
+                        id = firstClaim.id,
+                        claimToken = firstClaim.claimToken,
+                        nextAttemptAt = now,
+                        reason = "graceful shutdown",
+                    ),
                 )
 
                 val reclaimed = store.claimReady(limit = 1).single()
                 assertEquals(firstClaim.id, reclaimed.id)
-                assertEquals(0, reclaimed.attemptCount)
+                assertEquals(0, reclaimed.failedAttemptCount)
             }
         }
     }
 
     @Test
-    fun `markDead increments attempt count and prevents further claim`() {
+    fun `resolveFailure PermanentFailure increments attempt count and prevents further claim`() {
         val (helper, store) = createStore()
 
         helper.use {
@@ -156,7 +161,10 @@ class SqliteWebhookDeliveryStoreTest {
                 )
 
                 val claim = store.claimReady(limit = 1).single()
-                store.markDead(claim.id, claim.claimToken, "permanent failure")
+                assertEquals(
+                    ClaimTransitionResult.APPLIED,
+                    store.resolveFailure(claim.id, claim.claimToken, FailureOutcome.PermanentFailure("permanent failure")),
+                )
 
                 assertTrue(store.claimReady(limit = 10).isEmpty())
                 assertEquals(
@@ -171,7 +179,47 @@ class SqliteWebhookDeliveryStoreTest {
     }
 
     @Test
-    fun `stale claimToken cannot overwrite a newer claim`() {
+    fun `resolveFailure RejectedBeforeAttempt does not increment attempt count`() {
+        val (helper, store) = createStore()
+
+        helper.use {
+            store.use {
+                store.enqueue(
+                    PendingWebhookDelivery(
+                        messageId = "message-1",
+                        roomId = 100L,
+                        route = "default",
+                        payloadJson = "{\"text\":\"hello\"}",
+                    ),
+                )
+
+                val claim = store.claimReady(limit = 1).single()
+                assertEquals(
+                    ClaimTransitionResult.APPLIED,
+                    store.resolveFailure(claim.id, claim.claimToken, FailureOutcome.RejectedBeforeAttempt("no webhook URL")),
+                )
+
+                assertTrue(store.claimReady(limit = 10).isEmpty())
+                assertEquals(
+                    0L,
+                    helper.queryLong(
+                        "SELECT attempt_count FROM ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE} WHERE id = ?",
+                        claim.id,
+                    ),
+                )
+                assertEquals(
+                    "DEAD",
+                    helper.query(
+                        "SELECT status FROM ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE} WHERE id = ?",
+                        listOf(claim.id),
+                    ) { row -> row.getString(0) }.single(),
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `stale claimToken returns STALE_CLAIM and does not overwrite newer claim`() {
         var now = 1000L
         val (helper, store) = createStore(clock = { now })
 
@@ -192,15 +240,68 @@ class SqliteWebhookDeliveryStoreTest {
 
                 val secondClaim = store.claimReady(limit = 1).single()
 
-                // stale token으로 markSent → 무시됨
-                store.markSent(firstClaim.id, firstClaim.claimToken)
+                // stale token -> STALE_CLAIM
+                assertEquals(ClaimTransitionResult.STALE_CLAIM, store.markSent(firstClaim.id, firstClaim.claimToken))
 
-                // entry는 여전히 CLAIMED(secondClaim token) 상태 → claimReady에서 제외
+                // entry는 여전히 CLAIMED(secondClaim token) -> claimReady에서 제외
+                assertEquals(
+                    "CLAIMED",
+                    helper.query(
+                        "SELECT status FROM ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE} WHERE id = ?",
+                        listOf(firstClaim.id),
+                    ) { row -> row.getString(0) }.single(),
+                )
+
+                // 유효한 token으로 markSent
+                assertEquals(ClaimTransitionResult.APPLIED, store.markSent(secondClaim.id, secondClaim.claimToken))
                 assertTrue(store.claimReady(limit = 10).isEmpty())
+            }
+        }
+    }
 
-                // 유효한 token으로 markSent 성공
+    @Test
+    fun `markSent clears last_error from previous retry`() {
+        var now = 1000L
+        val (helper, store) = createStore(clock = { now })
+
+        helper.use {
+            store.use {
+                store.enqueue(
+                    PendingWebhookDelivery(
+                        messageId = "message-1",
+                        roomId = 100L,
+                        route = "default",
+                        payloadJson = "{\"text\":\"hello\"}",
+                    ),
+                )
+
+                // 1차: claim -> retry (last_error 기록)
+                val firstClaim = store.claimReady(limit = 1).single()
+                store.resolveFailure(
+                    firstClaim.id,
+                    firstClaim.claimToken,
+                    FailureOutcome.Retry(nextAttemptAt = 2000L, reason = "status=503"),
+                )
+
+                assertEquals(
+                    "status=503",
+                    helper.query(
+                        "SELECT last_error FROM ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE} WHERE id = ?",
+                        listOf(firstClaim.id),
+                    ) { row -> row.getString(0) }.single(),
+                )
+
+                // 2차: claim -> markSent (last_error 정리)
+                now = 2000L
+                val secondClaim = store.claimReady(limit = 1).single()
                 store.markSent(secondClaim.id, secondClaim.claimToken)
-                assertTrue(store.claimReady(limit = 10).isEmpty())
+
+                val lastError =
+                    helper.query(
+                        "SELECT last_error FROM ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE} WHERE id = ?",
+                        listOf(secondClaim.id),
+                    ) { row -> row.getStringOrNull(0) }.single()
+                assertTrue(lastError == null, "last_error should be cleared after markSent, got: $lastError")
             }
         }
     }
@@ -312,7 +413,33 @@ class SqliteWebhookDeliveryStoreTest {
     }
 
     @Test
-    fun `markRetry with stale claimToken is silently ignored`() {
+    fun `claimReady assigns distinct claimToken per row`() {
+        val (helper, store) = createStore()
+
+        helper.use {
+            store.use {
+                repeat(3) { index ->
+                    store.enqueue(
+                        PendingWebhookDelivery(
+                            messageId = "message-${index + 1}",
+                            roomId = (index + 1).toLong(),
+                            route = "default",
+                            payloadJson = "{\"index\":${index + 1}}",
+                        ),
+                    )
+                }
+
+                val claims = store.claimReady(limit = 3)
+
+                assertEquals(3, claims.size)
+                val tokens = claims.map { it.claimToken }.toSet()
+                assertEquals(3, tokens.size, "each row must have a distinct claimToken, got: $tokens")
+            }
+        }
+    }
+
+    @Test
+    fun `resolveFailure with stale claimToken returns STALE_CLAIM`() {
         var now = 1000L
         val (helper, store) = createStore(clock = { now })
 
@@ -332,15 +459,68 @@ class SqliteWebhookDeliveryStoreTest {
                 assertEquals(1, store.recoverExpiredClaims(olderThanMs = 30000L))
 
                 val secondClaim = store.claimReady(limit = 1).single()
-                store.markRetry(
-                    id = firstClaim.id,
-                    claimToken = firstClaim.claimToken,
-                    nextAttemptAt = 60000L,
-                    reason = "stale retry",
+
+                // stale token -> STALE_CLAIM, row 변경 없음
+                assertEquals(
+                    ClaimTransitionResult.STALE_CLAIM,
+                    store.resolveFailure(
+                        id = firstClaim.id,
+                        claimToken = firstClaim.claimToken,
+                        outcome = FailureOutcome.Retry(nextAttemptAt = 60000L, reason = "stale retry"),
+                    ),
                 )
 
-                store.markSent(secondClaim.id, secondClaim.claimToken)
+                // 유효한 token으로 성공 처리
+                assertEquals(ClaimTransitionResult.APPLIED, store.markSent(secondClaim.id, secondClaim.claimToken))
                 assertTrue(store.claimReady(limit = 10).isEmpty())
+            }
+        }
+    }
+
+    @Test
+    fun `requeueClaim with stale claimToken returns STALE_CLAIM`() {
+        var now = 1000L
+        val (helper, store) = createStore(clock = { now })
+
+        helper.use {
+            store.use {
+                store.enqueue(
+                    PendingWebhookDelivery(
+                        messageId = "message-1",
+                        roomId = 100L,
+                        route = "default",
+                        payloadJson = "{\"text\":\"hello\"}",
+                    ),
+                )
+
+                val firstClaim = store.claimReady(limit = 1).single()
+                now = 32000L
+                assertEquals(1, store.recoverExpiredClaims(olderThanMs = 30000L))
+
+                val secondClaim = store.claimReady(limit = 1).single()
+
+                // stale token -> STALE_CLAIM
+                assertEquals(
+                    ClaimTransitionResult.STALE_CLAIM,
+                    store.requeueClaim(
+                        id = firstClaim.id,
+                        claimToken = firstClaim.claimToken,
+                        nextAttemptAt = now,
+                        reason = "stale requeue",
+                    ),
+                )
+
+                // row는 secondClaim의 CLAIMED 상태 유지
+                assertEquals(
+                    "CLAIMED",
+                    helper.query(
+                        "SELECT status FROM ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE} WHERE id = ?",
+                        listOf(firstClaim.id),
+                    ) { row -> row.getString(0) }.single(),
+                )
+
+                // 유효한 token으로 성공 처리
+                assertEquals(ClaimTransitionResult.APPLIED, store.markSent(secondClaim.id, secondClaim.claimToken))
             }
         }
     }
