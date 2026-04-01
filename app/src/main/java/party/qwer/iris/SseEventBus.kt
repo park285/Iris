@@ -12,6 +12,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import party.qwer.iris.http.SseEventEnvelope
 import party.qwer.iris.http.SseSubscriberPolicy
+import party.qwer.iris.persistence.SseEventStore
 import java.io.Closeable
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -21,6 +22,7 @@ class SseEventBus(
     private val policy: SseSubscriberPolicy = SseSubscriberPolicy(),
     private val clock: () -> Long = System::currentTimeMillis,
     dispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val store: SseEventStore? = null,
 ) : Closeable {
     constructor(bufferSize: Int) : this(
         SseSubscriberPolicy(bufferCapacity = bufferSize, replayWindowSize = bufferSize),
@@ -256,7 +258,7 @@ class SseEventBus(
     }
 
     private suspend fun runActor() {
-        var nextEventId = 0L
+        var nextEventId = store?.maxId() ?: 0L
         var nextListenerId = 0L
         val buffer = ArrayDeque<SseEventEnvelope>(policy.bufferCapacity)
         var replayMisses = 0L
@@ -266,13 +268,15 @@ class SseEventBus(
         for (command in commands) {
             when (command) {
                 is SseCommand.Emit -> {
-                    nextEventId += 1
+                    val createdAtMs = clock()
+                    val persistedId = store?.insert(command.eventType, command.data, createdAtMs)
+                    nextEventId = persistedId ?: (nextEventId + 1)
                     val envelope =
                         SseEventEnvelope(
                             id = nextEventId,
                             eventType = command.eventType,
                             payload = command.data,
-                            createdAtMs = clock(),
+                            createdAtMs = createdAtMs,
                         )
                     if (buffer.size >= policy.bufferCapacity) {
                         buffer.removeFirst()
@@ -304,18 +308,20 @@ class SseEventBus(
                 }
 
                 is SseCommand.Replay -> {
-                    val oldestInBuffer = buffer.firstOrNull()?.id
-                    if (oldestInBuffer != null && command.afterId > 0 && command.afterId < oldestInBuffer) {
-                        replayMisses += 1
-                    }
-
-                    val matching = buffer.filter { it.id > command.afterId }
-                    val replay =
+                    val replay = if (store != null) {
+                        store.replayAfter(command.afterId, policy.replayWindowSize)
+                    } else {
+                        val oldestInBuffer = buffer.firstOrNull()?.id
+                        if (oldestInBuffer != null && command.afterId > 0 && command.afterId < oldestInBuffer) {
+                            replayMisses += 1
+                        }
+                        val matching = buffer.filter { it.id > command.afterId }
                         if (matching.size > policy.replayWindowSize) {
                             matching.takeLast(policy.replayWindowSize)
                         } else {
                             matching
                         }
+                    }
                     command.reply.complete(replay)
                 }
 
