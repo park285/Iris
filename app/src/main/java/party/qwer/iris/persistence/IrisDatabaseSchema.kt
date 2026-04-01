@@ -4,6 +4,8 @@ object IrisDatabaseSchema {
     const val WEBHOOK_OUTBOX_TABLE = "webhook_outbox"
     const val CHECKPOINT_TABLE = "checkpoints"
     const val SNAPSHOT_STATE_TABLE = "snapshot_states"
+    const val SSE_EVENTS_TABLE = "sse_events"
+    const val ROOM_EVENTS_TABLE = "room_events"
     private const val SQLITE_JOURNAL_MODE_WAL = "PRAGMA journal_mode=WAL"
     private const val SQLITE_BUSY_TIMEOUT_MS = "PRAGMA busy_timeout=5000"
 
@@ -51,6 +53,31 @@ object IrisDatabaseSchema {
         )
         """.trimIndent()
 
+    private val CREATE_SSE_EVENTS = """
+        CREATE TABLE IF NOT EXISTS $SSE_EVENTS_TABLE (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        )
+    """.trimIndent()
+
+    private val CREATE_ROOM_EVENTS = """
+        CREATE TABLE IF NOT EXISTS $ROOM_EVENTS_TABLE (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            payload TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        )
+    """.trimIndent()
+
+    private val CREATE_ROOM_EVENTS_INDEX = """
+        CREATE INDEX IF NOT EXISTS idx_room_events_chat_id
+        ON $ROOM_EVENTS_TABLE (chat_id, id)
+    """.trimIndent()
+
     fun initializeConnection(driver: SqliteDriver) {
         driver.execute(SQLITE_JOURNAL_MODE_WAL)
         driver.execute(SQLITE_BUSY_TIMEOUT_MS)
@@ -69,10 +96,20 @@ object IrisDatabaseSchema {
         driver.execute(CREATE_SNAPSHOT_STATE)
     }
 
+    fun createSseEventsTable(driver: SqliteDriver) {
+        driver.execute(CREATE_SSE_EVENTS)
+    }
+
+    fun createRoomEventsTable(driver: SqliteDriver) {
+        driver.execute(CREATE_ROOM_EVENTS)
+        driver.execute(CREATE_ROOM_EVENTS_INDEX)
+    }
+
     fun createAll(driver: SqliteDriver) {
         initializeConnection(driver)
         createWebhookOutboxTable(driver)
         createCheckpointTable(driver)
         createSnapshotStateTable(driver)
+        createRoomEventsTable(driver)
     }
 }
