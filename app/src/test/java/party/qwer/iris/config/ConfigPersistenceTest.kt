@@ -5,7 +5,7 @@ import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNull
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class ConfigPersistenceTest {
@@ -19,13 +19,13 @@ class ConfigPersistenceTest {
     }
 
     @Test
-    fun `load returns null when file does not exist`() {
+    fun `load returns missing when file does not exist`() {
         val tmpDir = Files.createTempDirectory("iris-persist-load").toFile()
         val configPath = tmpDir.resolve("config.json").absolutePath
         val persistence = createPersistence(configPath)
 
         val result = persistence.load()
-        assertNull(result)
+        assertIs<ConfigLoadResult.Missing>(result)
         tmpDir.deleteRecursively()
     }
 
@@ -37,22 +37,22 @@ class ConfigPersistenceTest {
         val persistence = createPersistence(configPath)
 
         val result = persistence.load()
-        assertTrue(result != null)
-        assertEquals("TestBot", result.userState.botName)
-        assertEquals(4000, result.userState.botHttpPort)
-        assertFalse(result.migratedLegacyEndpoint)
+        assertIs<ConfigLoadResult.Loaded>(result)
+        assertEquals("TestBot", result.config.userState.botName)
+        assertEquals(4000, result.config.userState.botHttpPort)
+        assertFalse(result.config.migratedLegacyEndpoint)
         tmpDir.deleteRecursively()
     }
 
     @Test
-    fun `load backs up broken config and returns null`() {
+    fun `load backs up broken config and returns invalid`() {
         val tmpDir = Files.createTempDirectory("iris-persist-broken").toFile()
         val configPath = tmpDir.resolve("config.json").absolutePath
         tmpDir.resolve("config.json").writeText("not valid json {{{")
         val persistence = createPersistence(configPath)
 
         val result = persistence.load()
-        assertNull(result)
+        assertIs<ConfigLoadResult.Invalid>(result)
         assertTrue(tmpDir.resolve("config.json.bak").exists())
         tmpDir.deleteRecursively()
     }
@@ -66,7 +66,7 @@ class ConfigPersistenceTest {
 
         val result = persistence.load()
 
-        assertNull(result)
+        assertIs<ConfigLoadResult.Invalid>(result)
         assertTrue(tmpDir.resolve("config.json.bak").exists())
         tmpDir.deleteRecursively()
     }
@@ -115,13 +115,11 @@ class ConfigPersistenceTest {
                 dbPollingRate = 200,
             )
         persistence.save(original)
-        val loaded = persistence.load()
-
-        assertTrue(loaded != null)
-        assertEquals("RoundTrip", loaded.userState.botName)
-        assertEquals(5000, loaded.userState.botHttpPort)
-        assertEquals(75L, loaded.userState.messageSendRate)
-        assertEquals(200L, loaded.userState.dbPollingRate)
+        val loaded = assertIs<ConfigLoadResult.Loaded>(persistence.load())
+        assertEquals("RoundTrip", loaded.config.userState.botName)
+        assertEquals(5000, loaded.config.userState.botHttpPort)
+        assertEquals(75L, loaded.config.userState.messageSendRate)
+        assertEquals(200L, loaded.config.userState.dbPollingRate)
         tmpDir.deleteRecursively()
     }
 
@@ -137,11 +135,9 @@ class ConfigPersistenceTest {
                 imageMessageTypeRoutes = mapOf("dalle" to listOf("26")),
             )
         persistence.save(original)
-        val loaded = persistence.load()
-
-        assertTrue(loaded != null)
-        assertEquals(mapOf("chatbot" to listOf("!", "/")), loaded.userState.commandRoutePrefixes)
-        assertEquals(mapOf("dalle" to listOf("26")), loaded.userState.imageMessageTypeRoutes)
+        val loaded = assertIs<ConfigLoadResult.Loaded>(persistence.load())
+        assertEquals(mapOf("chatbot" to listOf("!", "/")), loaded.config.userState.commandRoutePrefixes)
+        assertEquals(mapOf("dalle" to listOf("26")), loaded.config.userState.imageMessageTypeRoutes)
         tmpDir.deleteRecursively()
     }
 

@@ -1,9 +1,12 @@
 package party.qwer.iris
 
 import kotlinx.serialization.json.Json
+import party.qwer.iris.config.ConfigLoadResult
 import party.qwer.iris.config.ConfigPathPolicy
 import party.qwer.iris.config.ConfigPersistence
 import party.qwer.iris.config.ConfigStateStore
+import party.qwer.iris.http.RuntimeBootstrapState
+import party.qwer.iris.http.RuntimeConfigReadiness
 import party.qwer.iris.model.ConfigResponse
 import party.qwer.iris.model.ConfigUpdateResponse
 import party.qwer.iris.model.ConfigValues
@@ -25,33 +28,42 @@ class ConfigManager(
     }
 
     private fun loadConfig() {
-        val loaded = persistence.load()
-        if (loaded == null) {
-            IrisLogger.info("config.json not found at $configPath, creating default config.")
-            saveConfig()
-            return
-        }
+        when (val loaded = persistence.load()) {
+            ConfigLoadResult.Missing -> {
+                IrisLogger.info("config.json not found at $configPath, creating default config.")
+                saveConfig()
+                return
+            }
 
-        stateStore.mutate {
-            ConfigRuntimeState(
-                snapshotUser = loaded.userState,
-                appliedUser = loaded.userState.copy(),
-                discovered = it.discovered,
-                isDirty = loaded.migratedLegacyConfig,
-            )
-        }
-        IrisLogger.debug(
-            "Loaded config from $configPath " +
-                "(inboundSigningSecretConfigured=${stateStore.current().snapshotUser.inboundSigningSecret.isNotBlank()}, " +
-                "outboundWebhookTokenConfigured=${stateStore.current().snapshotUser.outboundWebhookToken.isNotBlank()}, " +
-                "botControlTokenConfigured=${stateStore.current().snapshotUser.botControlToken.isNotBlank()}, " +
-                "bridgeTokenConfigured=${stateStore.current().snapshotUser.bridgeToken.isNotBlank()})",
-        )
-        if (loaded.migratedLegacyEndpoint) {
-            IrisLogger.info("Migrated legacy webhook config to route-aware model")
-        }
-        if (loaded.migratedLegacySecrets) {
-            IrisLogger.info("Migrated legacy secret config to role-aware fields")
+            is ConfigLoadResult.Invalid -> {
+                throw IllegalStateException(
+                    "Existing config at $configPath is invalid and requires operator recovery: ${loaded.reason}",
+                )
+            }
+
+            is ConfigLoadResult.Loaded -> {
+                stateStore.mutate {
+                    ConfigRuntimeState(
+                        snapshotUser = loaded.config.userState,
+                        appliedUser = loaded.config.userState.copy(),
+                        discovered = it.discovered,
+                        isDirty = loaded.config.migratedLegacyConfig,
+                    )
+                }
+                IrisLogger.debug(
+                    "Loaded config from $configPath " +
+                        "(inboundSigningSecretConfigured=${stateStore.current().snapshotUser.inboundSigningSecret.isNotBlank()}, " +
+                        "outboundWebhookTokenConfigured=${stateStore.current().snapshotUser.outboundWebhookToken.isNotBlank()}, " +
+                        "botControlTokenConfigured=${stateStore.current().snapshotUser.botControlToken.isNotBlank()}, " +
+                        "bridgeTokenConfigured=${stateStore.current().snapshotUser.bridgeToken.isNotBlank()})",
+                )
+                if (loaded.config.migratedLegacyEndpoint) {
+                    IrisLogger.info("Migrated legacy webhook config to route-aware model")
+                }
+                if (loaded.config.migratedLegacySecrets) {
+                    IrisLogger.info("Migrated legacy secret config to role-aware fields")
+                }
+            }
         }
     }
 
@@ -178,6 +190,23 @@ class ConfigManager(
     internal fun signingSecret(): String = activeInboundSigningSecret()
 
     internal fun snapshotUserState(): UserConfigState = stateStore.current().snapshotUser
+
+    internal fun runtimeConfigReadiness(): RuntimeConfigReadiness {
+        val appliedUser = stateStore.current().appliedUser
+        return RuntimeConfigReadiness(
+            inboundSigningSecretConfigured = appliedUser.inboundSigningSecret.isNotBlank(),
+            outboundWebhookTokenConfigured = appliedUser.outboundWebhookToken.isNotBlank(),
+            botControlTokenConfigured = appliedUser.botControlToken.isNotBlank(),
+            bridgeTokenConfigured = appliedUser.bridgeToken.isNotBlank(),
+            defaultWebhookEndpointConfigured =
+                configuredWebhookEndpoint(
+                    appliedUser.toLegacyConfigValues(),
+                    DEFAULT_WEBHOOK_ROUTE,
+                ).isNotBlank(),
+        )
+    }
+
+    internal fun runtimeBootstrapState(): RuntimeBootstrapState = runtimeConfigReadiness().bootstrapState()
 
     override var dbPollingRate: Long
         get() = stateStore.current().appliedUser.dbPollingRate

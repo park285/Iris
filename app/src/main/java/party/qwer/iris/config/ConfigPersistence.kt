@@ -24,14 +24,26 @@ internal data class LoadedConfig(
         get() = migratedLegacyEndpoint || migratedLegacySecrets
 }
 
+internal sealed interface ConfigLoadResult {
+    data object Missing : ConfigLoadResult
+
+    data class Loaded(
+        val config: LoadedConfig,
+    ) : ConfigLoadResult
+
+    data class Invalid(
+        val reason: String,
+    ) : ConfigLoadResult
+}
+
 internal class ConfigPersistence(
     private val configPath: String,
     private val json: Json,
 ) {
-    fun load(): LoadedConfig? {
+    fun load(): ConfigLoadResult {
         val configFile = File(configPath)
         if (!configFile.exists()) {
-            return null
+            return ConfigLoadResult.Missing
         }
 
         try {
@@ -45,21 +57,24 @@ internal class ConfigPersistence(
                         validationErrors.joinToString { "${it.field}: ${it.message}" },
                 )
                 backupBrokenConfig()
-                return null
+                return ConfigLoadResult.Invalid("config validation failed")
             }
-            return LoadedConfig(
-                userState = userState,
-                migratedLegacyEndpoint = decoded.migratedLegacyEndpoint,
-                migratedLegacySecrets = decoded.migratedLegacySecrets,
+            return ConfigLoadResult.Loaded(
+                LoadedConfig(
+                    userState = userState,
+                    migratedLegacyEndpoint = decoded.migratedLegacyEndpoint,
+                    migratedLegacySecrets = decoded.migratedLegacySecrets,
+                ),
             )
         } catch (e: IOException) {
             IrisLogger.error("Error reading config.json from $configPath, using in-memory defaults: ${e.message}")
             backupBrokenConfig()
+            return ConfigLoadResult.Invalid("config read failed: ${e.message}")
         } catch (e: SerializationException) {
             IrisLogger.error("JSON parsing error in config.json from $configPath, using in-memory defaults: ${e.message}")
             backupBrokenConfig()
+            return ConfigLoadResult.Invalid("config parse failed: ${e.message}")
         }
-        return null
     }
 
     fun save(state: UserConfigState): Boolean {

@@ -5,6 +5,8 @@ import kotlinx.serialization.json.jsonObject
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class ConfigManagerPersistenceTest {
@@ -77,6 +79,20 @@ class ConfigManagerPersistenceTest {
         assertTrue(manager.saveConfigNow())
         val configText = configDir.resolve("config.json").readText()
         assertTrue(configText.contains("bridge-secret"))
+        configDir.deleteRecursively()
+    }
+
+    @Test
+    fun `invalid existing config fails startup instead of regenerating defaults`() {
+        val configDir = Files.createTempDirectory("iris-config-manager-invalid").toFile()
+        val configPath = configDir.resolve("config.json").absolutePath
+        configDir.resolve("config.json").writeText("""{"botHttpPort":70000}""")
+
+        assertFailsWith<IllegalStateException> {
+            ConfigManager(configPath = configPath)
+        }
+        assertFalse(configDir.resolve("config.json").exists())
+        assertTrue(configDir.resolve("config.json.bak").exists())
         configDir.deleteRecursively()
     }
 
