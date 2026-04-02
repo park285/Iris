@@ -51,3 +51,8 @@ image.png
 
 # Build artifacts
 **/target/
+
+# Closeout artifacts
+docs/closeout-*/
+docs/closeout-*.tar.gz
+*-review-request-*.tar.gz

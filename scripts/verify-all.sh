@@ -27,6 +27,11 @@ run_step "Gradle lint/format checks/tests" ./gradlew \
   :app:testDebugUnitTest \
   :bridge:testDebugUnitTest
 
+mkdir -p \
+  "$repo_root/tools/target/debug/deps" \
+  "$repo_root/tools/target/debug/build" \
+  "$repo_root/tools/target/miri"
+
 run_step "Rust format" cargo fmt --manifest-path "$repo_root/tools/Cargo.toml" --all -- --check
 run_step "Rust lint" cargo clippy --manifest-path "$repo_root/tools/Cargo.toml" --workspace --all-targets -- -D warnings
 run_step "Rust tests" cargo test --manifest-path "$repo_root/tools/Cargo.toml" --workspace
@@ -36,6 +41,6 @@ run_step "Rust miri" env MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly mir
 
 run_step "Bridge architecture guardrails" "$repo_root/scripts/check-bridge-boundaries.sh"
 
-run_step "Shell integration tests" bash -lc "cd '$repo_root' && bash ./tests/iris_control_device_selection_test.sh && bash ./tests/zygisk_next_bootstrap_test.sh"
+run_step "Shell integration tests" bash -lc "cd '$repo_root' && bash ./tests/iris_control_device_selection_test.sh && bash ./tests/zygisk_next_bootstrap_test.sh && bash ./tests/closeout_packet_scripts_test.sh"
 
 echo "[verify-all] all checks passed"

@@ -1,0 +1,18 @@
+{
+  "auth_vectors": 7,
+  "kotlin_tests": 0,
+  "rust_tests": 0,
+  "missing_referenced_paths": [],
+  "packet_is_self_contained": true,
+  "doc_claims": {
+    "executive-closeout.md": {
+      "item_5_status": "Closed",
+      "residual_risk": "None"
+    },
+    "evidence-index.md": {
+      "item_5_status": "Closed",
+      "residual_risk": "None"
+    }
+  },
+  "issues": []
+}
