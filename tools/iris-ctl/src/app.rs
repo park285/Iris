@@ -367,7 +367,7 @@ mod tests {
 
         assert!(!app.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)));
         let modal = app.reply_modal.as_ref().expect("reply modal should open");
-        assert_eq!(modal.thread_id_input, "10");
+        assert_eq!(modal.thread_id_input(), "10");
     }
 
     #[test]

@@ -1,15 +1,20 @@
 use iris_common::models::{ReplyRequest, ReplyType, RoomSummary};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum ModalFocus {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FieldFocus {
     Type,
     Room,
-    RoomSelector,
     Thread,
     ThreadId,
-    ThreadSelector,
     Scope,
     Content,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OverlayState {
+    None,
+    RoomSelector,
+    ThreadSelector,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,6 +70,24 @@ pub enum ReplyResult {
     Error { message: String },
 }
 
+pub(crate) struct ReplyUiState {
+    pub field_focus: FieldFocus,
+    pub overlay: OverlayState,
+    pub result: Option<ReplyResult>,
+    pub sending: bool,
+}
+
+impl ReplyUiState {
+    pub(crate) fn new(field_focus: FieldFocus) -> Self {
+        Self {
+            field_focus,
+            overlay: OverlayState::None,
+            result: None,
+            sending: false,
+        }
+    }
+}
+
 pub enum ModalAction {
     None,
     Close,
@@ -72,6 +95,7 @@ pub enum ModalAction {
     FetchThreads(i64),
 }
 
+#[derive(Debug)]
 pub(crate) enum ReplyValidationError {
     MissingThreadId,
     InvalidThreadId,

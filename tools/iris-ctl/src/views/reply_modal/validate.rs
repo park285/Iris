@@ -1,22 +1,14 @@
-use crate::views::path_input::PathInput;
-use crate::views::reply_modal::state::{ModalFocus, ReplyResult, ReplyValidationError, ThreadMode, ThreadScope};
+use crate::views::reply_modal::state::{FieldFocus, ReplyValidationError, ThreadMode, ThreadScope};
 use iris_common::models::ReplyType;
-use tui_textarea::TextArea;
 
-pub(crate) fn apply_validation_error(
-    result: &mut Option<ReplyResult>,
-    focus: &mut ModalFocus,
-    error: ReplyValidationError,
-) {
-    let (message, next_focus) = match error {
-        ReplyValidationError::MissingThreadId => ("thread id를 입력해주세요".to_string(), ModalFocus::ThreadId),
-        ReplyValidationError::InvalidThreadId => ("thread id는 숫자여야 합니다".to_string(), ModalFocus::ThreadId),
-        ReplyValidationError::MissingTextContent => ("내용을 입력해주세요".to_string(), ModalFocus::Content),
-        ReplyValidationError::MissingImagePath => ("이미지 경로를 입력해주세요".to_string(), ModalFocus::Content),
-        ReplyValidationError::MissingImagePaths => ("최소 한 개의 이미지 경로를 입력해주세요".to_string(), ModalFocus::Content),
-    };
-    *result = Some(ReplyResult::Error { message });
-    *focus = next_focus;
+pub(crate) fn validation_message_and_focus(error: ReplyValidationError) -> (String, FieldFocus) {
+    match error {
+        ReplyValidationError::MissingThreadId => ("thread id를 입력해주세요".to_string(), FieldFocus::ThreadId),
+        ReplyValidationError::InvalidThreadId => ("thread id는 숫자여야 합니다".to_string(), FieldFocus::ThreadId),
+        ReplyValidationError::MissingTextContent => ("내용을 입력해주세요".to_string(), FieldFocus::Content),
+        ReplyValidationError::MissingImagePath => ("이미지 경로를 입력해주세요".to_string(), FieldFocus::Content),
+        ReplyValidationError::MissingImagePaths => ("최소 한 개의 이미지 경로를 입력해주세요".to_string(), FieldFocus::Content),
+    }
 }
 
 pub(crate) fn validate_thread(
@@ -39,30 +31,29 @@ pub(crate) fn validate_thread(
 }
 
 pub(crate) fn build_data(
-    reply_type: &ReplyType,
-    text_area: &TextArea<'_>,
-    image_path: &PathInput,
-    image_paths: &[PathInput],
+    reply_type: ReplyType,
+    text: &str,
+    image_path: &str,
+    image_paths: &[String],
 ) -> Result<serde_json::Value, ReplyValidationError> {
     match reply_type {
         ReplyType::Text | ReplyType::Markdown => {
-            let text = text_area.lines().join("\n");
             if text.trim().is_empty() {
                 return Err(ReplyValidationError::MissingTextContent);
             }
-            Ok(serde_json::Value::String(text))
+            Ok(serde_json::Value::String(text.to_string()))
         }
         ReplyType::Image => {
-            if image_path.value.is_empty() {
+            if image_path.is_empty() {
                 return Err(ReplyValidationError::MissingImagePath);
             }
-            Ok(serde_json::Value::String(image_path.value.clone()))
+            Ok(serde_json::Value::String(image_path.to_string()))
         }
         ReplyType::ImageMultiple => {
             let paths: Vec<String> = image_paths
                 .iter()
-                .filter(|path| !path.value.is_empty())
-                .map(|path| path.value.clone())
+                .filter(|path| !path.is_empty())
+                .cloned()
                 .collect();
             if paths.is_empty() {
                 return Err(ReplyValidationError::MissingImagePaths);
@@ -71,5 +62,23 @@ pub(crate) fn build_data(
                 paths.into_iter().map(serde_json::Value::String).collect(),
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_data_uses_plain_values_for_text() {
+        let data = build_data(ReplyType::Text, "hello", "", &[]).expect("text should build");
+        assert_eq!(data, serde_json::Value::String("hello".to_string()));
+    }
+
+    #[test]
+    fn validation_message_and_focus_points_thread_errors_to_thread_id() {
+        let (message, focus) = validation_message_and_focus(ReplyValidationError::MissingThreadId);
+        assert_eq!(message, "thread id를 입력해주세요");
+        assert_eq!(focus, FieldFocus::ThreadId);
     }
 }
