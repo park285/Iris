@@ -23,6 +23,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import party.qwer.iris.ApiRequestException
 import party.qwer.iris.ConfigProvider
+import party.qwer.iris.ImageFormat
 import party.qwer.iris.MessageSender
 import party.qwer.iris.ReplyAdmissionResult
 import party.qwer.iris.ReplyAdmissionStatus
@@ -34,9 +35,13 @@ import party.qwer.iris.model.ReplyRequest
 import party.qwer.iris.model.ReplyType
 import party.qwer.iris.sha256Hex
 import party.qwer.iris.signIrisRequestWithBodyHash
+import java.io.InputStream
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class ReplyRoutesMultipartTest {
     private companion object {
@@ -271,6 +276,163 @@ class ReplyRoutesMultipartTest {
                 assertContentEquals(image, sender.consumeRetainedHandles().single())
             } finally {
                 sender.closeRetainedHandles()
+            }
+        }
+
+    @Test
+    fun `multipart sender rejection still transfers handle ownership`() =
+        testApplication {
+            val sender = RejectingMultipartMessageSender()
+            val stagedHandle = CloseTrackingMultipartHandle(pngBytes(9, 9, 9, 9))
+            application {
+                install(ContentNegotiation) {
+                    json(serverJson)
+                }
+                install(StatusPages) {
+                    exception<ApiRequestException> { call, cause ->
+                        call.respond(cause.status, CommonErrorResponse(message = cause.message))
+                    }
+                }
+                routing {
+                    installReplyRoutes(
+                        authSupport = AuthSupport(party.qwer.iris.RequestAuthenticator(), multipartRouteConfig),
+                        serverJson = serverJson,
+                        notificationReferer = "ref",
+                        messageSender = sender,
+                        replyStatusProvider = null,
+                        multipartImageStager =
+                            MultipartImagePartStager { _, _, _ ->
+                                stagedHandle
+                            },
+                    )
+                }
+            }
+
+            val image = pngBytes(1, 2, 3, 4)
+            val metadata =
+                serverJson.encodeToString(
+                    ReplyImageMetadata(
+                        type = ReplyType.IMAGE,
+                        room = "123456",
+                        images =
+                            listOf(
+                                ReplyImagePartSpec(
+                                    index = 0,
+                                    sha256Hex = sha256Hex(image),
+                                    byteLength = image.size.toLong(),
+                                    contentType = "image/png",
+                                ),
+                            ),
+                    ),
+                )
+
+            val response =
+                this.client.post("/reply") {
+                    setBody(
+                        MultiPartFormDataContent(
+                            formData {
+                                append("metadata", metadata, headersOf(HttpHeaders.ContentType, "application/json"))
+                                append(
+                                    "image",
+                                    buildPacket { writeFully(image) },
+                                    headersOf(
+                                        HttpHeaders.ContentDisposition to listOf("form-data; name=\"image\"; filename=\"reject.png\""),
+                                        HttpHeaders.ContentType to listOf("image/png"),
+                                    ),
+                                )
+                            },
+                        ),
+                    )
+                    applySignedHeaders(
+                        path = "/reply",
+                        method = "POST",
+                        bodySha256Hex = sha256Hex(metadata.toByteArray()),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.TooManyRequests, response.status)
+            assertEquals(1, sender.multiPhotoHandleCalls)
+            assertTrue(stagedHandle.closed, "sender should own and close handles even when admission rejects")
+            assertFalse(stagedHandle.pathExists(), "sender close should delete spill-backed handles after rejection")
+        }
+
+    @Test
+    fun `multipart validation failure closes staged spill-backed handles before ownership transfer`() =
+        testApplication {
+            val sender = RecordingMultipartMessageSender()
+            val stagedHandles = mutableListOf<VerifiedImagePayloadHandle>()
+            application {
+                install(ContentNegotiation) {
+                    json(serverJson)
+                }
+                install(StatusPages) {
+                    exception<ApiRequestException> { call, cause ->
+                        call.respond(cause.status, CommonErrorResponse(message = cause.message))
+                    }
+                }
+                routing {
+                    installReplyRoutes(
+                        authSupport = AuthSupport(party.qwer.iris.RequestAuthenticator(), multipartRouteConfig),
+                        serverJson = serverJson,
+                        notificationReferer = "ref",
+                        messageSender = sender,
+                        replyStatusProvider = null,
+                        multipartImageStager =
+                            MultipartImagePartStager { part, expectedPart, policy ->
+                                stageMultipartImagePart(part, expectedPart, policy).also { stagedHandles += it }
+                            },
+                    )
+                }
+            }
+
+            val image = pngBytes(1, 2, 3, 4) + ByteArray(8192) { (it % 251).toByte() }
+            val metadata =
+                serverJson.encodeToString(
+                    ReplyImageMetadata(
+                        type = ReplyType.IMAGE,
+                        room = "123456",
+                        threadId = "not-a-number",
+                        images =
+                            listOf(
+                                ReplyImagePartSpec(
+                                    index = 0,
+                                    sha256Hex = sha256Hex(image),
+                                    byteLength = image.size.toLong(),
+                                    contentType = "image/png",
+                                ),
+                            ),
+                    ),
+                )
+
+            val response =
+                this.client.post("/reply") {
+                    setBody(
+                        MultiPartFormDataContent(
+                            formData {
+                                append("metadata", metadata, headersOf(HttpHeaders.ContentType, "application/json"))
+                                append(
+                                    "image",
+                                    buildPacket { writeFully(image) },
+                                    headersOf(
+                                        HttpHeaders.ContentDisposition to listOf("form-data; name=\"image\"; filename=\"spill.png\""),
+                                        HttpHeaders.ContentType to listOf("image/png"),
+                                    ),
+                                )
+                            },
+                        ),
+                    )
+                    applySignedHeaders(
+                        path = "/reply",
+                        method = "POST",
+                        bodySha256Hex = sha256Hex(metadata.toByteArray()),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.BadRequest, response.status)
+            assertEquals(0, sender.multiPhotoCalls)
+            assertEquals(1, stagedHandles.size)
+            assertFails {
+                stagedHandles.single().openInputStream().use { input -> input.readBytes() }
             }
         }
 
@@ -744,6 +906,7 @@ private val multipartRouteConfig =
 
 private class RecordingMultipartMessageSender(
     private val consumeImmediately: Boolean = true,
+    private val result: ReplyAdmissionResult = ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED),
 ) : MessageSender {
     var multiPhotoCalls = 0
     var multiPhotoHandleCalls = 0
@@ -801,7 +964,7 @@ private class RecordingMultipartMessageSender(
         } else {
             retainedHandles = imageHandles.toList()
         }
-        return ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
+        return result
     }
 
     fun consumeRetainedHandles(): List<ByteArray> =
@@ -829,4 +992,82 @@ private class RecordingMultipartMessageSender(
         threadScope: Int?,
         requestId: String?,
     ): ReplyAdmissionResult = error("unused")
+}
+
+private class RejectingMultipartMessageSender : MessageSender {
+    var multiPhotoHandleCalls = 0
+        private set
+
+    override suspend fun sendMessageSuspend(
+        referer: String,
+        chatId: Long,
+        msg: String,
+        threadId: Long?,
+        threadScope: Int?,
+        requestId: String?,
+    ): ReplyAdmissionResult = error("unused")
+
+    override suspend fun sendNativeMultiplePhotosHandlesSuspend(
+        room: Long,
+        imageHandles: List<VerifiedImagePayloadHandle>,
+        threadId: Long?,
+        threadScope: Int?,
+        requestId: String?,
+    ): ReplyAdmissionResult {
+        multiPhotoHandleCalls += 1
+        imageHandles.forEach { handle ->
+            runCatching { handle.close() }
+        }
+        return ReplyAdmissionResult(ReplyAdmissionStatus.QUEUE_FULL, "queue full")
+    }
+
+    override suspend fun sendTextShareSuspend(
+        room: Long,
+        msg: String,
+        requestId: String?,
+    ): ReplyAdmissionResult = error("unused")
+
+    override suspend fun sendReplyMarkdownSuspend(
+        room: Long,
+        msg: String,
+        threadId: Long?,
+        threadScope: Int?,
+        requestId: String?,
+    ): ReplyAdmissionResult = error("unused")
+}
+
+private class CloseTrackingMultipartHandle(
+    private val bytes: ByteArray,
+) : VerifiedImagePayloadHandle {
+    private val spillPath =
+        kotlin.io.path
+            .createTempFile(
+                prefix = "iris-multipart-test-",
+                suffix = ".tmp",
+            ).also { path ->
+                java.nio.file.Files
+                    .write(path, bytes)
+            }
+
+    var closed = false
+        private set
+
+    override val format = party.qwer.iris.ImageFormat.PNG
+    override val contentType: String = "image/png"
+    override val sha256Hex: String = sha256Hex(bytes)
+    override val sizeBytes: Long = bytes.size.toLong()
+
+    override fun openInputStream(): java.io.InputStream =
+        java.nio.file.Files
+            .newInputStream(spillPath)
+
+    override fun close() {
+        closed = true
+        java.nio.file.Files
+            .deleteIfExists(spillPath)
+    }
+
+    fun pathExists(): Boolean =
+        java.nio.file.Files
+            .exists(spillPath)
 }

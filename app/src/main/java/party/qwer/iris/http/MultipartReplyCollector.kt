@@ -10,15 +10,31 @@ import party.qwer.iris.SignaturePrecheck
 import party.qwer.iris.VerifiedImagePayloadHandle
 import party.qwer.iris.invalidRequest
 import party.qwer.iris.model.ReplyImageMetadata
-import party.qwer.iris.model.ReplyImagePartSpec
 import party.qwer.iris.requestRejected
 import party.qwer.iris.sha256Hex
 
-internal data class MultipartReplyPayload(
+internal class MultipartReplyPayload(
     val metadata: ReplyImageMetadata,
     val target: ValidatedReplyTarget,
-    val imageHandles: List<VerifiedImagePayloadHandle>,
-)
+    private val handles: MutableList<VerifiedImagePayloadHandle>,
+) : AutoCloseable {
+    private var transferred = false
+
+    fun takeImageHandles(): List<VerifiedImagePayloadHandle> {
+        check(!transferred) { "image handles already transferred" }
+        transferred = true
+        val out = handles.toList()
+        handles.clear()
+        return out
+    }
+
+    override fun close() {
+        handles.forEach { handle ->
+            runCatching { handle.close() }
+        }
+        handles.clear()
+    }
+}
 
 internal class MultipartReplyCollector(
     private val call: ApplicationCall,
@@ -58,14 +74,14 @@ internal class MultipartReplyCollector(
             invalidRequest("missing image part")
         }
 
-        // 수집이 성공하면 handle 소유권은 호출자로 이전된다.
-        val transferredHandles = imageHandles.toList()
+        val target = validateReplyTarget(currentMetadata)
+        val handlesForPayload = imageHandles.toMutableList()
         imageHandles.clear()
 
         return MultipartReplyPayload(
             metadata = currentMetadata,
-            target = validateReplyTarget(currentMetadata),
-            imageHandles = transferredHandles,
+            target = target,
+            handles = handlesForPayload,
         )
     }
 

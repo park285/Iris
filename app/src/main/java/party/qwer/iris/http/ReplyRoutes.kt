@@ -3,7 +3,6 @@ package party.qwer.iris.http
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
-import io.ktor.http.content.MultiPartData
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.receiveMultipart
 import io.ktor.server.response.respond
@@ -114,34 +113,37 @@ private suspend fun enqueueMultipartReply(
          * 4. thread metadata is validated before the request enters reply admission.
          */
         val payload = collector.collect(multipart) ?: return null
-        val requestId = "reply-${UUID.randomUUID()}"
-        val admission =
-            try {
-                messageSender.sendNativeMultiplePhotosHandlesSuspend(
-                    room = payload.target.roomId,
-                    imageHandles = payload.imageHandles,
-                    threadId = payload.target.threadId,
-                    threadScope = payload.target.threadScope,
-                    requestId = requestId,
-                )
-            } catch (error: Throwable) {
-                payload.imageHandles.forEach { handle ->
-                    runCatching { handle.close() }
+        payload.use { collected ->
+            val requestId = "reply-${UUID.randomUUID()}"
+            val handles = collected.takeImageHandles()
+            val admission =
+                try {
+                    messageSender.sendNativeMultiplePhotosHandlesSuspend(
+                        room = collected.target.roomId,
+                        imageHandles = handles,
+                        threadId = collected.target.threadId,
+                        threadScope = collected.target.threadScope,
+                        requestId = requestId,
+                    )
+                } catch (error: Throwable) {
+                    handles.forEach { handle ->
+                        runCatching { handle.close() }
+                    }
+                    throw error
                 }
-                throw error
+            if (admission.status != ReplyAdmissionStatus.ACCEPTED) {
+                requestRejected(
+                    admission.message ?: "reply request rejected",
+                    replyAdmissionHttpStatus(admission.status),
+                )
             }
-        if (admission.status != ReplyAdmissionStatus.ACCEPTED) {
-            requestRejected(
-                admission.message ?: "reply request rejected",
-                replyAdmissionHttpStatus(admission.status),
+
+            return ReplyAcceptedResponse(
+                requestId = requestId,
+                room = collected.metadata.room,
+                type = collected.metadata.type,
             )
         }
-
-        return ReplyAcceptedResponse(
-            requestId = requestId,
-            room = payload.metadata.room,
-            type = payload.metadata.type,
-        )
     } finally {
         collector.closeUntransferredHandles()
     }

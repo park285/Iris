@@ -10,6 +10,11 @@ internal interface MessageSender {
         requestId: String? = null,
     ): ReplyAdmissionResult
 
+    /**
+     * handle ownership 규약:
+     * 정상 반환 이후에는 admission 결과와 무관하게 callee가 `imageHandles`를 소유한다.
+     * ownership 이전에 예외가 발생한 경우에만 caller가 handle close 책임을 유지한다.
+     */
     suspend fun sendNativeMultiplePhotosHandlesSuspend(
         room: Long,
         imageHandles: List<VerifiedImagePayloadHandle>,
