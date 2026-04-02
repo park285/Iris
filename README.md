@@ -420,6 +420,8 @@ curl -X POST "http://<DEVICE_IP>:3000$PATH_URI" \
 
 - **SendMsg 및 초기 컨셉:** `ye-seola/go-kdb`
 - **카카오톡 복호화 로직:** `jiru/kakaodecrypt`
+- **원본 Iris:** `dolidolih/Iris`
+
 
 ## 면책 조항
 
