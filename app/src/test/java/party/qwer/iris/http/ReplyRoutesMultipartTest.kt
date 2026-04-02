@@ -201,6 +201,152 @@ class ReplyRoutesMultipartTest {
         }
 
     @Test
+    fun `multipart image handles remain readable after route returns when spill-backed`() =
+        testApplication {
+            val sender = RecordingMultipartMessageSender(consumeImmediately = false)
+            application {
+                install(ContentNegotiation) {
+                    json(serverJson)
+                }
+                install(StatusPages) {
+                    exception<ApiRequestException> { call, cause ->
+                        call.respond(cause.status, CommonErrorResponse(message = cause.message))
+                    }
+                }
+                routing {
+                    installReplyRoutes(
+                        authSupport = AuthSupport(party.qwer.iris.RequestAuthenticator(), multipartRouteConfig),
+                        serverJson = serverJson,
+                        notificationReferer = "ref",
+                        messageSender = sender,
+                        replyStatusProvider = null,
+                    )
+                }
+            }
+
+            val image = pngBytes(1, 2, 3, 4) + ByteArray(8192) { (it % 251).toByte() }
+            val metadata =
+                serverJson.encodeToString(
+                    ReplyImageMetadata(
+                        type = ReplyType.IMAGE,
+                        room = "123456",
+                        images =
+                            listOf(
+                                ReplyImagePartSpec(
+                                    index = 0,
+                                    sha256Hex = sha256Hex(image),
+                                    byteLength = image.size.toLong(),
+                                    contentType = "image/png",
+                                ),
+                            ),
+                    ),
+                )
+
+            try {
+                val response =
+                    this.client.post("/reply") {
+                        setBody(
+                            MultiPartFormDataContent(
+                                formData {
+                                    append("metadata", metadata, headersOf(HttpHeaders.ContentType, "application/json"))
+                                    append(
+                                        "image",
+                                        buildPacket { writeFully(image) },
+                                        headersOf(
+                                            HttpHeaders.ContentDisposition to listOf("form-data; name=\"image\"; filename=\"spill.png\""),
+                                            HttpHeaders.ContentType to listOf("image/png"),
+                                        ),
+                                    )
+                                },
+                            ),
+                        )
+                        applySignedHeaders(
+                            path = "/reply",
+                            method = "POST",
+                            bodySha256Hex = sha256Hex(metadata.toByteArray()),
+                        )
+                    }
+
+                assertEquals(HttpStatusCode.Accepted, response.status)
+                assertContentEquals(image, sender.consumeRetainedHandles().single())
+            } finally {
+                sender.closeRetainedHandles()
+            }
+        }
+
+    @Test
+    fun `multipart image larger than formFieldLimit is accepted`() =
+        testApplication {
+            val sender = RecordingMultipartMessageSender()
+            application {
+                install(ContentNegotiation) {
+                    json(serverJson)
+                }
+                install(StatusPages) {
+                    exception<ApiRequestException> { call, cause ->
+                        call.respond(cause.status, CommonErrorResponse(message = cause.message))
+                    }
+                }
+                routing {
+                    installReplyRoutes(
+                        authSupport = AuthSupport(party.qwer.iris.RequestAuthenticator(), multipartRouteConfig),
+                        serverJson = serverJson,
+                        notificationReferer = "ref",
+                        messageSender = sender,
+                        replyStatusProvider = null,
+                    )
+                }
+            }
+
+            val image = pngBytes() + ByteArray(70_000)
+            val metadata =
+                serverJson.encodeToString(
+                    ReplyImageMetadata(
+                        type = ReplyType.IMAGE,
+                        room = "123456",
+                        images =
+                            listOf(
+                                ReplyImagePartSpec(
+                                    index = 0,
+                                    sha256Hex = sha256Hex(image),
+                                    byteLength = image.size.toLong(),
+                                    contentType = "image/png",
+                                ),
+                            ),
+                    ),
+                )
+            val response =
+                this.client.post("/reply") {
+                    setBody(
+                        MultiPartFormDataContent(
+                            formData {
+                                append("metadata", metadata, headersOf(HttpHeaders.ContentType, "application/json"))
+                                append(
+                                    "image",
+                                    buildPacket { writeFully(image) },
+                                    headersOf(
+                                        HttpHeaders.ContentDisposition to listOf("form-data; name=\"image\"; filename=\"large.png\""),
+                                        HttpHeaders.ContentType to listOf("image/png"),
+                                    ),
+                                )
+                            },
+                        ),
+                    )
+                    applySignedHeaders(
+                        path = "/reply",
+                        method = "POST",
+                        bodySha256Hex = sha256Hex(metadata.toByteArray()),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.Accepted, response.status)
+            assertEquals(1, sender.multiPhotoCalls)
+            assertEquals(1, sender.multiPhotoHandleCalls)
+            assertEquals(1, sender.lastImageBytes.size)
+            assertContentEquals(image, sender.lastImageBytes.single())
+        }
+
+    @Test
     fun `multipart image request rejects image part before metadata`() =
         testApplication {
             val sender = RecordingMultipartMessageSender()
@@ -340,6 +486,82 @@ class ReplyRoutesMultipartTest {
         }
 
     @Test
+    fun `multipart request with invalid auth is rejected before body buffering`() =
+        testApplication {
+            val sender = RecordingMultipartMessageSender()
+            var stagedImageParts = 0
+            application {
+                install(ContentNegotiation) {
+                    json(serverJson)
+                }
+                install(StatusPages) {
+                    exception<ApiRequestException> { call, cause ->
+                        call.respond(cause.status, CommonErrorResponse(message = cause.message))
+                    }
+                }
+                routing {
+                    installReplyRoutes(
+                        authSupport = AuthSupport(party.qwer.iris.RequestAuthenticator(), multipartRouteConfig),
+                        serverJson = serverJson,
+                        notificationReferer = "ref",
+                        messageSender = sender,
+                        replyStatusProvider = null,
+                        multipartImageStager =
+                            MultipartImagePartStager { part, expectedPart, policy ->
+                                stagedImageParts += 1
+                                stageMultipartImagePart(part, expectedPart, policy)
+                            },
+                    )
+                }
+            }
+
+            val image = pngBytes(1, 2, 3, 4)
+            val metadata =
+                serverJson.encodeToString(
+                    ReplyImageMetadata(
+                        type = ReplyType.IMAGE,
+                        room = "123456",
+                        images =
+                            listOf(
+                                ReplyImagePartSpec(
+                                    index = 0,
+                                    sha256Hex = sha256Hex(image),
+                                    byteLength = image.size.toLong(),
+                                    contentType = "image/png",
+                                ),
+                            ),
+                    ),
+                )
+            val bodySha256Hex = sha256Hex(metadata.toByteArray())
+            val response =
+                this.client.post("/reply") {
+                    setBody(
+                        MultiPartFormDataContent(
+                            formData {
+                                append("metadata", metadata, headersOf(HttpHeaders.ContentType, "application/json"))
+                                append(
+                                    "image",
+                                    buildPacket { writeFully(image) },
+                                    headersOf(
+                                        HttpHeaders.ContentDisposition to listOf("form-data; name=\"image\"; filename=\"one.png\""),
+                                        HttpHeaders.ContentType to listOf("image/png"),
+                                    ),
+                                )
+                            },
+                        ),
+                    )
+                    headers.append("X-Iris-Timestamp", System.currentTimeMillis().toString())
+                    headers.append("X-Iris-Nonce", "nonce-preauth-test")
+                    headers.append("X-Iris-Body-Sha256", bodySha256Hex)
+                    headers.append("X-Iris-Signature", "badbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadb")
+                }
+
+            assertEquals(HttpStatusCode.Unauthorized, response.status)
+            assertEquals(0, stagedImageParts)
+            assertEquals(0, sender.multiPhotoCalls)
+        }
+
+    @Test
     fun `multipart image request rejects invalid signature before staging images`() =
         testApplication {
             val sender = RecordingMultipartMessageSender()
@@ -360,10 +582,11 @@ class ReplyRoutesMultipartTest {
                         notificationReferer = "ref",
                         messageSender = sender,
                         replyStatusProvider = null,
-                        multipartImageStager = { part, expectedPart, policy ->
-                            stagedImageParts += 1
-                            stageMultipartImagePart(part, expectedPart, policy)
-                        },
+                        multipartImageStager =
+                            MultipartImagePartStager { part, expectedPart, policy ->
+                                stagedImageParts += 1
+                                stageMultipartImagePart(part, expectedPart, policy)
+                            },
                     )
                 }
             }
@@ -519,13 +742,16 @@ private val multipartRouteConfig =
         override fun webhookEndpointFor(route: String): String = ""
     }
 
-private class RecordingMultipartMessageSender : MessageSender {
+private class RecordingMultipartMessageSender(
+    private val consumeImmediately: Boolean = true,
+) : MessageSender {
     var multiPhotoCalls = 0
     var multiPhotoHandleCalls = 0
     var lastRoom: Long? = null
     var lastThreadId: Long? = null
     var lastThreadScope: Int? = null
     var lastImageBytes: List<ByteArray> = emptyList()
+    private var retainedHandles: List<VerifiedImagePayloadHandle> = emptyList()
 
     override suspend fun sendMessageSuspend(
         referer: String,
@@ -564,14 +790,30 @@ private class RecordingMultipartMessageSender : MessageSender {
         lastRoom = room
         lastThreadId = threadId
         lastThreadScope = threadScope
-        lastImageBytes =
-            imageHandles.map { handle ->
-                handle.openInputStream().use { input -> input.readBytes() }
+        if (consumeImmediately) {
+            lastImageBytes =
+                imageHandles.map { handle ->
+                    handle.openInputStream().use { input -> input.readBytes() }
+                }
+            imageHandles.forEach { handle ->
+                runCatching { handle.close() }
             }
-        imageHandles.forEach { handle ->
-            runCatching { handle.close() }
+        } else {
+            retainedHandles = imageHandles.toList()
         }
         return ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
+    }
+
+    fun consumeRetainedHandles(): List<ByteArray> =
+        retainedHandles.map { handle ->
+            handle.openInputStream().use { input -> input.readBytes() }
+        }
+
+    fun closeRetainedHandles() {
+        retainedHandles.forEach { handle ->
+            runCatching { handle.close() }
+        }
+        retainedHandles = emptyList()
     }
 
     override suspend fun sendTextShareSuspend(
