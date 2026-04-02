@@ -12,7 +12,7 @@ pub use crate::views::reply_modal::ReplyResult;
 pub enum AppEvent {
     Terminal(Event),
     Server(SseEvent),
-    EventHistoryLoaded(Vec<RoomEventRecord>),
+    EventHistoryLoaded(i64, Vec<RoomEventRecord>),
 }
 
 pub struct App {
@@ -86,8 +86,9 @@ impl App {
     }
 
     fn maybe_queue_event_history_load(&mut self) {
+        let target_chat_id = crate::refresh::event_history_target_chat_id(&self.rooms_view);
         if matches!(self.active_tab, TabId::Events)
-            && self.events_view.should_auto_load_history()
+            && self.events_view.should_auto_load_history_for(target_chat_id)
             && self.has_event_history_target()
         {
             self.pending_event_history_load = true;
@@ -260,8 +261,8 @@ impl App {
                 self.events_view.push_event(&sse);
                 false
             }
-            AppEvent::EventHistoryLoaded(records) => {
-                self.events_view.push_history(&records);
+            AppEvent::EventHistoryLoaded(chat_id, records) => {
+                self.events_view.push_history(chat_id, &records);
                 self.status = format!("Loaded {} event history records", records.len());
                 false
             }
@@ -405,14 +406,17 @@ mod tests {
         let mut app = App::new();
 
         assert!(
-            !app.handle_app_event(AppEvent::EventHistoryLoaded(vec![RoomEventRecord {
+            !app.handle_app_event(AppEvent::EventHistoryLoaded(
+                1,
+                vec![RoomEventRecord {
                 id: 1,
                 chat_id: 1,
                 event_type: "member_event".to_string(),
                 user_id: 7,
                 payload: r#"{"type":"member_event","event":"join","nickname":"alice"}"#.to_string(),
                 created_at: 1_000,
-            }]))
+            }],
+            ))
         );
 
         assert_eq!(app.events_view.event_count(), 1);

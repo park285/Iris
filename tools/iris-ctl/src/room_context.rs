@@ -56,7 +56,8 @@ pub(crate) fn apply_messages_refresh_result(
 pub(crate) fn handle_event_history_load_error(app: &mut app::App, error: &Error) {
     let message = error.to_string();
     if message.contains("404 Not Found") {
-        app.events_view.mark_history_unavailable();
+        let chat_id = crate::refresh::event_history_target_chat_id(&app.rooms_view);
+        app.events_view.mark_history_unavailable(chat_id);
         app.status = "Event history unavailable on this server".to_string();
     } else if message.contains("No room available for event history") {
         app.status = "Select a room first to load event history".to_string();

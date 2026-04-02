@@ -67,12 +67,16 @@ pub(crate) async fn refresh_app_data(iris: &api::TuiApi, app: &mut app::App) {
 pub(crate) async fn load_event_history(
     iris: &api::TuiApi,
     rooms_view: &views::rooms::RoomsView,
-) -> Result<Vec<RoomEventRecord>> {
-    let chat_id = rooms_view
+) -> Result<(i64, Vec<RoomEventRecord>)> {
+    let chat_id = event_history_target_chat_id(rooms_view)
+        .ok_or_else(|| anyhow::anyhow!("No room available for event history"))?;
+    Ok((chat_id, iris.get_room_events(chat_id, 50, 0).await?))
+}
+
+pub(crate) fn event_history_target_chat_id(rooms_view: &views::rooms::RoomsView) -> Option<i64> {
+    rooms_view
         .selected_chat_id()
         .or_else(|| rooms_view.rooms.first().map(|room| room.chat_id))
-        .ok_or_else(|| anyhow::anyhow!("No room available for event history"))?;
-    iris.get_room_events(chat_id, 50, 0).await
 }
 
 pub(crate) async fn apply_pending_thread_fetch(iris: &api::TuiApi, app: &mut app::App) {
@@ -89,8 +93,8 @@ pub(crate) async fn apply_pending_event_history_load(iris: &api::TuiApi, app: &m
     if app.pending_event_history_load {
         app.pending_event_history_load = false;
         match load_event_history(iris, &app.rooms_view).await {
-            Ok(records) => {
-                app.handle_app_event(app::AppEvent::EventHistoryLoaded(records));
+            Ok((chat_id, records)) => {
+                app.handle_app_event(app::AppEvent::EventHistoryLoaded(chat_id, records));
             }
             Err(error) => {
                 handle_event_history_load_error(app, &error);

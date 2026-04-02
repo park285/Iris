@@ -13,7 +13,7 @@ pub struct EventsView {
     state: ListState,
     paused: bool,
     filter_active: bool,
-    history_loaded: bool,
+    history_loaded_for_chat_id: Option<i64>,
 }
 
 impl EventsView {
@@ -23,7 +23,7 @@ impl EventsView {
             state: ListState::default(),
             paused: false,
             filter_active: false,
-            history_loaded: false,
+            history_loaded_for_chat_id: None,
         }
     }
 
@@ -36,7 +36,7 @@ impl EventsView {
         self.select_last_visible();
     }
 
-    pub fn push_history(&mut self, records: &[RoomEventRecord]) {
+    pub fn push_history(&mut self, chat_id: i64, records: &[RoomEventRecord]) {
         let mut lines = Vec::new();
         for record in records {
             if let Ok(mut event) = serde_json::from_str::<SseEvent>(&record.payload) {
@@ -53,19 +53,19 @@ impl EventsView {
             self.events.push_front(line);
         }
         self.trim_to_limit();
-        self.history_loaded = true;
+        self.history_loaded_for_chat_id = Some(chat_id);
         if self.state.selected().is_none() {
             let len = self.visible_events().len();
             self.state.select(if len == 0 { None } else { Some(0) });
         }
     }
 
-    pub const fn should_auto_load_history(&self) -> bool {
-        !self.history_loaded
+    pub fn should_auto_load_history_for(&self, chat_id: Option<i64>) -> bool {
+        matches!(chat_id, Some(id) if self.history_loaded_for_chat_id != Some(id))
     }
 
-    pub fn mark_history_unavailable(&mut self) {
-        self.history_loaded = true;
+    pub fn mark_history_unavailable(&mut self, chat_id: Option<i64>) {
+        self.history_loaded_for_chat_id = chat_id;
     }
 
     fn trim_to_limit(&mut self) {
@@ -288,7 +288,7 @@ mod tests {
         let mut view = EventsView::new();
         view.push_event(&member_event("join"));
 
-        view.push_history(&[
+        view.push_history(1, &[
             RoomEventRecord {
                 id: 1,
                 chat_id: 1,
@@ -307,10 +307,30 @@ mod tests {
             },
         ]);
 
-        assert!(!view.should_auto_load_history());
+        assert!(!view.should_auto_load_history_for(Some(1)));
         assert_eq!(view.visible_events().len(), 3);
         assert!(view.visible_events()[0].contains("alice"));
         assert!(view.visible_events()[1].contains("bob"));
+    }
+
+    #[test]
+    fn switching_history_target_requires_another_auto_load() {
+        let mut view = EventsView::new();
+
+        view.push_history(
+            1,
+            &[RoomEventRecord {
+                id: 1,
+                chat_id: 1,
+                event_type: "member_event".to_string(),
+                user_id: 2,
+                payload: r#"{"type":"member_event","event":"join","nickname":"alice"}"#.to_string(),
+                created_at: 1_000,
+            }],
+        );
+
+        assert!(!view.should_auto_load_history_for(Some(1)));
+        assert!(view.should_auto_load_history_for(Some(2)));
     }
 
     #[test]

@@ -202,6 +202,17 @@ mod tests {
     #[test]
     fn not_found_event_history_error_is_treated_as_unavailable() {
         let mut app = app::App::new();
+        app.rooms_view.set_rooms(vec![iris_common::models::RoomSummary {
+            chat_id: 1,
+            room_type: Some("open".to_string()),
+            link_id: None,
+            active_members_count: Some(3),
+            link_name: Some("room-1".to_string()),
+            link_url: None,
+            member_limit: None,
+            searchable: None,
+            bot_role: None,
+        }]);
 
         handle_event_history_load_error(
             &mut app,
@@ -211,7 +222,7 @@ mod tests {
         );
 
         assert_eq!(app.status, "Event history unavailable on this server");
-        assert!(!app.events_view.should_auto_load_history());
+        assert!(!app.events_view.should_auto_load_history_for(Some(1)));
     }
 
     #[test]
@@ -224,7 +235,7 @@ mod tests {
         );
 
         assert_eq!(app.status, "Select a room first to load event history");
-        assert!(app.events_view.should_auto_load_history());
+        assert!(app.events_view.should_auto_load_history_for(Some(1)));
     }
 
     fn sample_member() -> MemberInfo {
