@@ -130,3 +130,20 @@ data class ThreadSummary(
     val messageCount: Int,
     val lastActiveAt: Long?,
 )
+
+@Serializable
+data class RecentMessagesResponse(
+    val chatId: Long,
+    val messages: List<RecentMessage>,
+)
+
+@Serializable
+data class RecentMessage(
+    val id: Long,
+    val chatId: Long,
+    val userId: Long,
+    val message: String,
+    val type: Int,
+    val createdAt: Long,
+    val threadId: Long? = null,
+)

@@ -19,3 +19,9 @@ data class QueryMemberStatsRequest(
 data class QueryRecentThreadsRequest(
     val chatId: Long,
 )
+
+@Serializable
+data class QueryRecentMessagesRequest(
+    val chatId: Long,
+    val limit: Int = 50,
+)

@@ -10,6 +10,7 @@ class ThreadQueries(
     companion object {
         // 방당 최대 반환할 스레드 수
         private const val THREAD_LIST_LIMIT = 20
+        private const val RECENT_MESSAGES_MAX_LIMIT = 100
     }
 
     /**
@@ -64,4 +65,41 @@ class ThreadQueries(
                 },
             ),
         )
+
+    fun listRecentMessages(
+        chatId: ChatId,
+        limit: Int,
+    ): List<RecentMessageRow> {
+        val safeLimit = limit.coerceIn(1, RECENT_MESSAGES_MAX_LIMIT)
+        return db.query(
+            QuerySpec(
+                sql =
+                    """
+                    SELECT id, chat_id, user_id, message, type, created_at, thread_id, v
+                    FROM chat_logs
+                    WHERE chat_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """.trimIndent(),
+                bindArgs =
+                    listOf(
+                        SqlArg.LongVal(chatId.value),
+                        SqlArg.IntVal(safeLimit),
+                    ),
+                maxRows = safeLimit,
+                mapper = { row ->
+                    RecentMessageRow(
+                        id = row.long("id") ?: 0L,
+                        chatId = ChatId(row.long("chat_id") ?: chatId.value),
+                        userId = UserId(row.long("user_id") ?: 0L),
+                        message = row.string("message"),
+                        type = row.int("type") ?: 0,
+                        createdAt = row.long("created_at") ?: 0L,
+                        threadId = row.long("thread_id"),
+                        metadata = originMetadataDecoder.decode(row.string("v")),
+                    )
+                },
+            ),
+        )
+    }
 }

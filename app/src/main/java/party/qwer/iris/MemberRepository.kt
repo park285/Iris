@@ -3,6 +3,7 @@ package party.qwer.iris
 import kotlinx.serialization.json.Json
 import party.qwer.iris.model.MemberActivityResponse
 import party.qwer.iris.model.MemberListResponse
+import party.qwer.iris.model.RecentMessagesResponse
 import party.qwer.iris.model.RoomInfoResponse
 import party.qwer.iris.model.RoomListResponse
 import party.qwer.iris.model.RoomSummary
@@ -130,6 +131,11 @@ class MemberRepository internal constructor(
         )
 
     fun listThreads(chatId: Long): ThreadListResponse = threadListingService.listThreads(ChatId(chatId))
+
+    fun listRecentMessages(
+        chatId: Long,
+        limit: Int = 50,
+    ): RecentMessagesResponse = threadListingService.listRecentMessages(ChatId(chatId), limit)
 
     internal fun resolveNicknamesBatch(
         userIds: Collection<UserId>,

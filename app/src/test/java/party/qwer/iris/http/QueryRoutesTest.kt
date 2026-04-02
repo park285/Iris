@@ -197,6 +197,58 @@ class QueryRoutesTest {
         }
 
     @Test
+    fun `query recent messages returns decrypted allowlisted message data`() =
+        testApplication {
+            application {
+                install(ContentNegotiation) {
+                    json(serverJson)
+                }
+                routing {
+                    installQueryRoutes(
+                        authSupport = AuthSupport(party.qwer.iris.RequestAuthenticator(), queryRouteConfig),
+                        serverJson = serverJson,
+                        memberRepo =
+                            buildQueryRouteRepo(
+                                queryRouteLegacyQuery { sql, _, _ ->
+                                    when {
+                                        sql.contains("FROM chat_logs") && sql.contains("ORDER BY created_at DESC") ->
+                                            listOf(
+                                                mapOf(
+                                                    "id" to "10",
+                                                    "chat_id" to "42",
+                                                    "user_id" to "7",
+                                                    "message" to "cipher",
+                                                    "type" to "1",
+                                                    "created_at" to "1234",
+                                                    "thread_id" to "99",
+                                                    "v" to """{"enc":1}""",
+                                                ),
+                                            )
+                                        else -> emptyList()
+                                    }
+                                },
+                                decrypt = { enc, value, userId -> "dec:$enc:$userId:$value" },
+                            ),
+                    )
+                }
+            }
+
+            val body = """{"chatId":42,"limit":10}"""
+            val response =
+                client.post("/query/recent-messages") {
+                    contentType(ContentType.Application.Json)
+                    setBody(body)
+                    applySignedHeaders("/query/recent-messages", body)
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            val text = response.bodyAsText()
+            assertTrue(text.contains(""""chatId":42"""))
+            assertTrue(text.contains(""""message":"dec:1:7:cipher""""))
+            assertTrue(text.contains(""""threadId":99"""))
+        }
+
+    @Test
     fun `raw query endpoint is removed`() =
         testApplication {
             application {

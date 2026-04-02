@@ -8,6 +8,7 @@ import party.qwer.iris.MemberRepository
 import party.qwer.iris.internalServerFailure
 import party.qwer.iris.invalidRequest
 import party.qwer.iris.model.QueryMemberStatsRequest
+import party.qwer.iris.model.QueryRecentMessagesRequest
 import party.qwer.iris.model.QueryRecentThreadsRequest
 import party.qwer.iris.model.QueryRoomSummaryRequest
 
@@ -77,6 +78,24 @@ internal fun Route.installQueryRoutes(
             ) { rawBody ->
                 val request = rawBody.decodeJson(serverJson, QueryRecentThreadsRequest.serializer())
                 call.respond(availableRepo.listThreads(request.chatId))
+            }
+        ) {
+            return@post
+        }
+    }
+
+    post("/query/recent-messages") {
+        val availableRepo = repo ?: internalServerFailure("member repository unavailable")
+        if (
+            !withVerifiedProtectedBody(
+                call = call,
+                maxBodyBytes = MAX_QUERY_REQUEST_BODY_BYTES,
+                bodyReader = protectedBodyReader,
+                precheck = { authSupport.precheckBotControlSignature(call, method = "POST") },
+                finalize = { precheck, actualBodySha256Hex -> authSupport.finalizeSignature(call, precheck, actualBodySha256Hex) },
+            ) { rawBody ->
+                val request = rawBody.decodeJson(serverJson, QueryRecentMessagesRequest.serializer())
+                call.respond(availableRepo.listRecentMessages(request.chatId, request.limit))
             }
         ) {
             return@post

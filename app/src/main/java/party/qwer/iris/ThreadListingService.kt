@@ -1,4 +1,7 @@
 package party.qwer.iris
+
+import party.qwer.iris.model.RecentMessage
+import party.qwer.iris.model.RecentMessagesResponse
 import party.qwer.iris.model.ThreadListResponse
 import party.qwer.iris.model.ThreadSummary
 import party.qwer.iris.storage.ChatId
@@ -40,5 +43,36 @@ internal class ThreadListingService(
                 )
             }
         return ThreadListResponse(chatId = chatId.value, threads = threads)
+    }
+
+    fun listRecentMessages(
+        chatId: ChatId,
+        limit: Int,
+    ): RecentMessagesResponse {
+        val rows = threadQueries.listRecentMessages(chatId, limit)
+        val messages =
+            rows.map { row ->
+                val decryptedMessage =
+                    if (row.message != null && row.metadata != null) {
+                        try {
+                            val userId = row.userId.value.takeIf { it > 0L } ?: botId
+                            decrypt(row.metadata.enc, row.message, userId)
+                        } catch (_: Exception) {
+                            row.message
+                        }
+                    } else {
+                        row.message.orEmpty()
+                    }
+                RecentMessage(
+                    id = row.id,
+                    chatId = row.chatId.value,
+                    userId = row.userId.value,
+                    message = decryptedMessage,
+                    type = row.type,
+                    createdAt = row.createdAt,
+                    threadId = row.threadId,
+                )
+            }
+        return RecentMessagesResponse(chatId = chatId.value, messages = messages)
     }
 }

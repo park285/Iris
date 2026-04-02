@@ -70,3 +70,14 @@ data class ThreadRow(
     // 원본 메시지의 origin metadata
     val originMetadata: ThreadOriginMetadata?,
 )
+
+data class RecentMessageRow(
+    val id: Long,
+    val chatId: ChatId,
+    val userId: UserId,
+    val message: String?,
+    val type: Int,
+    val createdAt: Long,
+    val threadId: Long?,
+    val metadata: ThreadOriginMetadata?,
+)

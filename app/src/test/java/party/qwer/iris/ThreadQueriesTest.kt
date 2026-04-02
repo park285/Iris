@@ -136,4 +136,59 @@ class ThreadQueriesTest {
         assertEquals("999", args?.get(0))
         assertEquals("20", args?.get(1))
     }
+
+    @Test
+    fun `listRecentMessages maps rows and clamps limit`() {
+        var capturedSql: String? = null
+        val capturedArgs = mutableListOf<Array<String?>?>()
+        val queries =
+            buildThreadQueries { sql, args, _ ->
+                capturedSql = sql
+                capturedArgs.add(args)
+                stubResult(
+                    columns =
+                        listOf(
+                            "id",
+                            "chat_id",
+                            "user_id",
+                            "message",
+                            "type",
+                            "created_at",
+                            "thread_id",
+                            "v",
+                        ),
+                    rows =
+                        listOf(
+                            mapOf(
+                                "id" to "123",
+                                "chat_id" to "777",
+                                "user_id" to "42",
+                                "message" to "cipher",
+                                "type" to "26",
+                                "created_at" to "1743200000",
+                                "thread_id" to "9001",
+                                "v" to """{"enc":1}""",
+                            ),
+                        ),
+                )
+            }
+
+        val rows = queries.listRecentMessages(ChatId(777L), 500)
+
+        assertEquals(1, rows.size)
+        assertTrue(capturedSql?.contains("ORDER BY created_at DESC") == true)
+        val args = capturedArgs.first()
+        assertEquals("777", args?.get(0))
+        assertEquals("100", args?.get(1))
+        val row = rows.first()
+        assertEquals(123L, row.id)
+        assertEquals(ChatId(777L), row.chatId)
+        assertEquals(UserId(42L), row.userId)
+        assertEquals("cipher", row.message)
+        assertEquals(26, row.type)
+        assertEquals(1743200000L, row.createdAt)
+        assertEquals(9001L, row.threadId)
+        requireNotNull(row.metadata)
+        assertEquals(1, row.metadata.enc)
+    }
 }
