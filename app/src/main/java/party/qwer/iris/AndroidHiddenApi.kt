@@ -4,7 +4,9 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.os.DeadObjectException
 import android.os.IBinder
+import java.lang.reflect.InvocationTargetException
 
 @SuppressLint("PrivateApi")
 class AndroidHiddenApi {
@@ -36,10 +38,39 @@ class AndroidHiddenApi {
             Class.forName("android.app.IApplicationThread")
         }
 
-        private val activityManager by lazy {
+        @Volatile
+        private var cachedActivityManager: Any? = null
+
+        private fun resolveActivityManager(): Any {
             val activityManagerStub = Class.forName("android.app.IActivityManager\$Stub")
             val binder = getService("activity")
-            activityManagerStub.getMethod("asInterface", IBinder::class.java).invoke(null, binder)
+            return activityManagerStub.getMethod("asInterface", IBinder::class.java).invoke(null, binder) as Any
+        }
+
+        private fun activityManager(): Any {
+            cachedActivityManager?.let { return it }
+            return synchronized(this) {
+                cachedActivityManager ?: resolveActivityManager().also { resolved ->
+                    cachedActivityManager = resolved
+                }
+            }
+        }
+
+        private fun clearActivityManager() {
+            synchronized(this) {
+                cachedActivityManager = null
+            }
+        }
+
+        private fun <T> withActivityManagerRetry(block: (Any) -> T): T {
+            return retryOnDeadBinderFailure(
+                onRetry = {
+                    IrisLogger.warn("[AndroidHiddenApi] activity manager binder died; refreshing handle and retrying once")
+                    clearActivityManager()
+                },
+            ) {
+                block(activityManager())
+            }
         }
 
         private fun buildMethodResolutionError(
@@ -101,7 +132,9 @@ class AndroidHiddenApi {
                         )
                     (
                         { intent: Intent ->
-                            method.invoke(activityManager, null, intent, null, false, callingPackageName, null, -3)
+                            withActivityManagerRetry { manager ->
+                                method.invoke(manager, null, intent, null, false, callingPackageName, null, -3)
+                            }
                         }
                     )
                 },
@@ -118,7 +151,9 @@ class AndroidHiddenApi {
                         )
                     (
                         { intent: Intent ->
-                            method.invoke(activityManager, null, intent, null, false, callingPackageName, -3)
+                            withActivityManagerRetry { manager ->
+                                method.invoke(manager, null, intent, null, false, callingPackageName, -3)
+                            }
                         }
                     )
                 },
@@ -159,21 +194,23 @@ class AndroidHiddenApi {
                         )
                     (
                         { intent: Intent ->
-                            method.invoke(
-                                activityManager,
-                                null,
-                                callerPackageName,
-                                null,
-                                intent,
-                                intent.type,
-                                null,
-                                null,
-                                0,
-                                0,
-                                null,
-                                null,
-                                -3,
-                            )
+                            withActivityManagerRetry { manager ->
+                                method.invoke(
+                                    manager,
+                                    null,
+                                    callerPackageName,
+                                    null,
+                                    intent,
+                                    intent.type,
+                                    null,
+                                    null,
+                                    0,
+                                    0,
+                                    null,
+                                    null,
+                                    -3,
+                                )
+                            }
                         }
                     )
                 },
@@ -196,20 +233,22 @@ class AndroidHiddenApi {
                         )
                     (
                         { intent: Intent ->
-                            method.invoke(
-                                activityManager,
-                                null,
-                                callerPackageName,
-                                intent,
-                                intent.type,
-                                null,
-                                null,
-                                0,
-                                0,
-                                null,
-                                null,
-                                -3,
-                            )
+                            withActivityManagerRetry { manager ->
+                                method.invoke(
+                                    manager,
+                                    null,
+                                    callerPackageName,
+                                    intent,
+                                    intent.type,
+                                    null,
+                                    null,
+                                    0,
+                                    0,
+                                    null,
+                                    null,
+                                    -3,
+                                )
+                            }
                         }
                     )
                 },
@@ -244,22 +283,24 @@ class AndroidHiddenApi {
                         )
                     (
                         { intent: Intent ->
-                            method.invoke(
-                                activityManager,
-                                null,
-                                intent,
-                                null,
-                                null,
-                                0,
-                                null,
-                                null,
-                                null,
-                                -1,
-                                null,
-                                false,
-                                false,
-                                -3,
-                            )
+                            withActivityManagerRetry { manager ->
+                                method.invoke(
+                                    manager,
+                                    null,
+                                    intent,
+                                    null,
+                                    null,
+                                    0,
+                                    null,
+                                    null,
+                                    null,
+                                    -1,
+                                    null,
+                                    false,
+                                    false,
+                                    -3,
+                                )
+                            }
                         }
                     )
                 },
@@ -310,4 +351,40 @@ internal fun <T : Any> requireLookupValue(
 
     IrisLogger.error("[AndroidHiddenApi] $label unavailable after $attempts attempts")
     throw IllegalStateException("$label unavailable after $attempts attempts")
+}
+
+internal fun isDeadBinderFailure(error: Throwable?): Boolean {
+    var current = error
+    while (current != null) {
+        when (current) {
+            is DeadObjectException -> return true
+            is InvocationTargetException -> {
+                current = current.targetException ?: current.cause
+                continue
+            }
+        }
+        current = current.cause
+    }
+    return false
+}
+
+internal fun <T> retryOnDeadBinderFailure(
+    maxRetries: Int = 1,
+    onRetry: () -> Unit = {},
+    block: () -> T,
+): T {
+    require(maxRetries >= 0) { "maxRetries must be non-negative" }
+
+    var attempts = 0
+    while (true) {
+        try {
+            return block()
+        } catch (error: Throwable) {
+            if (attempts >= maxRetries || !isDeadBinderFailure(error)) {
+                throw error
+            }
+            attempts += 1
+            onRetry()
+        }
+    }
 }
