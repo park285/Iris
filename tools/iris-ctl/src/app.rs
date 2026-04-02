@@ -351,8 +351,7 @@ mod tests {
     #[test]
     fn messages_tab_reply_opens_modal_with_thread_prefilled() {
         let mut app = App::new();
-        app.rooms_view
-            .set_rooms(vec![sample_room(1)]);
+        app.rooms_view.set_rooms(vec![sample_room(1)]);
         app.bind_room_context(1);
         app.active_tab = TabId::Messages;
         app.messages_view.set_messages(vec![messages::ChatMessage {

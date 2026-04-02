@@ -3,11 +3,24 @@ use iris_common::models::ReplyType;
 
 pub(crate) fn validation_message_and_focus(error: ReplyValidationError) -> (String, FieldFocus) {
     match error {
-        ReplyValidationError::MissingThreadId => ("thread id를 입력해주세요".to_string(), FieldFocus::ThreadId),
-        ReplyValidationError::InvalidThreadId => ("thread id는 숫자여야 합니다".to_string(), FieldFocus::ThreadId),
-        ReplyValidationError::MissingTextContent => ("내용을 입력해주세요".to_string(), FieldFocus::Content),
-        ReplyValidationError::MissingImagePath => ("이미지 경로를 입력해주세요".to_string(), FieldFocus::Content),
-        ReplyValidationError::MissingImagePaths => ("최소 한 개의 이미지 경로를 입력해주세요".to_string(), FieldFocus::Content),
+        ReplyValidationError::MissingThreadId => {
+            ("thread id를 입력해주세요".to_string(), FieldFocus::ThreadId)
+        }
+        ReplyValidationError::InvalidThreadId => (
+            "thread id는 숫자여야 합니다".to_string(),
+            FieldFocus::ThreadId,
+        ),
+        ReplyValidationError::MissingTextContent => {
+            ("내용을 입력해주세요".to_string(), FieldFocus::Content)
+        }
+        ReplyValidationError::MissingImagePath => (
+            "이미지 경로를 입력해주세요".to_string(),
+            FieldFocus::Content,
+        ),
+        ReplyValidationError::MissingImagePaths => (
+            "최소 한 개의 이미지 경로를 입력해주세요".to_string(),
+            FieldFocus::Content,
+        ),
     }
 }
 

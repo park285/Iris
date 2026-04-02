@@ -12,11 +12,11 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use tui_textarea::TextArea;
 
 use super::path_input::PathInput;
-pub use state::{ModalAction, ReplyResult};
 use state::{
     FieldFocus, OverlayState, ReplyUiState, ReplyValidationError, ThreadMode, ThreadScope,
     cycle_reply_type, is_open_chat,
 };
+pub use state::{ModalAction, ReplyResult};
 use util::{centered_rect, truncate_thread_origin};
 use validate::{build_data, validate_thread, validation_message_and_focus};
 
@@ -98,14 +98,14 @@ impl ReplyModal {
         } else {
             FieldFocus::Type
         };
-        let room_selector_cursor =
-            room.as_ref()
-                .and_then(|selected| {
-                    room_list
-                        .iter()
-                        .position(|candidate| candidate.chat_id == selected.chat_id)
-                })
-                .unwrap_or(0);
+        let room_selector_cursor = room
+            .as_ref()
+            .and_then(|selected| {
+                room_list
+                    .iter()
+                    .position(|candidate| candidate.chat_id == selected.chat_id)
+            })
+            .unwrap_or(0);
 
         Self {
             draft: ReplyDraft::new(room, thread_id),
@@ -150,14 +150,15 @@ impl ReplyModal {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let meta_height =
-            if is_open_chat(self.draft.room.as_ref()) && self.draft.thread_mode == ThreadMode::Specified {
+        let meta_height = if is_open_chat(self.draft.room.as_ref())
+            && self.draft.thread_mode == ThreadMode::Specified
+        {
             4
-            } else if is_open_chat(self.draft.room.as_ref()) {
-                3
-            } else {
-                2
-            };
+        } else if is_open_chat(self.draft.room.as_ref()) {
+            3
+        } else {
+            2
+        };
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -205,7 +206,10 @@ impl ReplyModal {
             row_idx += 1;
         }
 
-        if is_open_chat(self.draft.room.as_ref()) && self.draft.thread_mode == ThreadMode::Specified && row_idx < rows.len() {
+        if is_open_chat(self.draft.room.as_ref())
+            && self.draft.thread_mode == ThreadMode::Specified
+            && row_idx < rows.len()
+        {
             frame.render_widget(Paragraph::new(self.render_scope_line()), rows[row_idx]);
         }
     }
@@ -262,7 +266,10 @@ impl ReplyModal {
     }
 
     fn render_thread_line(&self) -> Line<'static> {
-        let focused = matches!(self.field_focus(), FieldFocus::Thread | FieldFocus::ThreadId);
+        let focused = matches!(
+            self.field_focus(),
+            FieldFocus::Thread | FieldFocus::ThreadId
+        );
         let label_style = if focused {
             Style::default()
                 .fg(Color::Yellow)
@@ -675,12 +682,20 @@ impl ReplyModal {
         match key.code {
             KeyCode::Esc | KeyCode::Enter => {
                 self.draft.image_editing = false;
-                if let Some(p) = self.draft.image_paths.get_mut(self.draft.image_paths_cursor) {
+                if let Some(p) = self
+                    .draft
+                    .image_paths
+                    .get_mut(self.draft.image_paths_cursor)
+                {
                     p.validate_file();
                 }
             }
             _ => {
-                if let Some(p) = self.draft.image_paths.get_mut(self.draft.image_paths_cursor) {
+                if let Some(p) = self
+                    .draft
+                    .image_paths
+                    .get_mut(self.draft.image_paths_cursor)
+                {
                     p.handle_key(key);
                 }
             }
@@ -939,7 +954,11 @@ mod tests {
     fn new_with_context_aligns_room_selector_cursor_with_preselected_room() {
         let open_room = make_room(10, "OM");
         let regular_room = make_room(20, "DirectChat");
-        let modal = ReplyModal::new_with_context(Some(regular_room.clone()), vec![open_room, regular_room], None);
+        let modal = ReplyModal::new_with_context(
+            Some(regular_room.clone()),
+            vec![open_room, regular_room],
+            None,
+        );
 
         assert_eq!(modal.room_selector_cursor, 1);
     }
@@ -1060,7 +1079,8 @@ mod tests {
     #[test]
     fn set_result_success_resets_draft_but_keeps_ui_state() {
         let room = make_room(10, "OM");
-        let mut modal = ReplyModal::new_with_context(Some(room), Vec::new(), Some("33".to_string()));
+        let mut modal =
+            ReplyModal::new_with_context(Some(room), Vec::new(), Some("33".to_string()));
         modal.draft.text_area.insert_str("hello");
         modal.draft.image_path.value = "/tmp/example.png".to_string();
         modal.ui.field_focus = FieldFocus::Content;
