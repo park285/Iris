@@ -5,6 +5,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -23,11 +24,66 @@ class SqliteCheckpointJournalTest {
                 "CREATE INDEX IF NOT EXISTS idx_webhook_outbox_ready\nON ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE} (status, next_attempt_at, id)",
                 "CREATE TABLE IF NOT EXISTS ${IrisDatabaseSchema.CHECKPOINT_TABLE} (\n    stream TEXT PRIMARY KEY,\n    cursor_value INTEGER NOT NULL,\n    updated_at INTEGER NOT NULL\n)",
                 "CREATE TABLE IF NOT EXISTS ${IrisDatabaseSchema.SNAPSHOT_STATE_TABLE} (\n    chat_id INTEGER PRIMARY KEY,\n    state TEXT NOT NULL,\n    snapshot_json TEXT,\n    updated_at INTEGER NOT NULL\n)",
+                "CREATE TABLE IF NOT EXISTS ${IrisDatabaseSchema.SSE_EVENTS_TABLE} (\n    id INTEGER PRIMARY KEY AUTOINCREMENT,\n    event_type TEXT NOT NULL,\n    payload TEXT NOT NULL,\n    created_at INTEGER NOT NULL\n)",
                 "CREATE TABLE IF NOT EXISTS ${IrisDatabaseSchema.ROOM_EVENTS_TABLE} (\n    id INTEGER PRIMARY KEY AUTOINCREMENT,\n    chat_id INTEGER NOT NULL,\n    event_type TEXT NOT NULL,\n    user_id INTEGER NOT NULL,\n    payload TEXT NOT NULL,\n    created_at INTEGER NOT NULL\n)",
                 "CREATE INDEX IF NOT EXISTS idx_room_events_chat_id\nON ${IrisDatabaseSchema.ROOM_EVENTS_TABLE} (chat_id, id)",
+                "PRAGMA user_version = ${IrisDatabaseSchema.CURRENT_SCHEMA_VERSION}",
             ),
             helper.executedSql,
         )
+    }
+
+    @Test
+    fun `createAll upgrades legacy schema version zero and bootstraps sse events`() {
+        JdbcSqliteHelper.inMemory().use { helper ->
+            assertEquals(0L, helper.queryLong("PRAGMA user_version"))
+
+            IrisDatabaseSchema.createAll(helper)
+
+            assertEquals(IrisDatabaseSchema.CURRENT_SCHEMA_VERSION.toLong(), helper.queryLong("PRAGMA user_version"))
+            val sseStore = SqliteSseEventStore(helper)
+            assertEquals(1L, sseStore.insert("message", """{"payload":"ok"}""", 1_000L))
+        }
+    }
+
+    @Test
+    fun `createAll migrates legacy version zero while preserving checkpoint data`() {
+        JdbcSqliteHelper.inMemory().use { helper ->
+            helper.execute(
+                """
+                CREATE TABLE checkpoints (
+                    stream TEXT PRIMARY KEY,
+                    cursor_value INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                )
+                """.trimIndent(),
+            )
+            helper.update(
+                "INSERT INTO checkpoints (stream, cursor_value, updated_at) VALUES (?, ?, ?)",
+                listOf("chat_logs", 77L, 1_000L),
+            )
+            helper.execute("PRAGMA user_version = 0")
+
+            IrisDatabaseSchema.createAll(helper)
+
+            assertEquals(IrisDatabaseSchema.CURRENT_SCHEMA_VERSION.toLong(), helper.queryLong("PRAGMA user_version"))
+            assertEquals(77L, helper.queryLong("SELECT cursor_value FROM checkpoints WHERE stream = ?", "chat_logs"))
+            assertEquals(1L, SqliteSseEventStore(helper).insert("message", """{"payload":"after-migrate"}""", 2_000L))
+        }
+    }
+
+    @Test
+    fun `createAll rejects future schema version`() {
+        JdbcSqliteHelper.inMemory().use { helper ->
+            helper.execute("PRAGMA user_version = ${IrisDatabaseSchema.CURRENT_SCHEMA_VERSION + 1}")
+
+            val error =
+                assertFailsWith<IllegalStateException> {
+                    IrisDatabaseSchema.createAll(helper)
+                }
+
+            assertTrue(error.message?.contains("newer than supported") == true)
+        }
     }
 
     @Test
@@ -161,15 +217,23 @@ class SqliteCheckpointJournalTest {
 
 private class RecordingSqliteDriver : SqliteDriver {
     val executedSql = mutableListOf<String>()
+    private var userVersion = 0L
 
     override fun execute(sql: String) {
         executedSql += sql
+        if (sql.startsWith("PRAGMA user_version =", ignoreCase = true)) {
+            userVersion = sql.substringAfter('=').trim().toLong()
+        }
     }
 
     override fun queryLong(
         sql: String,
         vararg args: Any?,
-    ): Long? = error("Not used in this test")
+    ): Long? =
+        when {
+            sql.trim().equals("PRAGMA user_version", ignoreCase = true) -> userVersion
+            else -> error("Not used in this test")
+        }
 
     override fun <T> query(
         sql: String,

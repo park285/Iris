@@ -1,6 +1,7 @@
 package party.qwer.iris.persistence
 
 object IrisDatabaseSchema {
+    const val CURRENT_SCHEMA_VERSION = 1
     const val WEBHOOK_OUTBOX_TABLE = "webhook_outbox"
     const val CHECKPOINT_TABLE = "checkpoints"
     const val SNAPSHOT_STATE_TABLE = "snapshot_states"
@@ -53,16 +54,18 @@ object IrisDatabaseSchema {
         )
         """.trimIndent()
 
-    private val CREATE_SSE_EVENTS = """
+    private val CREATE_SSE_EVENTS =
+        """
         CREATE TABLE IF NOT EXISTS $SSE_EVENTS_TABLE (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             event_type TEXT NOT NULL,
             payload TEXT NOT NULL,
             created_at INTEGER NOT NULL
         )
-    """.trimIndent()
+        """.trimIndent()
 
-    private val CREATE_ROOM_EVENTS = """
+    private val CREATE_ROOM_EVENTS =
+        """
         CREATE TABLE IF NOT EXISTS $ROOM_EVENTS_TABLE (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             chat_id INTEGER NOT NULL,
@@ -71,12 +74,27 @@ object IrisDatabaseSchema {
             payload TEXT NOT NULL,
             created_at INTEGER NOT NULL
         )
-    """.trimIndent()
+        """.trimIndent()
 
-    private val CREATE_ROOM_EVENTS_INDEX = """
+    private val CREATE_ROOM_EVENTS_INDEX =
+        """
         CREATE INDEX IF NOT EXISTS idx_room_events_chat_id
         ON $ROOM_EVENTS_TABLE (chat_id, id)
-    """.trimIndent()
+        """.trimIndent()
+
+    private data class MigrationStep(
+        val fromVersion: Int,
+        val toVersion: Int,
+        val apply: SqliteDriver.() -> Unit,
+    )
+
+    private val MIGRATIONS =
+        listOf(
+            MigrationStep(fromVersion = 0, toVersion = 1) {
+                ensureCurrentSchema(this)
+                execute("PRAGMA user_version = 1")
+            },
+        )
 
     fun initializeConnection(driver: SqliteDriver) {
         driver.execute(SQLITE_JOURNAL_MODE_WAL)
@@ -107,9 +125,40 @@ object IrisDatabaseSchema {
 
     fun createAll(driver: SqliteDriver) {
         initializeConnection(driver)
+        val currentVersion = driver.queryLong("PRAGMA user_version")?.toInt() ?: 0
+        if (currentVersion > CURRENT_SCHEMA_VERSION) {
+            throw IllegalStateException(
+                "Persistence schema version $currentVersion is newer than supported version $CURRENT_SCHEMA_VERSION",
+            )
+        }
+        driver.inImmediateTransaction {
+            if (currentVersion == CURRENT_SCHEMA_VERSION) {
+                ensureCurrentSchema(this)
+            } else {
+                migrate(this, currentVersion)
+            }
+        }
+    }
+
+    private fun migrate(
+        driver: SqliteDriver,
+        startingVersion: Int,
+    ) {
+        var version = startingVersion
+        while (version < CURRENT_SCHEMA_VERSION) {
+            val step =
+                MIGRATIONS.firstOrNull { it.fromVersion == version }
+                    ?: throw IllegalStateException("No persistence schema migration path from version $version")
+            step.apply(driver)
+            version = step.toVersion
+        }
+    }
+
+    private fun ensureCurrentSchema(driver: SqliteDriver) {
         createWebhookOutboxTable(driver)
         createCheckpointTable(driver)
         createSnapshotStateTable(driver)
+        createSseEventsTable(driver)
         createRoomEventsTable(driver)
     }
 }

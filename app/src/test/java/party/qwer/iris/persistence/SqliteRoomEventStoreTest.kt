@@ -10,28 +10,30 @@ class SqliteRoomEventStoreTest {
     fun `insert stores event and returns auto-increment id`() {
         val (helper, store) = createStore()
         helper.use {
-            val id = store.insert(
-                chatId = 100L,
-                eventType = "member_event",
-                userId = 1L,
-                payload = """{"type":"member_event","event":"join","chatId":100,"userId":1}""",
-                createdAtMs = 1000L,
-            )
+            val id =
+                store.insert(
+                    chatId = 100L,
+                    eventType = "member_event",
+                    userId = 1L,
+                    payload = """{"type":"member_event","event":"join","chatId":100,"userId":1}""",
+                    createdAtMs = 1000L,
+                )
             assertEquals(1L, id)
 
-            val rows = helper.query(
-                "SELECT id, chat_id, event_type, user_id, payload, created_at FROM ${IrisDatabaseSchema.ROOM_EVENTS_TABLE}",
-                emptyList(),
-            ) { row ->
-                RoomEventRecord(
-                    id = row.getLong(0),
-                    chatId = row.getLong(1),
-                    eventType = row.getString(2),
-                    userId = row.getLong(3),
-                    payload = row.getString(4),
-                    createdAt = row.getLong(5),
-                )
-            }
+            val rows =
+                helper.query(
+                    "SELECT id, chat_id, event_type, user_id, payload, created_at FROM ${IrisDatabaseSchema.ROOM_EVENTS_TABLE}",
+                    emptyList(),
+                ) { row ->
+                    RoomEventRecord(
+                        id = row.getLong(0),
+                        chatId = row.getLong(1),
+                        eventType = row.getString(2),
+                        userId = row.getLong(3),
+                        payload = row.getString(4),
+                        createdAt = row.getLong(5),
+                    )
+                }
             assertEquals(1, rows.size)
             val record = rows.single()
             assertEquals(100L, record.chatId)

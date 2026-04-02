@@ -209,10 +209,12 @@ class SqliteWebhookDeliveryStoreTest {
                 )
                 assertEquals(
                     "DEAD",
-                    helper.query(
-                        "SELECT status FROM ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE} WHERE id = ?",
-                        listOf(claim.id),
-                    ) { row -> row.getString(0) }.single(),
+                    helper
+                        .query(
+                            "SELECT status FROM ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE} WHERE id = ?",
+                            listOf(claim.id),
+                        ) { row -> row.getString(0) }
+                        .single(),
                 )
             }
         }
@@ -246,10 +248,12 @@ class SqliteWebhookDeliveryStoreTest {
                 // entry는 여전히 CLAIMED(secondClaim token) -> claimReady에서 제외
                 assertEquals(
                     "CLAIMED",
-                    helper.query(
-                        "SELECT status FROM ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE} WHERE id = ?",
-                        listOf(firstClaim.id),
-                    ) { row -> row.getString(0) }.single(),
+                    helper
+                        .query(
+                            "SELECT status FROM ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE} WHERE id = ?",
+                            listOf(firstClaim.id),
+                        ) { row -> row.getString(0) }
+                        .single(),
                 )
 
                 // 유효한 token으로 markSent
@@ -285,10 +289,12 @@ class SqliteWebhookDeliveryStoreTest {
 
                 assertEquals(
                     "status=503",
-                    helper.query(
-                        "SELECT last_error FROM ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE} WHERE id = ?",
-                        listOf(firstClaim.id),
-                    ) { row -> row.getString(0) }.single(),
+                    helper
+                        .query(
+                            "SELECT last_error FROM ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE} WHERE id = ?",
+                            listOf(firstClaim.id),
+                        ) { row -> row.getString(0) }
+                        .single(),
                 )
 
                 // 2차: claim -> markSent (last_error 정리)
@@ -297,10 +303,12 @@ class SqliteWebhookDeliveryStoreTest {
                 store.markSent(secondClaim.id, secondClaim.claimToken)
 
                 val lastError =
-                    helper.query(
-                        "SELECT last_error FROM ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE} WHERE id = ?",
-                        listOf(secondClaim.id),
-                    ) { row -> row.getStringOrNull(0) }.single()
+                    helper
+                        .query(
+                            "SELECT last_error FROM ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE} WHERE id = ?",
+                            listOf(secondClaim.id),
+                        ) { row -> row.getStringOrNull(0) }
+                        .single()
                 assertTrue(lastError == null, "last_error should be cleared after markSent, got: $lastError")
             }
         }
@@ -581,10 +589,12 @@ class SqliteWebhookDeliveryStoreTest {
                 // row는 secondClaim의 CLAIMED 상태 유지
                 assertEquals(
                     "CLAIMED",
-                    helper.query(
-                        "SELECT status FROM ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE} WHERE id = ?",
-                        listOf(firstClaim.id),
-                    ) { row -> row.getString(0) }.single(),
+                    helper
+                        .query(
+                            "SELECT status FROM ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE} WHERE id = ?",
+                            listOf(firstClaim.id),
+                        ) { row -> row.getString(0) }
+                        .single(),
                 )
 
                 // 유효한 token으로 성공 처리

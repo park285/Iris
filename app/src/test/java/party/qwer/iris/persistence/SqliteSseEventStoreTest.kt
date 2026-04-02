@@ -13,17 +13,18 @@ class SqliteSseEventStoreTest {
             val id = store.insert("message", """{"text":"hello"}""", 1000L)
             assertEquals(1L, id)
 
-            val rows = helper.query(
-                "SELECT id, event_type, payload, created_at FROM ${IrisDatabaseSchema.SSE_EVENTS_TABLE}",
-                emptyList(),
-            ) { row ->
-                SseEventEnvelope(
-                    id = row.getLong(0),
-                    eventType = row.getString(1),
-                    payload = row.getString(2),
-                    createdAtMs = row.getLong(3),
-                )
-            }
+            val rows =
+                helper.query(
+                    "SELECT id, event_type, payload, created_at FROM ${IrisDatabaseSchema.SSE_EVENTS_TABLE}",
+                    emptyList(),
+                ) { row ->
+                    SseEventEnvelope(
+                        id = row.getLong(0),
+                        eventType = row.getString(1),
+                        payload = row.getString(2),
+                        createdAtMs = row.getLong(3),
+                    )
+                }
             assertEquals(1, rows.size)
             assertEquals("message", rows.single().eventType)
             assertEquals("""{"text":"hello"}""", rows.single().payload)
