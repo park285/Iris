@@ -7,12 +7,9 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import party.qwer.iris.delivery.webhook.WebhookOutboxDispatcher
 import party.qwer.iris.http.ReplyImageIngressPolicy
-import party.qwer.iris.ingress.CommandIngressService
 import party.qwer.iris.persistence.CheckpointJournal
 import party.qwer.iris.persistence.SnapshotStateStore
 import party.qwer.iris.persistence.SqliteDriver
-import party.qwer.iris.persistence.WebhookDeliveryStore
-import party.qwer.iris.snapshot.SnapshotCoordinator
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal class AppRuntime(
@@ -21,38 +18,33 @@ internal class AppRuntime(
 ) {
     private val started = AtomicBoolean(false)
     private val stopped = AtomicBoolean(false)
-
-    private lateinit var configManager: ConfigManager
-    private lateinit var bridgeClient: UdsImageBridgeClient
-    private lateinit var replyService: ReplyService
-    private lateinit var kakaoDb: KakaoDB
-    private lateinit var memberRepo: MemberRepository
-    private lateinit var webhookOutboxStore: WebhookDeliveryStore
-    private lateinit var webhookOutboxDispatcher: WebhookOutboxDispatcher
-    private lateinit var persistenceDriver: SqliteDriver
-    private lateinit var sseEventBus: SseEventBus
-    private lateinit var checkpointJournal: CheckpointJournal
-    private lateinit var snapshotStateStore: SnapshotStateStore
-    private lateinit var snapshotCoordinator: SnapshotCoordinator
-    private lateinit var ingressService: CommandIngressService
-    private lateinit var snapshotScope: CoroutineScope
-    private lateinit var observerHelper: ObserverHelper
-    private lateinit var dbObserver: DBObserver
-    private lateinit var snapshotObserver: SnapshotObserver
-    private lateinit var kakaoProfileIndexer: KakaoProfileIndexer
-    private lateinit var imageDeleter: ImageDeleter
-    private lateinit var bridgeHealthCache: BridgeHealthCache
-    private var irisServer: IrisServer? = null
+    private var runningSnapshot: AppRuntimeRunningSnapshot? = null
 
     fun start() {
         if (!started.compareAndSet(false, true)) {
             return
         }
-        configManager = ConfigManager()
-        bridgeClient = UdsImageBridgeClient()
+        runningSnapshot = assembleStartup().toRunningSnapshot()
+    }
+
+    suspend fun stop() {
+        if (!stopped.compareAndSet(false, true)) {
+            return
+        }
+        val snapshot = runningSnapshot ?: return
+        withContext(Dispatchers.IO) {
+            IrisLogger.info("[AppRuntime] Shutdown signal received, cleaning up...")
+            snapshot.runShutdown()
+            IrisLogger.info("[AppRuntime] Cleanup completed")
+        }
+    }
+
+    private fun assembleStartup(): AppRuntimeStartupAssembly {
+        val configManager = ConfigManager()
+        val bridgeClient = UdsImageBridgeClient()
         val replyImageIngressPolicy = ReplyImageIngressPolicy.fromEnv()
 
-        replyService =
+        val replyService =
             ReplyRuntimeFactory
                 .create(
                     config = configManager,
@@ -63,20 +55,20 @@ internal class AppRuntime(
         IrisLogger.info("Message sender thread started")
 
         val storageRuntime = RuntimeBuilders.createStorageRuntime(configManager)
-        kakaoDb = storageRuntime.kakaoDb
-        memberRepo = storageRuntime.memberRepository
+        val kakaoDb = storageRuntime.kakaoDb
+        val memberRepo = storageRuntime.memberRepository
 
         val persistenceRuntime =
             PersistenceFactory.createSqliteRuntime(
                 driver = PersistenceFactory.openAndroidDriver(),
             )
-        persistenceDriver = persistenceRuntime.driver
-        webhookOutboxStore = persistenceRuntime.webhookOutboxStore
-        checkpointJournal = persistenceRuntime.checkpointJournal
-        snapshotStateStore = persistenceRuntime.snapshotStateStore
-        webhookOutboxDispatcher = WebhookOutboxDispatcher(configManager, webhookOutboxStore)
+        val persistenceDriver = persistenceRuntime.driver
+        val webhookOutboxStore = persistenceRuntime.webhookOutboxStore
+        val checkpointJournal = persistenceRuntime.checkpointJournal
+        val snapshotStateStore = persistenceRuntime.snapshotStateStore
+        val webhookOutboxDispatcher = WebhookOutboxDispatcher(configManager, webhookOutboxStore)
         webhookOutboxDispatcher.start()
-        sseEventBus = SseEventBus(bufferSize = 100)
+        val sseEventBus = SseEventBus(bufferSize = 100)
         val snapshotRuntime =
             SnapshotRuntimeFactory.create(
                 configManager = configManager,
@@ -90,28 +82,26 @@ internal class AppRuntime(
                 roomEventStore = persistenceRuntime.roomEventStore,
                 missingTombstoneTtlMs = runtimeOptions.snapshotMissingTombstoneTtlMs,
             )
-        snapshotScope = snapshotRuntime.snapshotScope
-        snapshotCoordinator = snapshotRuntime.snapshotCoordinator
-        ingressService = snapshotRuntime.ingressService
-        observerHelper = snapshotRuntime.observerHelper
+        val snapshotScope = snapshotRuntime.snapshotScope
+        val observerHelper = snapshotRuntime.observerHelper
         observerHelper.seedSnapshotCache()
 
-        dbObserver = snapshotRuntime.dbObserver
+        val dbObserver = snapshotRuntime.dbObserver
         dbObserver.startPolling()
         IrisLogger.info("DBObserver started")
 
-        snapshotObserver = snapshotRuntime.snapshotObserver
+        val snapshotObserver = snapshotRuntime.snapshotObserver
         snapshotObserver.start()
         IrisLogger.info("SnapshotObserver started")
 
-        kakaoProfileIndexer =
+        val kakaoProfileIndexer =
             KakaoProfileIndexer(
                 profileStore = KakaoDbNotificationIdentityStore(kakaoDb),
             )
         kakaoProfileIndexer.launch()
         IrisLogger.info("Kakao profile indexer started")
 
-        imageDeleter =
+        val imageDeleter =
             ImageDeleter(
                 IRIS_IMAGE_DIR_PATH,
                 runtimeOptions.imageDeletionIntervalMs,
@@ -124,13 +114,13 @@ internal class AppRuntime(
                 )
             }
 
-        bridgeHealthCache =
+        val bridgeHealthCache =
             BridgeHealthCache(
                 healthProvider = bridgeClient::queryHealth,
                 refreshIntervalMs = runtimeOptions.bridgeHealthRefreshMs,
             ).also { it.start() }
 
-        irisServer =
+        val irisServer =
             if (runtimeOptions.disableHttp) {
                 IrisLogger.info("[AppRuntime] IRIS_DISABLE_HTTP=1; skipping Iris HTTP server startup")
                 null
@@ -152,41 +142,81 @@ internal class AppRuntime(
                     IrisLogger.info("Iris Server started")
                 }
             }
-    }
 
-    suspend fun stop() {
-        if (!stopped.compareAndSet(false, true)) {
-            return
-        }
-        withContext(Dispatchers.IO) {
-            IrisLogger.info("[AppRuntime] Shutdown signal received, cleaning up...")
-            RuntimeBuilders.runShutdownPlan(
-                RuntimeBuilders.buildShutdownPlan(
-                    RuntimeBuilders.ShutdownHooks(
-                        stopServer = { irisServer?.stopServer() },
-                        stopDbObserver = dbObserver::stopPolling,
-                        stopSnapshotObserver = snapshotObserver::stop,
-                        stopProfileIndexer = kakaoProfileIndexer::stop,
-                        stopImageDeleter = imageDeleter::stopDeletion,
-                        closeWebhookOutbox = webhookOutboxDispatcher::close,
-                        closeIngress = observerHelper::close,
-                        closeSseEventBus = sseEventBus::close,
-                        cancelSnapshotScope = snapshotScope::cancel,
-                        shutdownReplyService = { runBlocking { replyService.shutdownSuspend() } },
-                        stopBridgeHealthCache = bridgeHealthCache::stop,
-                        persistConfig = {
-                            if (!configManager.saveConfigNow()) {
-                                IrisLogger.error("[AppRuntime] Failed to save config during shutdown")
-                            }
-                        },
-                        flushCheckpointJournal = checkpointJournal::flushNow,
-                        closeSnapshotStateStore = snapshotStateStore::close,
-                        closePersistenceDriver = persistenceDriver::close,
-                        closeKakaoDb = kakaoDb::closeConnection,
-                    ),
+        return AppRuntimeStartupAssembly(
+            configManager = configManager,
+            replyService = replyService,
+            kakaoDb = kakaoDb,
+            webhookOutboxDispatcher = webhookOutboxDispatcher,
+            persistenceDriver = persistenceDriver,
+            sseEventBus = sseEventBus,
+            checkpointJournal = checkpointJournal,
+            snapshotStateStore = snapshotStateStore,
+            snapshotScope = snapshotScope,
+            observerHelper = observerHelper,
+            dbObserver = dbObserver,
+            snapshotObserver = snapshotObserver,
+            kakaoProfileIndexer = kakaoProfileIndexer,
+            imageDeleter = imageDeleter,
+            bridgeHealthCache = bridgeHealthCache,
+            irisServer = irisServer,
+        )
+    }
+}
+
+private data class AppRuntimeStartupAssembly(
+    val configManager: ConfigManager,
+    val replyService: ReplyService,
+    val kakaoDb: KakaoDB,
+    val webhookOutboxDispatcher: WebhookOutboxDispatcher,
+    val persistenceDriver: SqliteDriver,
+    val sseEventBus: SseEventBus,
+    val checkpointJournal: CheckpointJournal,
+    val snapshotStateStore: SnapshotStateStore,
+    val snapshotScope: CoroutineScope,
+    val observerHelper: ObserverHelper,
+    val dbObserver: DBObserver,
+    val snapshotObserver: SnapshotObserver,
+    val kakaoProfileIndexer: KakaoProfileIndexer,
+    val imageDeleter: ImageDeleter,
+    val bridgeHealthCache: BridgeHealthCache,
+    val irisServer: IrisServer?,
+) {
+    fun toRunningSnapshot(): AppRuntimeRunningSnapshot =
+        AppRuntimeRunningSnapshot(
+            shutdownHooks =
+                RuntimeBuilders.ShutdownHooks(
+                    stopServer = { irisServer?.stopServer() },
+                    stopDbObserver = dbObserver::stopPolling,
+                    stopSnapshotObserver = snapshotObserver::stop,
+                    stopProfileIndexer = kakaoProfileIndexer::stop,
+                    stopImageDeleter = imageDeleter::stopDeletion,
+                    closeWebhookOutbox = webhookOutboxDispatcher::close,
+                    closeIngress = observerHelper::close,
+                    closeSseEventBus = sseEventBus::close,
+                    cancelSnapshotScope = snapshotScope::cancel,
+                    shutdownReplyService = { runBlocking { replyService.shutdownSuspend() } },
+                    stopBridgeHealthCache = bridgeHealthCache::stop,
+                    persistConfig = {
+                        if (!configManager.saveConfigNow()) {
+                            IrisLogger.error("[AppRuntime] Failed to save config during shutdown")
+                        }
+                    },
+                    flushCheckpointJournal = checkpointJournal::flushNow,
+                    closeSnapshotStateStore = snapshotStateStore::close,
+                    closePersistenceDriver = persistenceDriver::close,
+                    closeKakaoDb = kakaoDb::closeConnection,
                 ),
-            )
-            IrisLogger.info("[AppRuntime] Cleanup completed")
-        }
+        )
+}
+
+internal data class AppRuntimeRunningSnapshot(
+    val shutdownHooks: RuntimeBuilders.ShutdownHooks,
+) {
+    fun shutdownPlan(): List<RuntimeBuilders.ShutdownStep> =
+        RuntimeBuilders.buildShutdownPlan(shutdownHooks)
+
+    fun runShutdown() {
+        RuntimeBuilders.runShutdownPlan(shutdownPlan())
     }
 }

@@ -94,29 +94,31 @@ class AppRuntimeWiringTest {
     fun `shutdown plan flushes checkpoint before closing persistence driver`() {
         val calls = mutableListOf<String>()
 
-        val plan =
-            RuntimeBuilders.buildShutdownPlan(
-                RuntimeBuilders.ShutdownHooks(
-                    stopServer = { calls += "server" },
-                    stopDbObserver = { calls += "dbObserver" },
-                    stopSnapshotObserver = { calls += "snapshotObserver" },
-                    stopProfileIndexer = { calls += "profileIndexer" },
-                    stopImageDeleter = { calls += "imageDeleter" },
-                    closeWebhookOutbox = { calls += "webhookOutbox" },
-                    closeIngress = { calls += "ingress" },
-                    closeSseEventBus = { calls += "sseEventBus" },
-                    cancelSnapshotScope = { calls += "snapshotScope" },
-                    shutdownReplyService = { calls += "replyService" },
-                    stopBridgeHealthCache = { calls += "bridgeHealthCache" },
-                    persistConfig = { calls += "persistConfig" },
-                    flushCheckpointJournal = { calls += "flushCheckpoint" },
-                    closeSnapshotStateStore = { calls += "closeSnapshotStateStore" },
-                    closePersistenceDriver = { calls += "closePersistenceDriver" },
-                    closeKakaoDb = { calls += "closeKakaoDb" },
-                ),
+        val runningSnapshot =
+            AppRuntimeRunningSnapshot(
+                shutdownHooks =
+                    RuntimeBuilders.ShutdownHooks(
+                        stopServer = { calls += "server" },
+                        stopDbObserver = { calls += "dbObserver" },
+                        stopSnapshotObserver = { calls += "snapshotObserver" },
+                        stopProfileIndexer = { calls += "profileIndexer" },
+                        stopImageDeleter = { calls += "imageDeleter" },
+                        closeWebhookOutbox = { calls += "webhookOutbox" },
+                        closeIngress = { calls += "ingress" },
+                        closeSseEventBus = { calls += "sseEventBus" },
+                        cancelSnapshotScope = { calls += "snapshotScope" },
+                        shutdownReplyService = { calls += "replyService" },
+                        stopBridgeHealthCache = { calls += "bridgeHealthCache" },
+                        persistConfig = { calls += "persistConfig" },
+                        flushCheckpointJournal = { calls += "flushCheckpoint" },
+                        closeSnapshotStateStore = { calls += "closeSnapshotStateStore" },
+                        closePersistenceDriver = { calls += "closePersistenceDriver" },
+                        closeKakaoDb = { calls += "closeKakaoDb" },
+                    ),
             )
+        val plan = runningSnapshot.shutdownPlan()
 
-        RuntimeBuilders.runShutdownPlan(plan)
+        runningSnapshot.runShutdown()
 
         assertTrue(calls.indexOf("flushCheckpoint") < calls.indexOf("closePersistenceDriver"))
         assertTrue(calls.indexOf("closeSnapshotStateStore") < calls.indexOf("closePersistenceDriver"))
