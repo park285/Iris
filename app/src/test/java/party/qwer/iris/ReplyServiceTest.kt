@@ -14,6 +14,7 @@ import kotlinx.coroutines.test.runTest
 import party.qwer.iris.model.ReplyLifecycleState
 import party.qwer.iris.reply.ReplyThreadId
 import party.qwer.iris.storage.ChatId
+import java.lang.reflect.InvocationTargetException
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.CopyOnWriteArrayList
@@ -224,7 +225,7 @@ class ReplyServiceTest {
         }
 
     @Test
-    fun `global gate paces send start times across workers`() =
+    fun `global gate paces send start times across multiple queued requests`() =
         runTest {
             val pacingConfig =
                 object : ConfigProvider {
@@ -246,7 +247,7 @@ class ReplyServiceTest {
 
             for (i in 0L until 2L) {
                 repeat(2) {
-                    service.enqueueActionSuspend(chatId = i, threadId = null, lane = ReplySendLane.TEXT) {
+                    service.enqueueActionSuspend(chatId = i, threadId = null) {
                         timestamps.add(testScheduler.currentTime)
                         delay(50)
                     }
@@ -264,7 +265,7 @@ class ReplyServiceTest {
         }
 
     @Test
-    fun `global gate paces send start times across all lanes`() =
+    fun `global gate paces send start times across workers`() =
         runTest {
             val pacingConfig =
                 object : ConfigProvider {
@@ -284,11 +285,11 @@ class ReplyServiceTest {
             service.startSuspend()
             val timestamps = mutableListOf<Long>()
 
-            service.enqueueActionSuspend(chatId = 1L, threadId = null, lane = ReplySendLane.TEXT) {
+            service.enqueueActionSuspend(chatId = 1L, threadId = null) {
                 timestamps.add(testScheduler.currentTime)
                 delay(50)
             }
-            service.enqueueActionSuspend(chatId = 2L, threadId = null, lane = ReplySendLane.NATIVE_IMAGE) {
+            service.enqueueActionSuspend(chatId = 2L, threadId = null) {
                 timestamps.add(testScheduler.currentTime)
                 delay(50)
             }
@@ -297,7 +298,7 @@ class ReplyServiceTest {
             assertEquals(2, timestamps.size)
             val sorted = timestamps.sorted()
             val gap = sorted[1] - sorted[0]
-            assertTrue(gap >= 100, "all lanes should respect shared pacing (gap was ${gap}ms)")
+            assertTrue(gap >= 100, "all workers should respect shared pacing (gap was ${gap}ms)")
             service.shutdownSuspend()
         }
 
@@ -554,7 +555,6 @@ class ReplyServiceTest {
                 service.enqueueActionSuspend(
                     chatId = 1L,
                     threadId = null,
-                    lane = ReplySendLane.TEXT,
                     requestId = requestId,
                 ) {
                     Unit
@@ -643,6 +643,39 @@ class ReplyServiceTest {
         }
 
     @Test
+    fun `room text reply marks request failed when notification lane throws`() =
+        runTest {
+            val requestId = "room-text-failed"
+            val service =
+                ReplyService(
+                    testConfig,
+                    notificationReplySender = { _, _, _, _, _ ->
+                        throw InvocationTargetException(IllegalStateException("notification lane failed"))
+                    },
+                    admissionDispatcher = kotlinx.coroutines.test.StandardTestDispatcher(testScheduler),
+                    dispatchClock = { testScheduler.currentTime },
+                    statusTickerNanos = { testScheduler.currentTime * 1_000_000L },
+                    statusUpdatedAtEpochMs = { testScheduler.currentTime },
+                )
+            service.startSuspend()
+
+            val result =
+                service.sendMessageSuspend(
+                    referer = "ref",
+                    chatId = 18478615493603057L,
+                    msg = "plain room text",
+                    threadId = null,
+                    threadScope = null,
+                    requestId = requestId,
+                )
+
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
+            advanceUntilIdle()
+            assertEquals(ReplyLifecycleState.FAILED, service.replyStatusOrNull(requestId)?.state)
+            service.shutdownSuspend()
+        }
+
+    @Test
     fun `threaded text replies default share graft scope to two when omitted`() =
         runTest {
             val capturedScope = AtomicInteger(-1)
@@ -672,6 +705,39 @@ class ReplyServiceTest {
             assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
             advanceUntilIdle()
             assertEquals(2, capturedScope.get())
+            service.shutdownSuspend()
+        }
+
+    @Test
+    fun `threaded text reply marks request failed when share lane throws`() =
+        runTest {
+            val requestId = "thread-text-failed"
+            val service =
+                ReplyService(
+                    testConfig,
+                    sharedTextReplySender = { _, _, _, _ ->
+                        throw InvocationTargetException(IllegalStateException("share lane failed"))
+                    },
+                    admissionDispatcher = kotlinx.coroutines.test.StandardTestDispatcher(testScheduler),
+                    dispatchClock = { testScheduler.currentTime },
+                    statusTickerNanos = { testScheduler.currentTime * 1_000_000L },
+                    statusUpdatedAtEpochMs = { testScheduler.currentTime },
+                )
+            service.startSuspend()
+
+            val result =
+                service.sendMessageSuspend(
+                    referer = "ref",
+                    chatId = 18478615493603057L,
+                    msg = "thread failure",
+                    threadId = 3805486995143352321L,
+                    threadScope = 2,
+                    requestId = requestId,
+                )
+
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
+            advanceUntilIdle()
+            assertEquals(ReplyLifecycleState.FAILED, service.replyStatusOrNull(requestId)?.state)
             service.shutdownSuspend()
         }
 
@@ -763,10 +829,9 @@ private fun ReplyService.sendNativeMultiplePhotosBytesBlocking(
 private fun ReplyService.enqueueActionBlocking(
     chatId: Long,
     threadId: Long?,
-    lane: ReplySendLane = ReplySendLane.TEXT,
     requestId: String? = null,
     action: suspend () -> Unit,
 ): ReplyAdmissionResult =
     runBlocking {
-        enqueueAction(chatId, threadId, lane, requestId, action)
+        enqueueAction(chatId, threadId, requestId, action)
     }

@@ -1,12 +1,17 @@
 package party.qwer.iris.reply
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.channels.Channel
 import party.qwer.iris.ReplyAdmissionStatus
 import party.qwer.iris.ReplyQueueKey
 import kotlin.test.Test
@@ -15,6 +20,46 @@ import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ReplyAdmissionServiceTest {
+    @Test
+    fun `rejected enqueue aborts request inside admission`() {
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val service =
+                ReplyAdmissionService(
+                    maxWorkers = 1,
+                    perWorkerQueueCapacity = 1,
+                    workerIdleTimeoutMs = 60_000L,
+                    dispatcher = dispatcher,
+                )
+            service.startSuspend()
+
+            val key = ReplyQueueKey(chatId = 1L, threadId = null)
+            val started = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val blockingRequest = controlledReplyLaneJob(started, release)
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, service.enqueueSuspend(key, blockingRequest).status)
+
+            advanceUntilIdle()
+            started.await()
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, service.enqueueSuspend(key, stubReplyLaneJob()).status)
+
+            val aborted = CompletableDeferred<Unit>()
+            val rejected =
+                service.enqueueSuspend(
+                    key,
+                    trackingReplyLaneJob(onAbort = { aborted.complete(Unit) }),
+                )
+
+            assertEquals(ReplyAdmissionStatus.QUEUE_FULL, rejected.status)
+            advanceUntilIdle()
+            assertTrue(aborted.isCompleted, "admission should own rejection cleanup")
+
+            release.complete(Unit)
+            advanceUntilIdle()
+            service.shutdownSuspend()
+        }
+    }
+
     @Test
     fun `exposes explicit lifecycle ownership`() {
         val service = ReplyAdmissionService()
@@ -43,7 +88,7 @@ class ReplyAdmissionServiceTest {
         val result =
             service.enqueue(
                 key = ReplyQueueKey(chatId = 1L, threadId = null),
-                request = stubPipelineRequest(),
+                request = stubReplyLaneJob(),
             )
 
         assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
@@ -61,7 +106,7 @@ class ReplyAdmissionServiceTest {
         val result =
             service.enqueue(
                 key = ReplyQueueKey(chatId = 1L, threadId = null),
-                request = stubPipelineRequest(),
+                request = stubReplyLaneJob(),
             )
 
         assertEquals(ReplyAdmissionStatus.SHUTDOWN, result.status)
@@ -80,7 +125,7 @@ class ReplyAdmissionServiceTest {
         val result =
             service.enqueue(
                 key = ReplyQueueKey(chatId = 1L, threadId = null),
-                request = stubPipelineRequest(),
+                request = stubReplyLaneJob(),
             )
 
         assertEquals(ReplyAdmissionStatus.SHUTDOWN, result.status)
@@ -95,9 +140,9 @@ class ReplyAdmissionServiceTest {
             )
         service.start()
 
-        val r1 = service.enqueue(ReplyQueueKey(chatId = 1L, threadId = null), stubPipelineRequest())
-        val r2 = service.enqueue(ReplyQueueKey(chatId = 2L, threadId = null), stubPipelineRequest())
-        val r3 = service.enqueue(ReplyQueueKey(chatId = 3L, threadId = null), stubPipelineRequest())
+        val r1 = service.enqueue(ReplyQueueKey(chatId = 1L, threadId = null), stubReplyLaneJob())
+        val r2 = service.enqueue(ReplyQueueKey(chatId = 2L, threadId = null), stubReplyLaneJob())
+        val r3 = service.enqueue(ReplyQueueKey(chatId = 3L, threadId = null), stubReplyLaneJob())
 
         assertEquals(ReplyAdmissionStatus.ACCEPTED, r1.status)
         assertEquals(ReplyAdmissionStatus.ACCEPTED, r2.status)
@@ -114,8 +159,8 @@ class ReplyAdmissionServiceTest {
             )
         service.start()
 
-        val r1 = service.enqueue(ReplyQueueKey(chatId = 1L, threadId = null), stubPipelineRequest())
-        val r2 = service.enqueue(ReplyQueueKey(chatId = 1L, threadId = null), stubPipelineRequest())
+        val r1 = service.enqueue(ReplyQueueKey(chatId = 1L, threadId = null), stubReplyLaneJob())
+        val r2 = service.enqueue(ReplyQueueKey(chatId = 1L, threadId = null), stubReplyLaneJob())
 
         assertEquals(ReplyAdmissionStatus.ACCEPTED, r1.status)
         assertEquals(ReplyAdmissionStatus.ACCEPTED, r2.status)
@@ -138,7 +183,7 @@ class ReplyAdmissionServiceTest {
             val key = ReplyQueueKey(chatId = 1L, threadId = null)
             val started = CompletableDeferred<Unit>()
             val release = CompletableDeferred<Unit>()
-            val blockingRequest = controlledPipelineRequest(started, release)
+            val blockingRequest = controlledReplyLaneJob(started, release)
             val r1 = service.enqueueSuspend(key, blockingRequest)
             assertEquals(ReplyAdmissionStatus.ACCEPTED, r1.status)
 
@@ -146,10 +191,10 @@ class ReplyAdmissionServiceTest {
             started.await()
             assertEquals(1, service.debugSnapshotSuspend().activeWorkers)
 
-            val r2 = service.enqueueSuspend(key, stubPipelineRequest())
+            val r2 = service.enqueueSuspend(key, stubReplyLaneJob())
             assertEquals(ReplyAdmissionStatus.ACCEPTED, r2.status)
 
-            val r3 = service.enqueueSuspend(key, stubPipelineRequest())
+            val r3 = service.enqueueSuspend(key, stubReplyLaneJob())
             assertEquals(ReplyAdmissionStatus.QUEUE_FULL, r3.status)
 
             release.complete(Unit)
@@ -167,15 +212,111 @@ class ReplyAdmissionServiceTest {
             )
         service.start()
 
-        val r1 = service.enqueue(ReplyQueueKey(chatId = 1L, threadId = null), stubPipelineRequest())
+        val r1 = service.enqueue(ReplyQueueKey(chatId = 1L, threadId = null), stubReplyLaneJob())
         assertEquals(ReplyAdmissionStatus.ACCEPTED, r1.status)
 
         service.restart()
 
-        val r2 = service.enqueue(ReplyQueueKey(chatId = 1L, threadId = null), stubPipelineRequest())
+        val r2 = service.enqueue(ReplyQueueKey(chatId = 1L, threadId = null), stubReplyLaneJob())
         assertEquals(ReplyAdmissionStatus.ACCEPTED, r2.status)
         service.shutdown()
     }
+
+    @Test
+    fun `shutdown closes closing worker channel without waiting for idle timeout`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val service =
+                ReplyAdmissionService(
+                    maxWorkers = 1,
+                    perWorkerQueueCapacity = 1,
+                    workerIdleTimeoutMs = 60_000L,
+                    dispatcher = dispatcher,
+                )
+            service.startSuspend()
+
+            val key = ReplyQueueKey(chatId = 1L, threadId = null)
+            val started = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            var drainedQueuedJobs = 0
+
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, service.enqueueSuspend(key, controlledReplyLaneJob(started, release)).status)
+            runCurrent()
+            started.await()
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, service.enqueueSuspend(key, countingReplyLaneJob { drainedQueuedJobs += 1 }).status)
+
+            val shutdownJob =
+                backgroundScope.launch {
+                    service.shutdownSuspend()
+                }
+            runCurrent()
+
+            val closingSnapshot = service.debugSnapshotSuspend()
+            assertEquals(ReplyAdmissionLifecycle.TERMINATED, closingSnapshot.lifecycle)
+            assertEquals(0, closingSnapshot.activeWorkers)
+            assertEquals(1, closingSnapshot.closingWorkers)
+            assertEquals("CLOSING", closingSnapshot.workers.single().mailboxState)
+            assertEquals(1, closingSnapshot.workers.single().queueDepth)
+
+            release.complete(Unit)
+            runCurrent()
+
+            assertEquals(1, drainedQueuedJobs)
+            assertTrue(shutdownJob.isCompleted, "shutdown should finish after channel close without idle timeout")
+        }
+
+    @Test
+    fun `restart drains queued jobs and resumes with a fresh worker scope`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val service =
+                ReplyAdmissionService(
+                    maxWorkers = 1,
+                    perWorkerQueueCapacity = 1,
+                    workerIdleTimeoutMs = 60_000L,
+                    dispatcher = dispatcher,
+                )
+            service.startSuspend()
+
+            val key = ReplyQueueKey(chatId = 1L, threadId = null)
+            val started = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            var drainedQueuedJobs = 0
+
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, service.enqueueSuspend(key, controlledReplyLaneJob(started, release)).status)
+            runCurrent()
+            started.await()
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, service.enqueueSuspend(key, countingReplyLaneJob { drainedQueuedJobs += 1 }).status)
+
+            val restartJob =
+                backgroundScope.launch {
+                    service.restartSuspend()
+                }
+            runCurrent()
+
+            val closingSnapshot = service.debugSnapshotSuspend()
+            assertEquals(ReplyAdmissionLifecycle.STOPPED, closingSnapshot.lifecycle)
+            assertEquals(0, closingSnapshot.activeWorkers)
+            assertEquals(1, closingSnapshot.closingWorkers)
+            assertEquals("CLOSING", closingSnapshot.workers.single().mailboxState)
+            assertEquals(1, closingSnapshot.workers.single().queueDepth)
+
+            release.complete(Unit)
+            runCurrent()
+
+            assertEquals(1, drainedQueuedJobs)
+            assertTrue(restartJob.isCompleted, "restart should finish after draining a closed channel")
+
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, service.enqueueSuspend(key, stubReplyLaneJob()).status)
+            runCurrent()
+
+            val restartedSnapshot = service.debugSnapshotSuspend()
+            assertEquals(ReplyAdmissionLifecycle.RUNNING, restartedSnapshot.lifecycle)
+            assertEquals(1, restartedSnapshot.activeWorkers)
+            assertEquals(0, restartedSnapshot.closingWorkers)
+
+            service.shutdownSuspend()
+        }
 
     @Test
     fun `stale worker retry creates new worker`() {
@@ -191,7 +332,7 @@ class ReplyAdmissionServiceTest {
             service.startSuspend()
 
             val key = ReplyQueueKey(chatId = 1L, threadId = null)
-            val r1 = service.enqueueSuspend(key, stubPipelineRequest())
+            val r1 = service.enqueueSuspend(key, stubReplyLaneJob())
             assertEquals(ReplyAdmissionStatus.ACCEPTED, r1.status)
 
             advanceUntilIdle()
@@ -199,7 +340,7 @@ class ReplyAdmissionServiceTest {
             advanceUntilIdle()
             assertEquals(0, service.debugSnapshotSuspend().activeWorkers)
 
-            val r2 = service.enqueueSuspend(key, stubPipelineRequest())
+            val r2 = service.enqueueSuspend(key, stubReplyLaneJob())
             assertEquals(ReplyAdmissionStatus.ACCEPTED, r2.status)
             service.shutdownSuspend()
         }
@@ -221,13 +362,13 @@ class ReplyAdmissionServiceTest {
             val firstKey = ReplyQueueKey(chatId = 1L, threadId = null)
             val secondKey = ReplyQueueKey(chatId = 2L, threadId = null)
 
-            assertEquals(ReplyAdmissionStatus.ACCEPTED, service.enqueueSuspend(firstKey, stubPipelineRequest()).status)
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, service.enqueueSuspend(firstKey, stubReplyLaneJob()).status)
             advanceUntilIdle()
             advanceTimeBy(50L)
             advanceUntilIdle()
             assertEquals(0, service.debugSnapshotSuspend().activeWorkers)
 
-            assertEquals(ReplyAdmissionStatus.ACCEPTED, service.enqueueSuspend(secondKey, stubPipelineRequest()).status)
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, service.enqueueSuspend(secondKey, stubReplyLaneJob()).status)
             assertEquals(1, service.debugSnapshotSuspend().activeWorkers)
             service.shutdownSuspend()
         }
@@ -244,7 +385,7 @@ class ReplyAdmissionServiceTest {
         assertEquals(ReplyAdmissionLifecycle.TERMINATED, service.debugSnapshot().lifecycle)
         assertEquals(
             ReplyAdmissionStatus.SHUTDOWN,
-            service.enqueue(ReplyQueueKey(chatId = 1L, threadId = null), stubPipelineRequest()).status,
+            service.enqueue(ReplyQueueKey(chatId = 1L, threadId = null), stubReplyLaneJob()).status,
         )
     }
 
@@ -261,7 +402,7 @@ class ReplyAdmissionServiceTest {
             val result =
                 service.enqueueSuspend(
                     key = ReplyQueueKey(chatId = 1L, threadId = null),
-                    request = stubPipelineRequest(),
+                    job = stubReplyLaneJob(),
                 )
 
             assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
@@ -296,7 +437,7 @@ class ReplyAdmissionServiceTest {
             val key = ReplyQueueKey(chatId = 1L, threadId = null)
             val started = CompletableDeferred<Unit>()
             val release = CompletableDeferred<Unit>()
-            val blockingRequest = controlledPipelineRequest(started, release)
+            val blockingRequest = controlledReplyLaneJob(started, release)
             assertEquals(ReplyAdmissionStatus.ACCEPTED, service.enqueueSuspend(key, blockingRequest).status)
             advanceUntilIdle()
             started.await()
@@ -305,16 +446,45 @@ class ReplyAdmissionServiceTest {
             service.shutdownSuspend()
 
             // shutdown 후 enqueue는 SHUTDOWN 반환
-            val postShutdown = service.enqueueSuspend(key, stubPipelineRequest())
+            val postShutdown = service.enqueueSuspend(key, stubReplyLaneJob())
             assertEquals(ReplyAdmissionStatus.SHUTDOWN, postShutdown.status)
 
             // 다른 키로도 SHUTDOWN 반환
             val otherKey = ReplyQueueKey(chatId = 2L, threadId = null)
-            val otherResult = service.enqueueSuspend(otherKey, stubPipelineRequest())
+            val otherResult = service.enqueueSuspend(otherKey, stubReplyLaneJob())
             assertEquals(ReplyAdmissionStatus.SHUTDOWN, otherResult.status)
 
             release.complete(Unit)
             advanceUntilIdle()
+        }
+
+    @Test
+    @OptIn(DelicateCoroutinesApi::class)
+    fun `shutdown closes actor infrastructure`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val service =
+                ReplyAdmissionService(
+                    workerIdleTimeoutMs = 60_000L,
+                    dispatcher = dispatcher,
+                )
+            service.startSuspend()
+            service.shutdownSuspend()
+
+            val commandScopeJob =
+                ReplyAdmissionService::class.java.getDeclaredField("commandScope").let { field ->
+                    field.isAccessible = true
+                    val scope = field.get(service) as kotlinx.coroutines.CoroutineScope
+                    checkNotNull(scope.coroutineContext[Job])
+                }
+            val commands =
+                ReplyAdmissionService::class.java.getDeclaredField("commands").let { field ->
+                    field.isAccessible = true
+                    field.get(service) as Channel<*>
+                }
+
+            assertTrue(commandScopeJob.isCancelled)
+            assertTrue(commands.isClosedForSend)
         }
 
     @Test
@@ -335,13 +505,13 @@ class ReplyAdmissionServiceTest {
             val key = ReplyQueueKey(chatId = 11L, threadId = 22L)
             val started = CompletableDeferred<Unit>()
             val release = CompletableDeferred<Unit>()
-            val blockingRequest = controlledPipelineRequest(started, release)
+            val blockingRequest = controlledReplyLaneJob(started, release)
             assertEquals(ReplyAdmissionStatus.ACCEPTED, service.enqueueSuspend(key, blockingRequest).status)
 
             advanceUntilIdle()
             started.await()
             now += 500L
-            assertEquals(ReplyAdmissionStatus.ACCEPTED, service.enqueueSuspend(key, stubPipelineRequest()).status)
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, service.enqueueSuspend(key, stubReplyLaneJob()).status)
 
             val snapshot = service.debugSnapshotSuspend()
             assertEquals(ReplyAdmissionLifecycle.RUNNING, snapshot.lifecycle)
@@ -357,8 +527,8 @@ class ReplyAdmissionServiceTest {
             service.shutdownSuspend()
         }
 
-    private fun stubPipelineRequest(blockMs: Long = 0L): PipelineRequest =
-        object : PipelineRequest {
+    private fun stubReplyLaneJob(blockMs: Long = 0L): ReplyLaneJob =
+        object : ReplyLaneJob {
             override val requestId: String? = null
 
             override suspend fun prepare() {
@@ -370,11 +540,11 @@ class ReplyAdmissionServiceTest {
             override suspend fun send() {}
         }
 
-    private fun controlledPipelineRequest(
+    private fun controlledReplyLaneJob(
         started: CompletableDeferred<Unit>,
         release: CompletableDeferred<Unit>,
-    ): PipelineRequest =
-        object : PipelineRequest {
+    ): ReplyLaneJob =
+        object : ReplyLaneJob {
             override val requestId: String? = null
 
             override suspend fun prepare() {
@@ -383,6 +553,26 @@ class ReplyAdmissionServiceTest {
             }
 
             override suspend fun send() {}
+        }
+
+    private fun trackingReplyLaneJob(onAbort: () -> Unit): ReplyLaneJob =
+        object : ReplyLaneJob {
+            override val requestId: String? = null
+
+            override suspend fun abort() {
+                onAbort()
+            }
+
+            override suspend fun send() {}
+        }
+
+    private fun countingReplyLaneJob(onSend: () -> Unit): ReplyLaneJob =
+        object : ReplyLaneJob {
+            override val requestId: String? = null
+
+            override suspend fun send() {
+                onSend()
+            }
         }
 }
 
@@ -403,7 +593,7 @@ private fun ReplyAdmissionService.shutdown() =
 
 private fun ReplyAdmissionService.enqueue(
     key: ReplyQueueKey,
-    request: PipelineRequest,
+    request: ReplyLaneJob,
 ): party.qwer.iris.ReplyAdmissionResult =
     runBlocking {
         enqueueSuspend(key, request)

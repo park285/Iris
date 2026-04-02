@@ -1,5 +1,6 @@
 package party.qwer.iris.reply
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -15,37 +16,6 @@ import party.qwer.iris.ReplyAdmissionResult
 import party.qwer.iris.ReplyAdmissionStatus
 import party.qwer.iris.ReplyQueueKey
 
-internal interface PipelineRequest {
-    val requestId: String?
-
-    suspend fun prepare() {}
-
-    suspend fun discard() {}
-
-    suspend fun send()
-}
-
-internal enum class ReplyAdmissionLifecycle {
-    STOPPED,
-    RUNNING,
-    TERMINATED,
-}
-
-internal data class ReplyAdmissionDebugSnapshot(
-    val lifecycle: ReplyAdmissionLifecycle,
-    val activeWorkers: Int,
-    val closingWorkers: Int,
-    val workers: List<ReplyAdmissionWorkerDebug>,
-)
-
-internal data class ReplyAdmissionWorkerDebug(
-    val key: ReplyQueueKey,
-    val workerId: Long,
-    val ageMs: Long,
-    val queueDepth: Int,
-    val mailboxState: String,
-)
-
 internal class ReplyAdmissionService(
     private val maxWorkers: Int = 16,
     private val perWorkerQueueCapacity: Int = 16,
@@ -54,23 +24,30 @@ internal class ReplyAdmissionService(
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val commandChannelCapacity: Int = Channel.BUFFERED,
     private val clock: () -> Long = System::currentTimeMillis,
-    initialRequestProcessor: suspend (PipelineRequest) -> Unit = { request ->
-        request.prepare()
-        request.send()
+    initialJobProcessor: suspend (ReplyLaneJob) -> Unit = { job ->
+        job.prepare()
+        job.send()
     },
 ) {
     private sealed interface WorkerMailboxState {
         data class Open(
-            val channel: Channel<PipelineRequest>,
+            val channel: Channel<ReplyLaneJob>,
             val job: Job,
-            val queuedRequests: Int,
+            val queuedJobs: Int,
         ) : WorkerMailboxState
 
         data class Closing(
+            val channel: Channel<ReplyLaneJob>,
             val job: Job,
+            val queuedJobs: Int,
         ) : WorkerMailboxState
+    }
 
-        data object Closed : WorkerMailboxState
+    private enum class WorkerCloseReason {
+        IDLE_TIMEOUT,
+        CHANNEL_CLOSED,
+        CANCELLED,
+        FAILED,
     }
 
     private data class WorkerHandle(
@@ -86,7 +63,7 @@ internal class ReplyAdmissionService(
         ) : AdmissionCommand
 
         data class Restart(
-            val reply: CompletableDeferred<WorkerClosePlan>,
+            val reply: CompletableDeferred<DetachedWorkersPlan>,
         ) : AdmissionCommand
 
         data class RestartCompleted(
@@ -94,12 +71,12 @@ internal class ReplyAdmissionService(
         ) : AdmissionCommand
 
         data class Shutdown(
-            val reply: CompletableDeferred<WorkerClosePlan>,
+            val reply: CompletableDeferred<DetachedWorkersPlan>,
         ) : AdmissionCommand
 
         data class Enqueue(
             val key: ReplyQueueKey,
-            val request: PipelineRequest,
+            val job: ReplyLaneJob,
             val reply: CompletableDeferred<ReplyAdmissionResult>,
         ) : AdmissionCommand
 
@@ -110,7 +87,7 @@ internal class ReplyAdmissionService(
         data class WorkerClosed(
             val key: ReplyQueueKey,
             val workerId: Long,
-            val idleTimeout: Boolean,
+            val reason: WorkerCloseReason,
         ) : AdmissionCommand
 
         data class WorkerDequeued(
@@ -119,7 +96,7 @@ internal class ReplyAdmissionService(
         ) : AdmissionCommand
     }
 
-    private data class WorkerClosePlan(
+    private data class DetachedWorkersPlan(
         val allowed: Boolean,
         val workers: List<WorkerHandle> = emptyList(),
         val workerScope: CoroutineScope? = null,
@@ -133,7 +110,9 @@ internal class ReplyAdmissionService(
 
     private val commands = Channel<AdmissionCommand>(commandChannelCapacity)
     private val commandScope = buildCoroutineScope()
-    private val requestProcessor = initialRequestProcessor
+    private val jobProcessor = initialJobProcessor
+    @Volatile
+    private var commandActorClosed = false
 
     private var workerRegistry = mutableMapOf<ReplyQueueKey, WorkerHandle>()
     private var closingWorkers = mutableMapOf<Long, WorkerHandle>()
@@ -150,6 +129,10 @@ internal class ReplyAdmissionService(
     }
 
     suspend fun startSuspend() {
+        if (commandActorClosed) {
+            IrisLogger.error("[ReplyAdmissionService] Cannot start after actor shutdown")
+            return
+        }
         val started = dispatchSuspend<AdmissionCommand.Start, Boolean> { AdmissionCommand.Start(it) }
         if (started) {
             IrisLogger.debug("[ReplyAdmissionService] started")
@@ -157,9 +140,13 @@ internal class ReplyAdmissionService(
     }
 
     suspend fun restartSuspend() {
+        if (commandActorClosed) {
+            IrisLogger.error("[ReplyAdmissionService] Cannot restart after actor shutdown")
+            return
+        }
         IrisLogger.info("[ReplyAdmissionService] Restarting...")
         val plan =
-            dispatchSuspend<AdmissionCommand.Restart, WorkerClosePlan> {
+            dispatchSuspend<AdmissionCommand.Restart, DetachedWorkersPlan> {
                 AdmissionCommand.Restart(it)
             }
         if (!plan.allowed) {
@@ -174,30 +161,43 @@ internal class ReplyAdmissionService(
     }
 
     suspend fun shutdownSuspend() {
+        if (commandActorClosed) {
+            return
+        }
         IrisLogger.info("[ReplyAdmissionService] Shutting down...")
         val plan =
-            dispatchSuspend<AdmissionCommand.Shutdown, WorkerClosePlan> {
+            dispatchSuspend<AdmissionCommand.Shutdown, DetachedWorkersPlan> {
                 AdmissionCommand.Shutdown(it)
             }
         closeWorkersSuspend(plan.workers)
         plan.workerScope?.cancel()
+        closingWorkers.clear()
+        closeCommandActor()
         IrisLogger.info("[ReplyAdmissionService] Shutdown complete")
     }
 
     suspend fun enqueueSuspend(
         key: ReplyQueueKey,
-        request: PipelineRequest,
-    ): ReplyAdmissionResult =
-        dispatchSuspend<AdmissionCommand.Enqueue, ReplyAdmissionResult> {
-            AdmissionCommand.Enqueue(key, request, it)
+        job: ReplyLaneJob,
+    ): ReplyAdmissionResult {
+        if (commandActorClosed) {
+            return ReplyAdmissionResult(ReplyAdmissionStatus.SHUTDOWN, "reply sender unavailable")
         }
+        return dispatchSuspend<AdmissionCommand.Enqueue, ReplyAdmissionResult> {
+            AdmissionCommand.Enqueue(key, job, it)
+        }
+    }
 
     internal suspend fun debugSnapshotSuspend(): ReplyAdmissionDebugSnapshot =
-        dispatchSuspend<AdmissionCommand.DebugSnapshot, ReplyAdmissionDebugSnapshot> {
-            AdmissionCommand.DebugSnapshot(it)
+        if (commandActorClosed) {
+            currentDebugSnapshot()
+        } else {
+            dispatchSuspend<AdmissionCommand.DebugSnapshot, ReplyAdmissionDebugSnapshot> {
+                AdmissionCommand.DebugSnapshot(it)
+            }
         }
 
-    private fun handleCommand(command: AdmissionCommand) {
+    private suspend fun handleCommand(command: AdmissionCommand) {
         when (command) {
             is AdmissionCommand.Start -> handleStart(command)
             is AdmissionCommand.Restart -> handleRestart(command)
@@ -223,7 +223,7 @@ internal class ReplyAdmissionService(
     private fun handleRestart(command: AdmissionCommand.Restart) {
         if (lifecycle == ReplyAdmissionLifecycle.TERMINATED) {
             IrisLogger.error("[ReplyAdmissionService] Cannot restart after shutdown")
-            command.reply.complete(WorkerClosePlan(allowed = false))
+            command.reply.complete(DetachedWorkersPlan(allowed = false))
             return
         }
 
@@ -237,7 +237,7 @@ internal class ReplyAdmissionService(
         lifecycle = ReplyAdmissionLifecycle.STOPPED
         workerScope = buildCoroutineScope()
         command.reply.complete(
-            WorkerClosePlan(
+            DetachedWorkersPlan(
                 allowed = true,
                 workers = workers,
                 workerScope = oldWorkerScope,
@@ -263,7 +263,7 @@ internal class ReplyAdmissionService(
         closingWorkers = workers.associateBy(WorkerHandle::workerId).toMutableMap()
         lifecycle = ReplyAdmissionLifecycle.TERMINATED
         command.reply.complete(
-            WorkerClosePlan(
+            DetachedWorkersPlan(
                 allowed = true,
                 workers = workers,
                 workerScope = oldWorkerScope,
@@ -271,29 +271,21 @@ internal class ReplyAdmissionService(
         )
     }
 
-    private fun handleEnqueue(command: AdmissionCommand.Enqueue) {
+    private suspend fun handleEnqueue(command: AdmissionCommand.Enqueue) {
         val result =
             if (lifecycle != ReplyAdmissionLifecycle.RUNNING) {
                 ReplyAdmissionResult(ReplyAdmissionStatus.SHUTDOWN, "reply sender unavailable")
             } else {
-                enqueueToWorkerLoop(command.key, command.request)
+                enqueueToWorkerLoop(command.key, command.job)
             }
+        if (result.status != ReplyAdmissionStatus.ACCEPTED) {
+            runCatching { command.job.abort() }
+        }
         command.reply.complete(result)
     }
 
     private fun handleDebugSnapshot(command: AdmissionCommand.DebugSnapshot) {
-        command.reply.complete(
-            ReplyAdmissionDebugSnapshot(
-                lifecycle = lifecycle,
-                activeWorkers = workerRegistry.size,
-                closingWorkers = closingWorkers.size,
-                workers =
-                    (workerRegistry.values + closingWorkers.values)
-                        .distinctBy(WorkerHandle::workerId)
-                        .map(::toWorkerDebug)
-                        .sortedWith(compareBy({ it.key.chatId.value }, { it.key.threadId?.value ?: -1L }, { it.workerId })),
-            ),
-        )
+        command.reply.complete(currentDebugSnapshot())
     }
 
     private fun handleWorkerClosed(command: AdmissionCommand.WorkerClosed) {
@@ -314,7 +306,7 @@ internal class ReplyAdmissionService(
             current.copy(
                 mailboxState =
                     mailboxState.copy(
-                        queuedRequests = (mailboxState.queuedRequests - 1).coerceAtLeast(0),
+                        queuedJobs = (mailboxState.queuedJobs - 1).coerceAtLeast(0),
                     ),
             )
     }
@@ -328,11 +320,11 @@ internal class ReplyAdmissionService(
     }
 
     private fun launchWorkerInternal(key: ReplyQueueKey): WorkerHandle {
-        val channel = Channel<PipelineRequest>(perWorkerQueueCapacity)
+        val channel = Channel<ReplyLaneJob>(perWorkerQueueCapacity)
         val workerId = nextWorkerId++
         val job =
             workerScope.launch {
-                var idleTimeout = false
+                var closeReason = WorkerCloseReason.CHANNEL_CLOSED
                 try {
                     while (true) {
                         val receiveResult =
@@ -340,10 +332,10 @@ internal class ReplyAdmissionService(
                                 channel.receiveCatching()
                             }
                         if (receiveResult == null) {
-                            idleTimeout = true
+                            closeReason = WorkerCloseReason.IDLE_TIMEOUT
                             break
                         }
-                        val request = receiveResult.getOrNull() ?: break
+                        val job = receiveResult.getOrNull() ?: break
                         commands.trySend(
                             AdmissionCommand.WorkerDequeued(
                                 key = key,
@@ -351,22 +343,25 @@ internal class ReplyAdmissionService(
                             ),
                         )
                         try {
-                            requestProcessor(request)
+                            jobProcessor(job)
+                        } catch (e: CancellationException) {
+                            closeReason = WorkerCloseReason.CANCELLED
+                            throw e
                         } catch (e: Exception) {
+                            closeReason = WorkerCloseReason.FAILED
                             IrisLogger.error("[ReplyAdmissionService] worker($key) error: ${e.message}", e)
                         }
                     }
                 } finally {
                     channel.close()
-                    val reason = if (idleTimeout) "idle timeout" else "channel closed"
                     commands.trySend(
                         AdmissionCommand.WorkerClosed(
                             key = key,
                             workerId = workerId,
-                            idleTimeout = idleTimeout,
+                            reason = closeReason,
                         ),
                     )
-                    IrisLogger.debug("[ReplyAdmissionService] worker($key) terminated ($reason)")
+                    IrisLogger.debug("[ReplyAdmissionService] worker($key) terminated (${closeReason.name})")
                 }
             }
         return WorkerHandle(
@@ -377,14 +372,14 @@ internal class ReplyAdmissionService(
                 WorkerMailboxState.Open(
                     channel = channel,
                     job = job,
-                    queuedRequests = 0,
+                    queuedJobs = 0,
                 ),
         )
     }
 
     private fun enqueueToWorkerLoop(
         key: ReplyQueueKey,
-        request: PipelineRequest,
+        job: ReplyLaneJob,
     ): ReplyAdmissionResult {
         repeat(2) {
             val worker =
@@ -393,7 +388,7 @@ internal class ReplyAdmissionService(
                         ReplyAdmissionStatus.QUEUE_FULL,
                         "too many active reply workers",
                     )
-            when (tryEnqueueToWorker(worker, request)) {
+            when (tryEnqueueToWorker(worker, job)) {
                 WorkerEnqueueResult.ACCEPTED ->
                     return ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
                 WorkerEnqueueResult.FULL -> {
@@ -408,10 +403,10 @@ internal class ReplyAdmissionService(
 
     private fun tryEnqueueToWorker(
         worker: WorkerHandle,
-        request: PipelineRequest,
+        job: ReplyLaneJob,
     ): WorkerEnqueueResult {
         val mailboxState = worker.mailboxState as? WorkerMailboxState.Open ?: return WorkerEnqueueResult.CLOSED
-        val sendResult = mailboxState.channel.trySend(request)
+        val sendResult = mailboxState.channel.trySend(job)
         return when {
             sendResult.isSuccess -> {
                 workerRegistry[worker.key]?.takeIf { it.workerId == worker.workerId }?.let { current ->
@@ -419,7 +414,7 @@ internal class ReplyAdmissionService(
                         current.copy(
                             mailboxState =
                                 mailboxState.copy(
-                                    queuedRequests = mailboxState.queuedRequests + 1,
+                                    queuedJobs = mailboxState.queuedJobs + 1,
                                 ),
                         )
                 }
@@ -444,7 +439,7 @@ internal class ReplyAdmissionService(
     private suspend fun closeWorkersSuspend(workers: List<WorkerHandle>) {
         val gracefulWaitMs = minOf(1_000L, shutdownTimeoutMs)
         workers.forEach { worker ->
-            (worker.mailboxState as? WorkerMailboxState.Open)?.channel?.close()
+            worker.channel()?.close()
         }
         workers.forEach { worker ->
             val job = worker.job() ?: return@forEach
@@ -462,26 +457,41 @@ internal class ReplyAdmissionService(
 
     private fun markClosing(worker: WorkerHandle): WorkerHandle =
         when (val mailboxState = worker.mailboxState) {
-            is WorkerMailboxState.Open -> worker.copy(mailboxState = WorkerMailboxState.Closing(mailboxState.job))
+            is WorkerMailboxState.Open ->
+                worker.copy(
+                    mailboxState =
+                        WorkerMailboxState.Closing(
+                            channel = mailboxState.channel,
+                            job = mailboxState.job,
+                            queuedJobs = mailboxState.queuedJobs,
+                        ),
+                )
             is WorkerMailboxState.Closing -> worker
-            WorkerMailboxState.Closed -> worker
+        }
+
+    private fun WorkerHandle.channel(): Channel<ReplyLaneJob>? =
+        when (val mailboxState = mailboxState) {
+            is WorkerMailboxState.Open -> mailboxState.channel
+            is WorkerMailboxState.Closing -> mailboxState.channel
         }
 
     private fun WorkerHandle.job(): Job? =
         when (val mailboxState = mailboxState) {
             is WorkerMailboxState.Open -> mailboxState.job
             is WorkerMailboxState.Closing -> mailboxState.job
-            WorkerMailboxState.Closed -> null
         }
 
     private fun toWorkerDebug(worker: WorkerHandle): ReplyAdmissionWorkerDebug {
         val mailboxState = worker.mailboxState
-        val queueDepth = (mailboxState as? WorkerMailboxState.Open)?.queuedRequests ?: 0
+        val queueDepth =
+            when (mailboxState) {
+                is WorkerMailboxState.Open -> mailboxState.queuedJobs
+                is WorkerMailboxState.Closing -> mailboxState.queuedJobs
+            }
         val stateName =
             when (mailboxState) {
                 is WorkerMailboxState.Open -> "OPEN"
                 is WorkerMailboxState.Closing -> "CLOSING"
-                WorkerMailboxState.Closed -> "CLOSED"
             }
         return ReplyAdmissionWorkerDebug(
             key = worker.key,
@@ -496,6 +506,27 @@ internal class ReplyAdmissionService(
         val reply = CompletableDeferred<T>()
         commands.send(build(reply))
         return reply.await()
+    }
+
+    private fun currentDebugSnapshot(): ReplyAdmissionDebugSnapshot =
+        ReplyAdmissionDebugSnapshot(
+            lifecycle = lifecycle,
+            activeWorkers = workerRegistry.size,
+            closingWorkers = closingWorkers.size,
+            workers =
+                (workerRegistry.values + closingWorkers.values)
+                    .distinctBy(WorkerHandle::workerId)
+                    .map(::toWorkerDebug)
+                    .sortedWith(compareBy({ it.key.chatId.value }, { it.key.threadId?.value ?: -1L }, { it.workerId })),
+        )
+
+    private fun closeCommandActor() {
+        if (commandActorClosed) {
+            return
+        }
+        commandActorClosed = true
+        commands.close()
+        commandScope.cancel()
     }
 
     private fun buildCoroutineScope(): CoroutineScope = CoroutineScope(SupervisorJob() + dispatcher)

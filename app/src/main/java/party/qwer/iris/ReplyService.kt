@@ -9,22 +9,18 @@ import party.qwer.iris.model.ReplyStatusSnapshot
 import party.qwer.iris.reply.DispatchScheduler
 import party.qwer.iris.reply.MediaPreparationService
 import party.qwer.iris.reply.NativeImageReplyCommand
-import party.qwer.iris.reply.PipelineRequest
+import party.qwer.iris.reply.ReplyLaneJob
 import party.qwer.iris.reply.ReplyAdmissionService
 import party.qwer.iris.reply.ReplyCommandFactory
 import party.qwer.iris.reply.ReplyStatusTracker
 import party.qwer.iris.reply.ReplyThreadId
+import party.qwer.iris.reply.ReplyLaneJobProcessor
 import party.qwer.iris.reply.ReplyTransitionEvent
 import party.qwer.iris.reply.ReplyTransport
 import party.qwer.iris.reply.ShareReplyCommand
 import party.qwer.iris.reply.TextReplyCommand
 import party.qwer.iris.storage.ChatId
 import java.io.File
-
-internal enum class ReplySendLane {
-    TEXT,
-    NATIVE_IMAGE,
-}
 
 internal class ReplyService(
     private val admissionService: ReplyAdmissionService,
@@ -101,7 +97,7 @@ internal class ReplyService(
                 admissionService =
                     ReplyAdmissionService(
                         dispatcher = admissionDispatcher,
-                        initialRequestProcessor = buildAdmissionRequestProcessor(dispatchScheduler, statusTracker),
+                        initialJobProcessor = buildAdmissionJobProcessor(dispatchScheduler, statusTracker),
                     ),
                 commandFactory = ReplyCommandFactory(),
                 mediaPreparationService = mediaPreparationService,
@@ -118,34 +114,14 @@ internal class ReplyService(
             )
         }
 
-        private fun buildAdmissionRequestProcessor(
+        private fun buildAdmissionJobProcessor(
             dispatchScheduler: DispatchScheduler,
             statusTracker: ReplyStatusTracker,
-        ): suspend (PipelineRequest) -> Unit =
-            { request ->
-                val pipelineRequest = request as? ReplyPipelineRequest
-                if (pipelineRequest == null) {
-                    request.prepare()
-                    dispatchScheduler.awaitPermit()
-                    request.send()
-                } else {
-                    try {
-                        statusTracker.transition(pipelineRequest.requestId, ReplyTransitionEvent.PrepareStarted)
-                        pipelineRequest.prepare()
-                        statusTracker.transition(pipelineRequest.requestId, ReplyTransitionEvent.PrepareCompleted)
-                        dispatchScheduler.awaitPermit()
-                        statusTracker.transition(pipelineRequest.requestId, ReplyTransitionEvent.SendStarted)
-                        pipelineRequest.send()
-                        statusTracker.transition(pipelineRequest.requestId, ReplyTransitionEvent.SendCompleted)
-                    } catch (e: Exception) {
-                        statusTracker.transition(
-                            pipelineRequest.requestId,
-                            ReplyTransitionEvent.Failed(e.message ?: "reply pipeline failure"),
-                        )
-                        IrisLogger.error("[ReplyService] pipeline send error: ${e.message}", e)
-                    }
-                }
-            }
+        ): suspend (ReplyLaneJob) -> Unit =
+            ReplyLaneJobProcessor(
+                dispatchScheduler = dispatchScheduler,
+                statusTracker = statusTracker,
+            )::process
     }
 
     internal constructor(
@@ -224,7 +200,7 @@ internal class ReplyService(
             chatId = chatId,
             threadId = threadId,
             requestId = requestId,
-            pipelineRequest = TextPipelineRequest(commandFactory.textReply(referer, chatId, msg, threadId, threadScope, requestId)),
+            job = TextReplyJob(commandFactory.textReply(referer, chatId, msg, threadId, threadScope, requestId)),
         )
     }
 
@@ -294,24 +270,18 @@ internal class ReplyService(
                 chatId = room,
                 threadId = threadId,
                 requestId = requestId,
-                pipelineRequest =
-                    NativeImageHandlePipelineRequest(
+                job =
+                    NativeImageHandleReplyJob(
                         command = commandFactory.nativeImageReply(room, validatedHandles.size, threadId, threadScope, requestId),
                         imageHandles = validatedHandles,
                     ),
             )
-        if (result.status != ReplyAdmissionStatus.ACCEPTED) {
-            validatedHandles.forEach { handle ->
-                runCatching { handle.close() }
-            }
-        }
         return result
     }
 
     internal suspend fun enqueueActionSuspend(
         chatId: Long,
         threadId: Long?,
-        lane: ReplySendLane = ReplySendLane.TEXT,
         requestId: String? = null,
         action: suspend () -> Unit,
     ): ReplyAdmissionResult =
@@ -319,16 +289,15 @@ internal class ReplyService(
             chatId = chatId,
             threadId = threadId,
             requestId = requestId,
-            pipelineRequest = ActionPipelineRequest(requestId = requestId, action = action),
+            job = ActionReplyJob(requestId = requestId, action = action),
         )
 
     internal fun enqueueAction(
         chatId: Long,
         threadId: Long?,
-        lane: ReplySendLane = ReplySendLane.TEXT,
         requestId: String? = null,
         action: suspend () -> Unit,
-    ): ReplyAdmissionResult = runBlocking { enqueueActionSuspend(chatId, threadId, lane, requestId, action) }
+    ): ReplyAdmissionResult = runBlocking { enqueueActionSuspend(chatId, threadId, requestId, action) }
 
     override suspend fun sendTextShareSuspend(
         room: Long,
@@ -339,7 +308,7 @@ internal class ReplyService(
             chatId = room,
             threadId = null,
             requestId = requestId,
-            pipelineRequest = SharePipelineRequest(commandFactory.shareReply(room, msg, threadId = null, threadScope = null, requestId = requestId)),
+            job = ShareReplyJob(commandFactory.shareReply(room, msg, threadId = null, threadScope = null, requestId = requestId)),
         )
 
     override suspend fun sendReplyMarkdownSuspend(
@@ -353,8 +322,8 @@ internal class ReplyService(
             chatId = room,
             threadId = threadId,
             requestId = requestId,
-            pipelineRequest =
-                SharePipelineRequest(
+            job =
+                ShareReplyJob(
                     commandFactory.shareReply(room, msg, threadId, threadScope ?: if (threadId != null) 2 else null, requestId),
                 ),
         )
@@ -365,7 +334,7 @@ internal class ReplyService(
         chatId: Long,
         threadId: Long?,
         requestId: String?,
-        pipelineRequest: ReplyPipelineRequest,
+        job: ReplyServiceJob,
     ): ReplyAdmissionResult {
         statusTracker.onQueued(requestId)
         val result =
@@ -374,33 +343,31 @@ internal class ReplyService(
                     chatId = ChatId(chatId),
                     threadId = threadId?.let(::ReplyThreadId),
                 ),
-                pipelineRequest,
+                job,
             )
-        return if (result.status == ReplyAdmissionStatus.ACCEPTED) {
-            result
-        } else {
-            pipelineRequest.discard()
-            if (requestId != null && statusTracker.get(requestId)?.state == party.qwer.iris.model.ReplyLifecycleState.QUEUED) {
-                statusTracker.transition(requestId, ReplyTransitionEvent.Failed(result.message ?: result.status.name))
-            }
-            result
+        if (result.status != ReplyAdmissionStatus.ACCEPTED &&
+            requestId != null &&
+            statusTracker.get(requestId)?.state == party.qwer.iris.model.ReplyLifecycleState.QUEUED
+        ) {
+            statusTracker.transition(requestId, ReplyTransitionEvent.Failed(result.message ?: result.status.name))
         }
+        return result
     }
 
-    private sealed interface ReplyPipelineRequest : PipelineRequest
+    private sealed interface ReplyServiceJob : ReplyLaneJob
 
-    private class ActionPipelineRequest(
+    private class ActionReplyJob(
         override val requestId: String?,
         private val action: suspend () -> Unit,
-    ) : ReplyPipelineRequest {
+    ) : ReplyServiceJob {
         override suspend fun send() {
             action()
         }
     }
 
-    private inner class TextPipelineRequest(
+    private inner class TextReplyJob(
         private val command: TextReplyCommand,
-    ) : ReplyPipelineRequest {
+    ) : ReplyServiceJob {
         override val requestId: String? = command.requestId
 
         override suspend fun send() {
@@ -408,9 +375,9 @@ internal class ReplyService(
         }
     }
 
-    private inner class SharePipelineRequest(
+    private inner class ShareReplyJob(
         private val command: ShareReplyCommand,
-    ) : ReplyPipelineRequest {
+    ) : ReplyServiceJob {
         override val requestId: String? = command.requestId
 
         override suspend fun send() {
@@ -418,10 +385,10 @@ internal class ReplyService(
         }
     }
 
-    private inner class NativeImageHandlePipelineRequest(
+    private inner class NativeImageHandleReplyJob(
         private val command: NativeImageReplyCommand,
         imageHandles: List<VerifiedImagePayloadHandle>,
-    ) : ReplyPipelineRequest {
+    ) : ReplyServiceJob {
         override val requestId: String? = command.requestId
         private lateinit var preparedImages: PreparedImages
         private var imageHandles: List<VerifiedImagePayloadHandle>? = imageHandles
@@ -441,7 +408,7 @@ internal class ReplyService(
             }
         }
 
-        override suspend fun discard() {
+        override suspend fun abort() {
             imageHandles?.forEach { handle ->
                 runCatching { handle.close() }
             }
