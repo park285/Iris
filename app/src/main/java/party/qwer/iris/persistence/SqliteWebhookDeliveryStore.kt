@@ -150,6 +150,5 @@ class SqliteWebhookDeliveryStore(
 
     override fun close() {}
 
-    private fun transitionResult(affectedRows: Int): ClaimTransitionResult =
-        if (affectedRows > 0) ClaimTransitionResult.APPLIED else ClaimTransitionResult.STALE_CLAIM
+    private fun transitionResult(affectedRows: Int): ClaimTransitionResult = if (affectedRows > 0) ClaimTransitionResult.APPLIED else ClaimTransitionResult.STALE_CLAIM
 }

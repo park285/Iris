@@ -146,12 +146,13 @@ class SnapshotEventEmitterTest {
         val store = SqliteRoomEventStore(helper)
         val emitter = SnapshotEventEmitter(bus, routingGateway = null, eventStore = store)
 
-        val events: List<party.qwer.iris.model.RoomEvent> = listOf(
-            MemberEvent(event = "join", chatId = 100L, linkId = 1100L, userId = 1L, nickname = "Alice", timestamp = 1000L),
-            NicknameChangeEvent(chatId = 100L, linkId = 1100L, userId = 2L, oldNickname = "Bob", newNickname = "Bobby", timestamp = 2000L),
-            RoleChangeEvent(chatId = 200L, linkId = 1200L, userId = 3L, oldRole = "member", newRole = "admin", timestamp = 3000L),
-            ProfileChangeEvent(chatId = 200L, linkId = 1200L, userId = 4L, timestamp = 4000L),
-        )
+        val events: List<party.qwer.iris.model.RoomEvent> =
+            listOf(
+                MemberEvent(event = "join", chatId = 100L, linkId = 1100L, userId = 1L, nickname = "Alice", timestamp = 1000L),
+                NicknameChangeEvent(chatId = 100L, linkId = 1100L, userId = 2L, oldNickname = "Bob", newNickname = "Bobby", timestamp = 2000L),
+                RoleChangeEvent(chatId = 200L, linkId = 1200L, userId = 3L, oldRole = "member", newRole = "admin", timestamp = 3000L),
+                ProfileChangeEvent(chatId = 200L, linkId = 1200L, userId = 4L, timestamp = 4000L),
+            )
         emitter.emit(events)
 
         // room 100 이벤트 2개
@@ -172,11 +173,11 @@ class SnapshotEventEmitterTest {
         assertTrue(room100[0].payload.contains("\"event\":\"join\""))
         assertTrue(room100[1].payload.contains("\"oldNickname\":\"Bob\""))
 
-        // createdAt은 이벤트 자체의 timestamp와 일치해야 함 (서버 clock이 아님)
-        assertEquals(1000L, room100[0].createdAt)
-        assertEquals(2000L, room100[1].createdAt)
-        assertEquals(3000L, room200[0].createdAt)
-        assertEquals(4000L, room200[1].createdAt)
+        // createdAt은 이벤트 timestamp(초)를 밀리초로 변환한 값
+        assertEquals(1_000_000L, room100[0].createdAt)
+        assertEquals(2_000_000L, room100[1].createdAt)
+        assertEquals(3_000_000L, room200[0].createdAt)
+        assertEquals(4_000_000L, room200[1].createdAt)
 
         helper.close()
     }

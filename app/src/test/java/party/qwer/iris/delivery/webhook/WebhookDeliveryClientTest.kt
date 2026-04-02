@@ -16,8 +16,8 @@ import java.io.IOException
 import java.io.InputStreamReader
 import java.net.InetSocketAddress
 import java.net.ServerSocket
-import java.util.concurrent.Executors
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals

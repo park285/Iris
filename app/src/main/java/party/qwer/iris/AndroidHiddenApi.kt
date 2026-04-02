@@ -62,8 +62,8 @@ class AndroidHiddenApi {
             }
         }
 
-        private fun <T> withActivityManagerRetry(block: (Any) -> T): T {
-            return retryOnDeadBinderFailure(
+        private fun <T> withActivityManagerRetry(block: (Any) -> T): T =
+            retryOnDeadBinderFailure(
                 onRetry = {
                     IrisLogger.warn("[AndroidHiddenApi] activity manager binder died; refreshing handle and retrying once")
                     clearActivityManager()
@@ -71,7 +71,6 @@ class AndroidHiddenApi {
             ) {
                 block(activityManager())
             }
-        }
 
         private fun buildMethodResolutionError(
             methodName: String,

@@ -43,7 +43,10 @@ class ProtectedRouteRoleSeparationTest {
     @Test
     fun `config routes require inbound secret and reject bot control secret`() =
         testApplication {
-            val configPath = Files.createTempFile("iris-config-role-test", ".json")
+            val configPath =
+                Files
+                    .createTempDirectory("iris-config-role-test")
+                    .resolve("config.json")
             val configManager = ConfigManager(configPath = configPath.toString())
             try {
                 application {

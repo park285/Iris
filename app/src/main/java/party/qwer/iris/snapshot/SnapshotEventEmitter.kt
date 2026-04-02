@@ -54,7 +54,7 @@ open class SnapshotEventEmitter(
                 eventType = event.type,
                 userId = eventUserId,
                 payload = jsonStr,
-                createdAtMs = eventTimestamp,
+                createdAtMs = eventTimestamp * 1000,
             )
             bus.emit(jsonStr)
             routingGateway?.route(

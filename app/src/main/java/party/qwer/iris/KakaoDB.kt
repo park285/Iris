@@ -78,5 +78,4 @@ class KakaoDB(
 
 internal fun android.database.Cursor.getOptionalString(index: Int): String? = index.takeIf { it >= 0 }?.let { getString(it) }
 
-internal fun android.database.Cursor.getOptionalInt(index: Int): Int? =
-    index.takeIf { it >= 0 && !isNull(it) }?.let { getInt(it) }
+internal fun android.database.Cursor.getOptionalInt(index: Int): Int? = index.takeIf { it >= 0 && !isNull(it) }?.let { getInt(it) }

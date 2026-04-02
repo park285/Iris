@@ -5,7 +5,13 @@ import party.qwer.iris.model.RoomEventRecord
 class SqliteRoomEventStore(
     private val driver: SqliteDriver,
 ) : RoomEventStore {
-    override fun insert(chatId: Long, eventType: String, userId: Long, payload: String, createdAtMs: Long): Long {
+    override fun insert(
+        chatId: Long,
+        eventType: String,
+        userId: Long,
+        payload: String,
+        createdAtMs: Long,
+    ): Long {
         driver.update(
             "INSERT INTO ${IrisDatabaseSchema.ROOM_EVENTS_TABLE} (chat_id, event_type, user_id, payload, created_at) VALUES (?, ?, ?, ?, ?)",
             listOf(chatId, eventType, userId, payload, createdAtMs),
@@ -13,7 +19,11 @@ class SqliteRoomEventStore(
         return driver.queryLong("SELECT last_insert_rowid()") ?: 0L
     }
 
-    override fun listByChatId(chatId: Long, limit: Int, afterId: Long): List<RoomEventRecord> =
+    override fun listByChatId(
+        chatId: Long,
+        limit: Int,
+        afterId: Long,
+    ): List<RoomEventRecord> =
         driver.query(
             "SELECT id, chat_id, event_type, user_id, payload, created_at FROM ${IrisDatabaseSchema.ROOM_EVENTS_TABLE} WHERE chat_id = ? AND id > ? ORDER BY id ASC LIMIT ?",
             listOf(chatId, afterId, limit),
@@ -28,8 +38,7 @@ class SqliteRoomEventStore(
             )
         }
 
-    override fun maxId(): Long =
-        driver.queryLong("SELECT MAX(id) FROM ${IrisDatabaseSchema.ROOM_EVENTS_TABLE}") ?: 0L
+    override fun maxId(): Long = driver.queryLong("SELECT MAX(id) FROM ${IrisDatabaseSchema.ROOM_EVENTS_TABLE}") ?: 0L
 
     override fun pruneOlderThan(cutoffMs: Long): Int =
         driver.update(

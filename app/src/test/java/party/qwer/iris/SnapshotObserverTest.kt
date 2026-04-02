@@ -110,9 +110,10 @@ class SnapshotObserverTest {
                     rooms = listOf(100L),
                     snapshots =
                         mapOf(
-                            100L to listOf(
-                                snapshotObserverTestSnapshot(chatId = 100L, members = setOf(1L)),
-                            ),
+                            100L to
+                                listOf(
+                                    snapshotObserverTestSnapshot(chatId = 100L, members = setOf(1L)),
+                                ),
                         ),
                 )
             val checkpointJournal =
@@ -173,9 +174,10 @@ class SnapshotObserverTest {
                     rooms = listOf(100L),
                     snapshots =
                         mapOf(
-                            100L to listOf(
-                                snapshotObserverTestSnapshot(chatId = 100L, members = setOf(1L)),
-                            ),
+                            100L to
+                                listOf(
+                                    snapshotObserverTestSnapshot(chatId = 100L, members = setOf(1L)),
+                                ),
                         ),
                 )
             val checkpointJournal =
@@ -353,9 +355,19 @@ private class SnapshotObserverTestCheckpointStore(
 private class RecordingRoomEventStore : RoomEventStore {
     val pruneCalls = CopyOnWriteArrayList<Long>()
 
-    override fun insert(chatId: Long, eventType: String, userId: Long, payload: String, createdAtMs: Long): Long = 0L
+    override fun insert(
+        chatId: Long,
+        eventType: String,
+        userId: Long,
+        payload: String,
+        createdAtMs: Long,
+    ): Long = 0L
 
-    override fun listByChatId(chatId: Long, limit: Int, afterId: Long): List<RoomEventRecord> = emptyList()
+    override fun listByChatId(
+        chatId: Long,
+        limit: Int,
+        afterId: Long,
+    ): List<RoomEventRecord> = emptyList()
 
     override fun maxId(): Long = 0L
 

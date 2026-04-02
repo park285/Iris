@@ -97,10 +97,11 @@ class SseEventBusTest {
     fun `bus with store persists events to SQLite`() {
         val (helper, store) = createStoreBackend()
         helper.use {
-            val bus = SseEventBus(
-                policy = SseSubscriberPolicy(bufferCapacity = 100, replayWindowSize = 100),
-                store = store,
-            )
+            val bus =
+                SseEventBus(
+                    policy = SseSubscriberPolicy(bufferCapacity = 100, replayWindowSize = 100),
+                    store = store,
+                )
             bus.emit("event-1")
             bus.emit("event-2", "snapshot")
             bus.close()
@@ -119,10 +120,11 @@ class SseEventBusTest {
     fun `bus with store uses store ids instead of in-memory counter`() {
         val (helper, store) = createStoreBackend()
         helper.use {
-            val bus = SseEventBus(
-                policy = SseSubscriberPolicy(bufferCapacity = 100, replayWindowSize = 100),
-                store = store,
-            )
+            val bus =
+                SseEventBus(
+                    policy = SseSubscriberPolicy(bufferCapacity = 100, replayWindowSize = 100),
+                    store = store,
+                )
             bus.emit("a")
             bus.emit("b")
 
@@ -137,19 +139,21 @@ class SseEventBusTest {
     fun `bus with store replays from store beyond buffer`() {
         val (helper, store) = createStoreBackend()
         helper.use {
-            val bus = SseEventBus(
-                policy = SseSubscriberPolicy(bufferCapacity = 10, replayWindowSize = 10),
-                store = store,
-            )
+            val bus =
+                SseEventBus(
+                    policy = SseSubscriberPolicy(bufferCapacity = 10, replayWindowSize = 10),
+                    store = store,
+                )
             // 10개 emit — 전부 버퍼와 store 양쪽에 저장
             repeat(10) { i -> bus.emit("event-$i") }
             bus.close()
 
             // 새 bus (재시작 시뮬레이션) — in-memory 버퍼 비어있지만 store에서 replay
-            val bus2 = SseEventBus(
-                policy = SseSubscriberPolicy(bufferCapacity = 10, replayWindowSize = 10),
-                store = store,
-            )
+            val bus2 =
+                SseEventBus(
+                    policy = SseSubscriberPolicy(bufferCapacity = 10, replayWindowSize = 10),
+                    store = store,
+                )
             val replay = bus2.replayEnvelopes(0L)
             assertEquals(10, replay.size)
             assertEquals("event-0", replay[0].payload)
@@ -160,9 +164,10 @@ class SseEventBusTest {
 
     @Test
     fun `bus without store loses events beyond buffer capacity`() {
-        val bus = SseEventBus(
-            policy = SseSubscriberPolicy(bufferCapacity = 2, replayWindowSize = 2),
-        )
+        val bus =
+            SseEventBus(
+                policy = SseSubscriberPolicy(bufferCapacity = 2, replayWindowSize = 2),
+            )
         bus.emit("a")
         bus.emit("b")
         bus.emit("c")
@@ -186,10 +191,11 @@ class SseEventBusTest {
             store.insert("message", "old-3", 3000L)
 
             // 새 bus 생성 — store.maxId()=3이므로 다음 id는 4부터
-            val bus = SseEventBus(
-                policy = SseSubscriberPolicy(bufferCapacity = 100, replayWindowSize = 100),
-                store = store,
-            )
+            val bus =
+                SseEventBus(
+                    policy = SseSubscriberPolicy(bufferCapacity = 100, replayWindowSize = 100),
+                    store = store,
+                )
             bus.emit("new-1")
 
             val replay = bus.replayEnvelopes(3L)
@@ -205,19 +211,21 @@ class SseEventBusTest {
         val (helper, store) = createStoreBackend()
         helper.use {
             // 1차 세션
-            val bus1 = SseEventBus(
-                policy = SseSubscriberPolicy(bufferCapacity = 100, replayWindowSize = 100),
-                store = store,
-            )
+            val bus1 =
+                SseEventBus(
+                    policy = SseSubscriberPolicy(bufferCapacity = 100, replayWindowSize = 100),
+                    store = store,
+                )
             bus1.emit("session1-a")
             bus1.emit("session1-b", "snapshot")
             bus1.close()
 
             // 2차 세션 (같은 store로 새 bus 생성 — 서버 재시작 시뮬레이션)
-            val bus2 = SseEventBus(
-                policy = SseSubscriberPolicy(bufferCapacity = 100, replayWindowSize = 100),
-                store = store,
-            )
+            val bus2 =
+                SseEventBus(
+                    policy = SseSubscriberPolicy(bufferCapacity = 100, replayWindowSize = 100),
+                    store = store,
+                )
             bus2.emit("session2-c")
 
             // 전체 이벤트가 replay 가능해야 함
@@ -237,10 +245,11 @@ class SseEventBusTest {
     fun `bus with store replay miss count stays zero`() {
         val (helper, store) = createStoreBackend()
         helper.use {
-            val bus = SseEventBus(
-                policy = SseSubscriberPolicy(bufferCapacity = 10, replayWindowSize = 10),
-                store = store,
-            )
+            val bus =
+                SseEventBus(
+                    policy = SseSubscriberPolicy(bufferCapacity = 10, replayWindowSize = 10),
+                    store = store,
+                )
             bus.emit("a")
             bus.emit("b")
             bus.emit("c")

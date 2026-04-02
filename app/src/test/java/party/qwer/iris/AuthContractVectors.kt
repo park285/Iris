@@ -2,7 +2,6 @@ package party.qwer.iris
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import java.io.File
 import java.nio.file.Path
 
 internal fun loadAuthVectors(): List<AuthContractVector> =

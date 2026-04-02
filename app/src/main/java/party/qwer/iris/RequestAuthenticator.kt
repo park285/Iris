@@ -156,7 +156,6 @@ internal class RequestAuthenticator(
         }
         return normalized
     }
-
 }
 
 private const val SHA256_HEX_LENGTH = 64

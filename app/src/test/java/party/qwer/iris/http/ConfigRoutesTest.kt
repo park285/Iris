@@ -38,7 +38,7 @@ class ConfigRoutesTest {
 
     @Test
     fun `rejects unknown config name`() {
-        val configPath = Files.createTempFile("iris-config-routes-test", ".json")
+        val configPath = temporaryConfigPath("iris-config-routes-test")
         val configManager = ConfigManager(configPath = configPath.toString())
 
         val error =
@@ -56,7 +56,7 @@ class ConfigRoutesTest {
 
     @Test
     fun `accepts valid endpoint`() {
-        val configPath = Files.createTempFile("iris-config-routes-test", ".json")
+        val configPath = temporaryConfigPath("iris-config-routes-test")
         val configManager = ConfigManager(configPath = configPath.toString())
 
         val outcome =
@@ -74,7 +74,7 @@ class ConfigRoutesTest {
 
     @Test
     fun `rejects invalid endpoint`() {
-        val configPath = Files.createTempFile("iris-config-routes-test", ".json")
+        val configPath = temporaryConfigPath("iris-config-routes-test")
         val configManager = ConfigManager(configPath = configPath.toString())
 
         val error =
@@ -92,7 +92,7 @@ class ConfigRoutesTest {
 
     @Test
     fun `botport sets requiresRestart`() {
-        val configPath = Files.createTempFile("iris-config-routes-test", ".json")
+        val configPath = temporaryConfigPath("iris-config-routes-test")
         val configManager = ConfigManager(configPath = configPath.toString())
         val originalPort = configManager.botSocketPort
 
@@ -116,7 +116,7 @@ class ConfigRoutesTest {
     @Test
     fun `invalid config signature is rejected before body read`() =
         testApplication {
-            val configPath = Files.createTempFile("iris-config-routes-http-test", ".json")
+            val configPath = temporaryConfigPath("iris-config-routes-http-test")
             val configManager = ConfigManager(configPath = configPath.toString())
             val bodyReads = AtomicInteger(0)
             try {
@@ -176,6 +176,11 @@ class ConfigRoutesTest {
         header("X-Iris-Body-Sha256", bodySha256Hex)
     }
 }
+
+private fun temporaryConfigPath(prefix: String) =
+    Files
+        .createTempDirectory(prefix)
+        .resolve("config.json")
 
 private val configRouteConfig =
     object : ConfigProvider {

@@ -14,8 +14,8 @@ import kotlinx.coroutines.test.runTest
 import party.qwer.iris.model.ReplyLifecycleState
 import party.qwer.iris.reply.ReplyThreadId
 import party.qwer.iris.storage.ChatId
-import java.lang.reflect.InvocationTargetException
 import java.io.File
+import java.lang.reflect.InvocationTargetException
 import java.nio.file.Files
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
@@ -159,6 +159,37 @@ class ReplyServiceTest {
         val result = service.sendMessageBlocking("ref", chatId = 1L, msg = "after", threadId = null, threadScope = null)
         assertEquals(ReplyAdmissionStatus.SHUTDOWN, result.status)
     }
+
+    @Test
+    fun `sendNativeMultiplePhotosHandlesSuspend owns spill-backed handles even when admission rejects`() =
+        runTest {
+            val service = deterministicReplyService(scheduler = testScheduler)
+            val spillDir = Files.createTempDirectory("iris-reply-service-handle-test")
+            val bytes = VALID_TEST_PNG_BYTES + ByteArray(8192) { (it % 251).toByte() }
+            val handle =
+                verifiedImageHandle(
+                    bytes = bytes,
+                    stagingPolicy =
+                        VerifiedImageHandleStagingPolicy(
+                            maxInMemoryBytes = 1,
+                            spillDirectory = spillDir,
+                        ),
+                )
+
+            val result =
+                service.sendNativeMultiplePhotosHandlesSuspend(
+                    room = 1L,
+                    imageHandles = listOf(handle),
+                    threadId = null,
+                    threadScope = null,
+                    requestId = "reject-ownership",
+                )
+
+            assertEquals(ReplyAdmissionStatus.SHUTDOWN, result.status)
+            assertFailsWith<Exception> {
+                handle.openInputStream().use { input -> input.readBytes() }
+            }
+        }
 
     @Test
     fun `same key messages are all accepted in order`() {

@@ -308,20 +308,21 @@ class SseEventBus(
                 }
 
                 is SseCommand.Replay -> {
-                    val replay = if (store != null) {
-                        store.replayAfter(command.afterId, policy.replayWindowSize)
-                    } else {
-                        val oldestInBuffer = buffer.firstOrNull()?.id
-                        if (oldestInBuffer != null && command.afterId > 0 && command.afterId < oldestInBuffer) {
-                            replayMisses += 1
-                        }
-                        val matching = buffer.filter { it.id > command.afterId }
-                        if (matching.size > policy.replayWindowSize) {
-                            matching.takeLast(policy.replayWindowSize)
+                    val replay =
+                        if (store != null) {
+                            store.replayAfter(command.afterId, policy.replayWindowSize)
                         } else {
-                            matching
+                            val oldestInBuffer = buffer.firstOrNull()?.id
+                            if (oldestInBuffer != null && command.afterId > 0 && command.afterId < oldestInBuffer) {
+                                replayMisses += 1
+                            }
+                            val matching = buffer.filter { it.id > command.afterId }
+                            if (matching.size > policy.replayWindowSize) {
+                                matching.takeLast(policy.replayWindowSize)
+                            } else {
+                                matching
+                            }
                         }
-                    }
                     command.reply.complete(replay)
                 }
 

@@ -5,8 +5,11 @@ import party.qwer.iris.http.SseEventEnvelope
 class SqliteSseEventStore(
     private val driver: SqliteDriver,
 ) : SseEventStore {
-
-    override fun insert(eventType: String, payload: String, createdAtMs: Long): Long {
+    override fun insert(
+        eventType: String,
+        payload: String,
+        createdAtMs: Long,
+    ): Long {
         driver.update(
             "INSERT INTO ${IrisDatabaseSchema.SSE_EVENTS_TABLE} (event_type, payload, created_at) VALUES (?, ?, ?)",
             listOf(eventType, payload, createdAtMs),
@@ -14,7 +17,10 @@ class SqliteSseEventStore(
         return driver.queryLong("SELECT last_insert_rowid()") ?: 0L
     }
 
-    override fun replayAfter(afterId: Long, limit: Int): List<SseEventEnvelope> =
+    override fun replayAfter(
+        afterId: Long,
+        limit: Int,
+    ): List<SseEventEnvelope> =
         driver.query(
             "SELECT id, event_type, payload, created_at FROM ${IrisDatabaseSchema.SSE_EVENTS_TABLE} WHERE id > ? ORDER BY id ASC LIMIT ?",
             listOf(afterId, limit),
@@ -27,12 +33,11 @@ class SqliteSseEventStore(
             )
         }
 
-    override fun maxId(): Long =
-        driver.queryLong("SELECT MAX(id) FROM ${IrisDatabaseSchema.SSE_EVENTS_TABLE}") ?: 0L
+    override fun maxId(): Long = driver.queryLong("SELECT MAX(id) FROM ${IrisDatabaseSchema.SSE_EVENTS_TABLE}") ?: 0L
 
     override fun prune(keepCount: Int) {
         driver.execute(
-            "DELETE FROM ${IrisDatabaseSchema.SSE_EVENTS_TABLE} WHERE id NOT IN (SELECT id FROM ${IrisDatabaseSchema.SSE_EVENTS_TABLE} ORDER BY id DESC LIMIT $keepCount)"
+            "DELETE FROM ${IrisDatabaseSchema.SSE_EVENTS_TABLE} WHERE id NOT IN (SELECT id FROM ${IrisDatabaseSchema.SSE_EVENTS_TABLE} ORDER BY id DESC LIMIT $keepCount)",
         )
     }
 }

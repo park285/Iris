@@ -19,7 +19,6 @@ import kotlin.test.assertTrue
  */
 @OptIn(ExperimentalCoroutinesApi::class, DelicateCoroutinesApi::class)
 class SseHeartbeatTest {
-
     // ── initialSseFrames 포맷 검증 ──────────────────────────────────────────
 
     @Test

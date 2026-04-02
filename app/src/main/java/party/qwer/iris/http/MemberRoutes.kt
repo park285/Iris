@@ -78,9 +78,10 @@ internal fun Route.installMemberRoutes(
                 val channel = bus.openSubscriberChannelSuspend()
                 try {
                     while (true) {
-                        val result = withTimeoutOrNull(SSE_HEARTBEAT_INTERVAL_MS) {
-                            channel.receiveCatching()
-                        }
+                        val result =
+                            withTimeoutOrNull(SSE_HEARTBEAT_INTERVAL_MS) {
+                                channel.receiveCatching()
+                            }
                         when {
                             result == null -> {
                                 writeStringUtf8(": keepalive\n\n")

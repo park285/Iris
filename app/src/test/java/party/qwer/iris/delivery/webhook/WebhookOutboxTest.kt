@@ -63,8 +63,8 @@ class WebhookOutboxTest {
             ),
         )
 
-        val configPath = Files.createTempFile("iris-outbox-config", ".json").toFile().absolutePath
-        val config = ConfigManager(configPath = configPath)
+        val configPath = temporaryConfigPath("iris-outbox-config")
+        val config = createBootstrappedConfigManager(configPath)
         val port = reservePort()
         config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, "http://127.0.0.1:$port/webhook/iris")
 
@@ -105,8 +105,8 @@ class WebhookOutboxTest {
 
     @Test
     fun `same room deliveries preserve order while different rooms can overlap`() {
-        val configPath = Files.createTempFile("iris-outbox-order", ".json").toFile().absolutePath
-        val config = ConfigManager(configPath = configPath)
+        val configPath = temporaryConfigPath("iris-outbox-order")
+        val config = createBootstrappedConfigManager(configPath)
         val port = reservePort()
         config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, "http://127.0.0.1:$port/webhook/iris")
         val helper = JdbcSqliteHelper.inMemory()
@@ -186,4 +186,25 @@ class WebhookOutboxTest {
         ServerSocket(0).use { socket ->
             socket.localPort
         }
+}
+
+private fun temporaryConfigPath(prefix: String): String =
+    Files
+        .createTempDirectory(prefix)
+        .resolve("config.json")
+        .toString()
+
+private fun createBootstrappedConfigManager(configPath: String): ConfigManager {
+    Files.write(
+        Path.of(configPath),
+        """
+        {
+          "inboundSigningSecret": "inbound-secret",
+          "outboundWebhookToken": "outbound-secret",
+          "botControlToken": "bot-control-secret",
+          "bridgeToken": "bridge-secret"
+        }
+        """.trimIndent().toByteArray(),
+    )
+    return ConfigManager(configPath = configPath)
 }

@@ -6,8 +6,8 @@ import kotlinx.coroutines.SupervisorJob
 import party.qwer.iris.delivery.webhook.OutboxRoutingGateway
 import party.qwer.iris.ingress.CommandIngressService
 import party.qwer.iris.persistence.CheckpointJournal
-import party.qwer.iris.persistence.SnapshotStateStore
 import party.qwer.iris.persistence.RoomEventStore
+import party.qwer.iris.persistence.SnapshotStateStore
 import party.qwer.iris.persistence.WebhookDeliveryStore
 import party.qwer.iris.snapshot.RoomSnapshotReader
 import party.qwer.iris.snapshot.SnapshotCommand
@@ -27,6 +27,7 @@ internal data class SnapshotRuntime(
 
 internal object SnapshotRuntimeFactory {
     private const val DEFAULT_EVENT_RETENTION_MS = 7L * 24 * 60 * 60 * 1000 // 7일
+
     fun create(
         configManager: ConfigManager,
         kakaoDb: KakaoDB,
@@ -78,12 +79,14 @@ internal object SnapshotRuntimeFactory {
             ingressService = ingressService,
             observerHelper = observerHelper,
             dbObserver = DBObserver(observerHelper, configManager),
-            snapshotObserver = SnapshotObserver(
-                snapshotCoordinator, checkpointJournal,
-                missingTombstoneTtlMs = missingTombstoneTtlMs,
-                roomEventStore = roomEventStore,
-                eventRetentionMs = DEFAULT_EVENT_RETENTION_MS,
-            ),
+            snapshotObserver =
+                SnapshotObserver(
+                    snapshotCoordinator,
+                    checkpointJournal,
+                    missingTombstoneTtlMs = missingTombstoneTtlMs,
+                    roomEventStore = roomEventStore,
+                    eventRetentionMs = DEFAULT_EVENT_RETENTION_MS,
+                ),
         )
     }
 
