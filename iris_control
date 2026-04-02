@@ -237,7 +237,7 @@ iris_stop() {
   fi
 
   echo "Stopping Iris service..."
-  "${ADB_CMD[@]}" shell "su root sh -c 'kill -s SIGTERM $pid'"
+  "${ADB_CMD[@]}" shell "su root sh -c 'kill -s SIGTERM $pid'" >/dev/null 2>&1 || true
   for _ in 1 2 3 4 5; do
     sleep 1
     if [[ -z "$(get_iris_pid || true)" ]]; then
@@ -247,7 +247,7 @@ iris_stop() {
   done
 
   echo "SIGTERM timed out; forcing SIGKILL..."
-  "${ADB_CMD[@]}" shell "su root sh -c 'kill -s SIGKILL $pid'"
+  "${ADB_CMD[@]}" shell "su root sh -c 'kill -s SIGKILL $pid'" >/dev/null 2>&1 || true
   sleep 1
   if [[ -z "$(get_iris_pid || true)" ]]; then
     echo "Iris service stopped after SIGKILL fallback."

@@ -9,6 +9,7 @@ IRIS_USE_ADB_ROOT="${IRIS_USE_ADB_ROOT:-0}"
 IRIS_ZN_ZYGOTE_RESTART="${IRIS_ZN_ZYGOTE_RESTART:-1}"
 IRIS_ZN_ZYGOTE_RESTART_DELAY_SECONDS="${IRIS_ZN_ZYGOTE_RESTART_DELAY_SECONDS:-8}"
 IRIS_ZN_READY_TIMEOUT_SECONDS="${IRIS_ZN_READY_TIMEOUT_SECONDS:-30}"
+IRIS_BRIDGE_SOCKET_NAME="${IRIS_BRIDGE_SOCKET_NAME:-@iris-image-bridge}"
 
 declare -a ADB_CMD=()
 
@@ -84,6 +85,10 @@ run_root_shell_allow_failure() {
   fi
 }
 
+bridge_socket_marker() {
+  printf '%s' "$IRIS_BRIDGE_SOCKET_NAME"
+}
+
 wait_for_boot_completed() {
   local deadline now boot_completed
   deadline=$((SECONDS + IRIS_BOOT_TIMEOUT_SECONDS))
@@ -150,6 +155,15 @@ bootstrap_zygisk_next() {
   run_root_shell "test -d /sbin/.magisk && test -S /sbin/.magisk/device/socket"
 }
 
+is_bridge_runtime_ready() {
+  local processes
+  processes="$(run_adb shell "ps -A | grep -E 'lspd|com.kakao.talk' || true" 2>/dev/null | tr -d '\r' || true)"
+
+  grep -Fq "lspd" <<<"$processes" &&
+    grep -Fq "com.kakao.talk" <<<"$processes" &&
+    run_adb shell "grep -F '$(bridge_socket_marker)' /proc/net/unix >/dev/null 2>&1"
+}
+
 wait_for_zygisk_ready() {
   local deadline dump processes recent
   deadline=$((SECONDS + IRIS_ZN_READY_TIMEOUT_SECONDS))
@@ -165,6 +179,12 @@ wait_for_zygisk_ready() {
         printf '%s\n' "$dump"
         return 0
       fi
+    fi
+
+    if is_bridge_runtime_ready; then
+      dump="${dump}"$'\n\n'"Processes:"$'\n'"${processes}"$'\n\n'"Recent Events:"$'\n'"${recent}"$'\n\n'"Fallback: bridge runtime ready"
+      printf '%s\n' "$dump"
+      return 0
     fi
     sleep 2
   done
