@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// 쿼리 파라미터를 정렬하여 canonical target 문자열을 생성한다.
+/// 쿼리 파라미터를 사전순 정렬 후 path?key=val 형태로 합친다.
 pub fn canonical_target(path: &str, query: &[(String, String)]) -> String {
     if query.is_empty() {
         return path.to_string();
@@ -22,7 +22,6 @@ pub fn canonical_target(path: &str, query: &[(String, String)]) -> String {
     format!("{path}?{encoded}")
 }
 
-/// HMAC 서명에 사용하는 canonical request 문자열을 생성한다.
 #[allow(clippy::too_many_arguments)] // 서명 프로토콜 필드 순서를 그대로 받는 경계 함수
 pub fn canonical_request(
     method: &str,
@@ -41,7 +40,6 @@ pub fn canonical_request(
     )
 }
 
-/// HMAC-SHA256 서명 헤더를 생성한다.
 pub fn signed_headers(token: &str, method: &str, target: &str, body: &[u8]) -> Result<HeaderMap> {
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)?
@@ -54,7 +52,7 @@ pub fn signed_headers(token: &str, method: &str, target: &str, body: &[u8]) -> R
     signed_headers_with(token, method, target, body, &now_ms, &nonce)
 }
 
-/// 테스트용: timestamp와 nonce를 직접 지정하여 서명 헤더를 생성한다.
+/// timestamp·nonce를 외부 주입하는 변형. 결정론적 서명 검증용.
 #[allow(clippy::too_many_arguments)] // HMAC 프로토콜 필드가 6개 — 구조체화하면 호출측이 더 복잡
 pub fn signed_headers_with(
     token: &str,

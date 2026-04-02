@@ -50,14 +50,23 @@ internal fun Route.installReplyRoutes(
                 call.respond(HttpStatusCode.Accepted, response)
             }
 
-            call.request.headers[HttpHeaders.ContentType]?.startsWith(ContentType.Application.Json.toString(), ignoreCase = true) == true -> {
+            call.request.headers[HttpHeaders.ContentType]?.startsWith(
+                ContentType.Application.Json.toString(),
+                ignoreCase = true
+            ) == true -> {
                 if (
                     !withVerifiedProtectedBody(
                         call = call,
                         maxBodyBytes = replyImageIngressPolicy.imagePolicy.jsonReplyBodyMaxBytes,
                         bodyReader = protectedBodyReader,
                         precheck = { authSupport.precheckBotControlSignature(call, method = "POST") },
-                        finalize = { precheck, actualBodySha256Hex -> authSupport.finalizeSignature(call, precheck, actualBodySha256Hex) },
+                        finalize = { precheck, actualBodySha256Hex ->
+                            authSupport.finalizeSignature(
+                                call,
+                                precheck,
+                                actualBodySha256Hex
+                            )
+                        },
                     ) { rawBody ->
                         val replyRequest = rawBody.decodeJson(serverJson, ReplyRequest.serializer())
                         val response = enqueueReply(replyRequest, notificationReferer, messageSender)
@@ -106,11 +115,11 @@ private suspend fun enqueueMultipartReply(
         )
     try {
         /*
-         * Multipart invariants:
-         * 1. metadata must be authenticated before any image body is accepted.
-         * 2. image parts must arrive in manifest order.
-         * 3. digest / length / content-type / detected format must all match.
-         * 4. thread metadata is validated before the request enters reply admission.
+         * Multipart 업로드 필수 제약
+         * 1. 이미지 본문을 받기 전에 metadata 인증이 먼저 완료되어야 한다.
+         * 2. 이미지 파트는 manifest 순서대로 도착해야 한다.
+         * 3. digest·length·content-type·감지된 포맷이 모두 일치해야 한다.
+         * 4. reply admission 진입 전에 thread metadata 검증을 마쳐야 한다.
          */
         val payload = collector.collect(multipart) ?: return null
         payload.use { collected ->
@@ -149,7 +158,8 @@ private suspend fun enqueueMultipartReply(
     }
 }
 
-private fun isMultipartFormData(call: ApplicationCall): Boolean = call.request.headers[HttpHeaders.ContentType]?.startsWith("multipart/form-data", ignoreCase = true) == true
+private fun isMultipartFormData(call: ApplicationCall): Boolean =
+    call.request.headers[HttpHeaders.ContentType]?.startsWith("multipart/form-data", ignoreCase = true) == true
 
 internal fun requireMultipartImageType(type: ReplyType) {
     if (type != ReplyType.IMAGE && type != ReplyType.IMAGE_MULTIPLE) {

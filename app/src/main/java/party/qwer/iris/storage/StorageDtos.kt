@@ -63,11 +63,10 @@ data class ThreadRow(
     val threadId: Long,
     val messageCount: Int,
     val lastActiveAt: Long?,
-    // 스레드의 원본(첫) 메시지 — 암호화된 원문
+    // 암호화 상태 — 복호화는 caller가 originUserId로 수행
     val originMessage: String?,
-    // 원본 메시지 작성자 userId (복호화에 사용)
+    // 복호화 키 역할
     val originUserId: UserId?,
-    // 원본 메시지의 origin metadata
     val originMetadata: ThreadOriginMetadata?,
 )
 

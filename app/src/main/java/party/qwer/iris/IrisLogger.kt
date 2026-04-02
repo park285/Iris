@@ -49,10 +49,7 @@ object IrisLogger {
         }
     }
 
-    /**
-     * Lazy debug 로깅 - 로그 레벨이 DEBUG일 때만 messageProvider 평가.
-     * 문자열 연결 오버헤드 방지.
-     */
+    // 문자열 연결 비용을 피하려고 레벨 확인 후에만 람다를 평가한다.
     fun debugLazy(messageProvider: () -> String) {
         if (currentLevel.priority <= Level.DEBUG.priority) {
             println(formatLogLine(level = "DEBUG", message = messageProvider()))

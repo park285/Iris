@@ -167,13 +167,11 @@ impl RoomSummary {
     }
 }
 
-/// daemon health probe용 응답 모델
 #[derive(Deserialize, Debug, Clone)]
 pub struct HealthResponse {
     pub status: String,
 }
 
-/// daemon bridge diagnostics 응답 모델
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 #[allow(clippy::struct_excessive_bools)]
@@ -218,7 +216,7 @@ pub struct BridgeDiagnosticsHook {
     pub last_summary: Option<String>,
 }
 
-// --- Reply models ---
+// --- 응답 모델 ---
 
 #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -289,7 +287,7 @@ pub struct RecentMessage {
     pub thread_id: Option<i64>,
 }
 
-// --- Thread models ---
+// --- 스레드 모델 ---
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]

@@ -4,7 +4,7 @@ use iris_common::models::{ReplyRequest, ReplyType};
 
 pub(crate) const MAX_IMAGE_BYTES: u64 = 35 * 1024 * 1024;
 
-/// 단일 이미지 경로를 base64로 인코딩하거나 크기 초과/읽기 오류를 반환한다.
+/// 파일을 읽어 base64로 변환. 35 MB 초과 시 에러.
 pub(crate) async fn encode_single_image(
     req: ReplyRequest,
 ) -> Result<ReplyRequest, app::ReplyResult> {
@@ -31,7 +31,7 @@ pub(crate) async fn encode_single_image(
     }
 }
 
-/// 다중 이미지 경로 목록을 base64 배열로 인코딩하거나 크기 초과/읽기 오류를 반환한다.
+/// 여러 이미지를 base64 배열로 변환. 합산 35 MB 초과 시 에러.
 pub(crate) async fn encode_multiple_images(
     req: ReplyRequest,
 ) -> Result<ReplyRequest, app::ReplyResult> {

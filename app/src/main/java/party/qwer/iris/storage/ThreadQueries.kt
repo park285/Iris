@@ -8,16 +8,13 @@ class ThreadQueries(
     private val originMetadataDecoder = ThreadOriginMetadataDecoder()
 
     companion object {
-        // 방당 최대 반환할 스레드 수
         private const val THREAD_LIST_LIMIT = 20
         private const val RECENT_MESSAGES_MAX_LIMIT = 100
     }
 
     /**
-     * 지정된 chatId의 스레드 목록을 집계해 반환한다.
-     * thread_id IS NOT NULL인 행을 GROUP BY thread_id로 집계하고,
-     * MAX(created_at) 기준 최신순으로 THREAD_LIST_LIMIT개 반환한다.
-     * 원본 메시지는 집계 단계에서 구한 MIN(id)를 이용해 한 번만 조인한다.
+     * GROUP BY thread_id → MAX(created_at) 최신순 THREAD_LIST_LIMIT개.
+     * 원본 메시지는 MIN(id)로 한 번만 조인하여 N+1을 피한다.
      */
     fun listThreads(chatId: ChatId): List<ThreadRow> =
         db.query(

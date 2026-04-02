@@ -1,11 +1,10 @@
-/// Iris 서버 연결에 필요한 최소 정보.
-/// iris-ctl Config, iris-daemon `DaemonConfig` 모두 이 trait을 구현한다.
+/// iris-ctl과 iris-daemon이 각자의 Config로 구현하는 공통 연결 계약.
 pub trait IrisConnection {
     fn base_url(&self) -> &str;
     fn token(&self) -> &str;
 }
 
-/// 단순 연결 정보 구조체. 테스트나 독립 사용 시 편의용.
+/// 테스트·독립 실행용 최소 구현체.
 #[derive(Clone, Debug)]
 pub struct SimpleConnection {
     pub url: String,

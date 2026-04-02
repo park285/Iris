@@ -6,8 +6,6 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use std::path::Path;
 
-// 미사용 경고 억제: Task 7~9에서 ReplyModal이 이 위젯을 통합하기 전까지 dead_code
-#[allow(dead_code)]
 pub struct PathInput {
     pub value: String,
     cursor: usize,
@@ -16,14 +14,11 @@ pub struct PathInput {
     pub file_info: Option<FileInfo>,
 }
 
-#[allow(dead_code)]
 pub struct FileInfo {
-    pub exists: bool,
     pub size_bytes: u64,
     pub extension: String,
 }
 
-#[allow(dead_code)]
 impl PathInput {
     pub const fn new() -> Self {
         Self {
@@ -166,7 +161,6 @@ impl PathInput {
                 .extension()
                 .map_or_else(String::new, |e| e.to_string_lossy().to_string());
             self.file_info = Some(FileInfo {
-                exists: true,
                 size_bytes: size,
                 extension: ext,
             });
