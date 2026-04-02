@@ -13,7 +13,11 @@ pub(crate) async fn refresh_rooms(iris: &api::TuiApi, app: &mut app::App) {
     if let Ok(rooms) = iris.rooms().await {
         app.rooms_view.set_rooms(rooms.rooms);
         if let Some(chat_id) = app.members_view.chat_id {
-            let exists = app.rooms_view.rooms.iter().any(|room| room.chat_id == chat_id);
+            let exists = app
+                .rooms_view
+                .rooms
+                .iter()
+                .any(|room| room.chat_id == chat_id);
             if !exists {
                 clear_selected_room_context(app);
             }
@@ -21,11 +25,7 @@ pub(crate) async fn refresh_rooms(iris: &api::TuiApi, app: &mut app::App) {
     }
 }
 
-pub(crate) async fn refresh_selected_room(
-    iris: &api::TuiApi,
-    app: &mut app::App,
-    chat_id: i64,
-) {
+pub(crate) async fn refresh_selected_room(iris: &api::TuiApi, app: &mut app::App, chat_id: i64) {
     let selected_member_id = app.stats_view.selected_member_id;
     let period = app.stats_view.period.clone();
     let members_fut = iris.members(chat_id);
@@ -79,7 +79,7 @@ pub(crate) async fn apply_pending_thread_fetch(iris: &api::TuiApi, app: &mut app
     if let Some(chat_id) = app.pending_thread_fetch.take() {
         if let Ok(thread_list) = iris.list_threads(chat_id).await {
             if let Some(modal) = &mut app.reply_modal {
-                modal.thread_suggestions = thread_list.threads;
+                modal.set_thread_suggestions(thread_list.threads);
             }
         }
     }

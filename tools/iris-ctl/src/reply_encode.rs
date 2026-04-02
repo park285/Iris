@@ -5,7 +5,9 @@ use iris_common::models::{ReplyRequest, ReplyType};
 pub(crate) const MAX_IMAGE_BYTES: u64 = 35 * 1024 * 1024;
 
 /// 단일 이미지 경로를 base64로 인코딩하거나 크기 초과/읽기 오류를 반환한다.
-pub(crate) async fn encode_single_image(req: ReplyRequest) -> Result<ReplyRequest, app::ReplyResult> {
+pub(crate) async fn encode_single_image(
+    req: ReplyRequest,
+) -> Result<ReplyRequest, app::ReplyResult> {
     use base64::Engine;
     let path = req.data.as_str().unwrap_or("").to_owned();
     match tokio::fs::read(&path).await {
@@ -74,10 +76,7 @@ pub(crate) async fn encode_multiple_images(
     })
 }
 
-pub(crate) async fn send_reply_async(
-    iris: &api::TuiApi,
-    req: ReplyRequest,
-) -> app::ReplyResult {
+pub(crate) async fn send_reply_async(iris: &api::TuiApi, req: ReplyRequest) -> app::ReplyResult {
     let final_req = match &req.reply_type {
         ReplyType::Image => match encode_single_image(req).await {
             Ok(r) => r,

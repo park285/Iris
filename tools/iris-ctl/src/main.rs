@@ -1,3 +1,13 @@
+#![allow(
+    clippy::cast_possible_wrap,
+    clippy::clone_on_copy,
+    clippy::match_same_arms,
+    clippy::missing_const_for_fn,
+    clippy::needless_pass_by_value,
+    clippy::redundant_pub_crate,
+    clippy::type_complexity
+)]
+
 mod api;
 mod app;
 mod config;
@@ -11,19 +21,17 @@ mod views;
 
 use anyhow::Result;
 use crossterm::event::EventStream;
-use futures_util::StreamExt;
-use iris_common::models::SseEvent;
 use event_loop::{
     handle_pending_actions, handle_sse_event, handle_terminal_stream_event, init_poll_tick,
     run_sse_loop,
 };
+use futures_util::StreamExt;
+use iris_common::models::SseEvent;
 use refresh::refresh_app_data;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use query_mapping::{RECENT_MESSAGES_LIMIT, build_nickname_map, map_recent_messages_response};
-use room_context::{apply_messages_refresh_result, clear_selected_room_context, handle_event_history_load_error};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -81,6 +89,12 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::query_mapping::{
+        RECENT_MESSAGES_LIMIT, build_nickname_map, map_recent_messages_response,
+    };
+    use crate::room_context::{
+        apply_messages_refresh_result, clear_selected_room_context, handle_event_history_load_error,
+    };
     use iris_common::models::{
         MemberActivityResponse, MemberInfo, PeriodRange, RecentMessage, RecentMessagesResponse,
         RoomInfoResponse, StatsResponse,

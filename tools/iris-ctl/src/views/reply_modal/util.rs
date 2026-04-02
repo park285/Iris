@@ -27,3 +27,16 @@ pub fn truncate_thread_origin(origin: &str) -> String {
         origin.to_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_thread_origin;
+
+    #[test]
+    fn truncate_thread_origin_is_char_safe() {
+        let truncated = truncate_thread_origin(&"가".repeat(45));
+
+        assert_eq!(truncated.chars().count(), 43);
+        assert!(truncated.ends_with("가..."));
+    }
+}

@@ -16,7 +16,9 @@ pub(crate) async fn run_sse_loop(
     sse_last_id: Arc<AtomicI64>,
 ) {
     loop {
-        if let Err(error) = crate::sse::subscribe(&sse_api, sse_tx.clone(), sse_last_id.clone()).await {
+        if let Err(error) =
+            crate::sse::subscribe(&sse_api, sse_tx.clone(), sse_last_id.clone()).await
+        {
             eprintln!("SSE error: {error}, reconnecting in 5s...");
             tokio::time::sleep(Duration::from_secs(5)).await;
         } else {

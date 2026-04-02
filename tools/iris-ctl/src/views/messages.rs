@@ -92,7 +92,12 @@ impl MessagesView {
     }
 
     pub fn render_line(&self, row: &VisibleRow) -> String {
-        messages_formatter::render_line(&self.messages, row, &self.nicknames, &self.expanded_threads)
+        messages_formatter::render_line(
+            &self.messages,
+            row,
+            &self.nicknames,
+            &self.expanded_threads,
+        )
     }
 
     fn selected_target(&self) -> ReplyTarget {

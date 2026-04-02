@@ -12,16 +12,13 @@ pub(crate) fn rebuild_filtered_indices(
         .iter()
         .enumerate()
         .filter(|(_, member)| {
-            role_matches(role_filter, member)
-                && search_matches(member, lower_search.as_deref())
+            role_matches(role_filter, member) && search_matches(member, lower_search.as_deref())
         })
         .map(|(index, _)| index)
         .collect();
 
     match sort_mode {
-        SortMode::Activity => {
-            filtered_indices.sort_by(|a, b| compare_by_activity(members, *a, *b))
-        }
+        SortMode::Activity => filtered_indices.sort_by(|a, b| compare_by_activity(members, *a, *b)),
         SortMode::Name => filtered_indices.sort_by(|a, b| compare_by_name(members, *a, *b)),
     }
     filtered_indices
@@ -33,7 +30,9 @@ fn role_matches(role_filter: RoleFilter, member: &MemberInfo) -> bool {
         RoleFilter::Owners => member.role_code == 1,
         RoleFilter::Admins => member.role_code == 4,
         RoleFilter::Bots => member.role_code == 8,
-        RoleFilter::Members => member.role_code != 1 && member.role_code != 4 && member.role_code != 8,
+        RoleFilter::Members => {
+            member.role_code != 1 && member.role_code != 4 && member.role_code != 8
+        }
     }
 }
 

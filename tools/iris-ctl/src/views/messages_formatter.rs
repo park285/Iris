@@ -29,7 +29,11 @@ pub(crate) fn render_line(
     match row {
         VisibleRow::ThreadChild { .. } => format!("    {nickname}: {content}"),
         VisibleRow::ThreadHeader { thread_id, .. } => {
-            let marker = if expanded_threads.contains(thread_id) { "▾" } else { "▸" };
+            let marker = if expanded_threads.contains(thread_id) {
+                "▾"
+            } else {
+                "▸"
+            };
             format!("{marker} {nickname}: {content}")
         }
         VisibleRow::Message { .. } => format!("{nickname}: {content}"),

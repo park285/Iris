@@ -1,5 +1,4 @@
 use super::{View, ViewAction};
-use super::members_render::format_last_active;
 use super::{members_projection, members_render};
 use crossterm::event::{KeyCode, KeyEvent};
 use iris_common::models::MemberInfo;
@@ -299,6 +298,7 @@ impl View for MembersView {
 
 #[cfg(test)]
 mod tests {
+    use super::members_render::format_last_active;
     use super::*;
     use crossterm::event::KeyModifiers;
 
