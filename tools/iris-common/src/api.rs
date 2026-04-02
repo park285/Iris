@@ -18,7 +18,11 @@ pub struct IrisApi {
 
 impl IrisApi {
     pub fn new(conn: &dyn IrisConnection) -> Result<Self> {
-        let client = Client::builder().timeout(Duration::from_secs(10)).build()?;
+        Self::new_with_transport(conn, None)
+    }
+
+    pub fn new_with_transport(conn: &dyn IrisConnection, transport: Option<&str>) -> Result<Self> {
+        let client = build_http_client(conn.base_url(), transport, Some(Duration::from_secs(10)))?;
         Ok(Self {
             client,
             base_url: conn.base_url().trim_end_matches('/').to_string(),
@@ -26,9 +30,9 @@ impl IrisApi {
         })
     }
 
-    /// 커스텀 timeout으로 생성. daemon의 짧은 health check timeout에 사용.
+    /// daemon health check처럼 짧은 timeout이 필요할 때.
     pub fn with_timeout(conn: &dyn IrisConnection, timeout: Duration) -> Result<Self> {
-        let client = Client::builder().timeout(timeout).build()?;
+        let client = build_http_client(conn.base_url(), None, Some(timeout))?;
         Ok(Self {
             client,
             base_url: conn.base_url().trim_end_matches('/').to_string(),
@@ -212,7 +216,6 @@ impl IrisApi {
         )?))
     }
 
-    /// SSE 전용: timeout 없는 클라이언트로 SSE request를 생성한다.
     pub fn sse_request_with_client(&self, sse_client: &Client) -> Result<reqwest::RequestBuilder> {
         let target = canonical_target("/events/stream", &[]);
         Ok(sse_client.get(self.sse_url()).headers(signed_headers(
@@ -256,5 +259,80 @@ impl IrisApi {
             .headers(signed_headers(&self.token, "POST", &target, &body_bytes)?)
             .header("Content-Type", "application/json")
             .body(body_bytes))
+    }
+}
+
+pub fn build_http_client(
+    base_url: &str,
+    transport: Option<&str>,
+    timeout: Option<Duration>,
+) -> Result<Client> {
+    let mut builder = Client::builder();
+    if let Some(value) = timeout {
+        builder = builder.timeout(value);
+    }
+    if should_use_h2c(base_url, transport) {
+        builder = builder.http2_prior_knowledge();
+    }
+    Ok(builder.build()?)
+}
+
+fn should_use_h2c(base_url: &str, transport: Option<&str>) -> bool {
+    let normalized = transport.unwrap_or_default().trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "http1" | "http" | "http/1.1" => false,
+        _ => base_url.starts_with("http://"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::SimpleConnection;
+    use tokio::io::AsyncReadExt;
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn http_base_url_defaults_to_h2c_prior_knowledge() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let capture = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0_u8; 24];
+            let n = socket.read(&mut buf).await.unwrap();
+            buf[..n].to_vec()
+        });
+        let conn = SimpleConnection {
+            url: format!("http://{addr}"),
+            token: "secret".to_string(),
+        };
+
+        let api = IrisApi::new(&conn).unwrap();
+        let _ = api.health().await;
+
+        let captured = capture.await.unwrap();
+        assert!(String::from_utf8_lossy(&captured).starts_with("PRI * HTTP/2.0"));
+    }
+
+    #[tokio::test]
+    async fn explicit_http1_transport_uses_http1_request_line() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let capture = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0_u8; 32];
+            let n = socket.read(&mut buf).await.unwrap();
+            buf[..n].to_vec()
+        });
+        let conn = SimpleConnection {
+            url: format!("http://{addr}"),
+            token: "secret".to_string(),
+        };
+
+        let api = IrisApi::new_with_transport(&conn, Some("http1")).unwrap();
+        let _ = api.health().await;
+
+        let captured = capture.await.unwrap();
+        assert!(String::from_utf8_lossy(&captured).starts_with("GET /health HTTP/1.1"));
     }
 }

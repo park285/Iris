@@ -15,6 +15,8 @@ pub struct ServerConfig {
     pub url: String,
     #[serde(default)]
     pub token: String,
+    #[serde(default = "default_transport")]
+    pub transport: String,
 }
 
 #[derive(Deserialize, Clone)]
@@ -33,6 +35,10 @@ impl Default for UiConfig {
 
 const fn default_poll_interval() -> u64 {
     5
+}
+
+fn default_transport() -> String {
+    "h2c".to_string()
 }
 
 impl Config {
@@ -56,6 +62,9 @@ impl Config {
         if let Ok(token) = std::env::var("IRIS_TOKEN") {
             config.server.token = token;
         }
+        if let Ok(transport) = std::env::var("IRIS_TRANSPORT") {
+            config.server.transport = transport;
+        }
         Ok(config)
     }
 }
@@ -66,6 +75,26 @@ impl IrisConnection for Config {
     }
     fn token(&self) -> &str {
         &self.server.token
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_transport_defaults_to_h2c() {
+        let config: Config =
+            toml::from_str(
+                r#"
+                [server]
+                url = "http://127.0.0.1:3000"
+                token = "secret"
+                "#,
+            )
+            .expect("config should parse");
+
+        assert_eq!(config.server.transport, "h2c");
     }
 }
 

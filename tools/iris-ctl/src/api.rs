@@ -3,7 +3,7 @@ use anyhow::Result;
 use iris_common::api::IrisApi;
 use reqwest::Client;
 
-/// TUI 전용 API 래퍼. SSE용 timeout-free 클라이언트를 추가로 관리한다.
+/// SSE는 timeout 없는 별도 클라이언트가 필요해서 `IrisApi`를 감싼다.
 #[derive(Clone)]
 pub struct TuiApi {
     inner: IrisApi,
@@ -12,8 +12,9 @@ pub struct TuiApi {
 
 impl TuiApi {
     pub fn new(config: &Config) -> Result<Self> {
-        let inner = IrisApi::new(config)?;
-        let sse_client = Client::builder().build()?;
+        let transport = Some(config.server.transport.as_str());
+        let inner = IrisApi::new_with_transport(config, transport)?;
+        let sse_client = iris_common::api::build_http_client(config.server.url.as_str(), transport, None)?;
         Ok(Self { inner, sse_client })
     }
 

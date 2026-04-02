@@ -86,6 +86,7 @@ mod tests {
             server: ServerConfig {
                 url: base_url,
                 token: "token".to_string(),
+                transport: "http1".to_string(),
             },
             ui: UiConfig {
                 poll_interval_secs: 1,

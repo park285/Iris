@@ -307,16 +307,11 @@ impl ReplyModal {
                 chunks[1],
             );
         } else if let Some(result) = &self.ui.result {
-            let (text, style) = match result {
-                super::ReplyResult::Success { request_id } => (
-                    format!("  ✓ 전송 완료 ({request_id})"),
-                    Style::default().fg(Color::Green),
-                ),
-                super::ReplyResult::Error { message } => {
-                    (format!("  ✗ {message}"), Style::default().fg(Color::Red))
-                }
+            let style = match result {
+                super::ReplyResult::Success { .. } => Style::default().fg(Color::Green),
+                super::ReplyResult::Error { .. } => Style::default().fg(Color::Red),
             };
-            frame.render_widget(Paragraph::new(text).style(style), chunks[1]);
+            frame.render_widget(Paragraph::new(result.status_text()).style(style), chunks[1]);
         }
     }
 

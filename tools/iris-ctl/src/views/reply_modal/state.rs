@@ -73,6 +73,17 @@ pub enum ReplyResult {
     Error { message: String },
 }
 
+impl ReplyResult {
+    pub fn status_text(&self) -> String {
+        match self {
+            Self::Success { request_id } => {
+                format!("  ✓ 전송 요청 등록 완료 ({request_id})")
+            }
+            Self::Error { message } => format!("  ✗ {message}"),
+        }
+    }
+}
+
 pub(crate) struct ReplyUiState {
     pub field_focus: FieldFocus,
     pub overlay: OverlayState,
@@ -254,5 +265,14 @@ mod tests {
         assert_eq!(selection.room_selector_cursor, 1);
         assert!(selection.thread_suggestions.is_empty());
         assert_eq!(selection.thread_selector_cursor, 0);
+    }
+
+    #[test]
+    fn success_result_uses_admission_language() {
+        let result = ReplyResult::Success {
+            request_id: "req-1".to_string(),
+        };
+
+        assert_eq!(result.status_text(), "  ✓ 전송 요청 등록 완료 (req-1)");
     }
 }
