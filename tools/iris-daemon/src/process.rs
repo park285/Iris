@@ -70,13 +70,18 @@ async fn force_kill_if_needed(adb: &Adb, pid: u32) -> Result<()> {
     ensure_process_exited(adb, pid).await
 }
 
+#[allow(clippy::cognitive_complexity)] // 종료 시퀀스의 분기/복구 순서를 한 곳에 유지한다.
 pub async fn stop_iris(adb: &Adb) -> Result<()> {
     let Some(pid) = iris_pid(adb).await else {
         tracing::info!("Iris 프로세스 미실행, 종료 불필요");
         return Ok(());
     };
 
-    tracing::info!(pid = pid, control = iris_control_path(), "iris_control stop 호출");
+    tracing::info!(
+        pid = pid,
+        control = iris_control_path(),
+        "iris_control stop 호출"
+    );
     run_iris_control("stop").await?;
     wait_for_process_exit(SIGTERM_WAIT_SECS).await;
     if iris_pid(adb).await.is_some() {
@@ -92,9 +97,7 @@ fn shell_quote(value: &str) -> String {
 
 async fn run_iris_control(subcommand: &str) -> Result<()> {
     let spec = LaunchSpec::iris_control(subcommand);
-    let output = Command::from(spec.to_command())
-        .output()
-        .await?;
+    let output = Command::from(spec.to_command()).output().await?;
 
     if output.status.success() {
         return Ok(());

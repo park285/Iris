@@ -22,9 +22,10 @@ struct AuthContractVector {
 
 #[test]
 fn shared_auth_vectors_match_rust_signer() {
-    let vectors: Vec<AuthContractVector> =
-        serde_json::from_str(&fs::read_to_string(resolve_fixture_path()).expect("fixture should load"))
-            .expect("fixture should parse");
+    let vectors: Vec<AuthContractVector> = serde_json::from_str(
+        &fs::read_to_string(resolve_fixture_path()).expect("fixture should load"),
+    )
+    .expect("fixture should parse");
     assert!(
         vectors.len() >= 7,
         "shared auth contract should keep at least 7 vectors"

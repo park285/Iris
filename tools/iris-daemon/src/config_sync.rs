@@ -147,10 +147,7 @@ mod tests {
 
         let result = render_template_json(template, &vars).unwrap();
 
-        assert_eq!(
-            normalize_json(&result),
-            r#"{"token":"\"quoted\"\nvalue"}"#
-        );
+        assert_eq!(normalize_json(&result), r#"{"token":"\"quoted\"\nvalue"}"#);
     }
 
     #[test]

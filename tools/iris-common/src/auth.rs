@@ -23,6 +23,7 @@ pub fn canonical_target(path: &str, query: &[(String, String)]) -> String {
 }
 
 /// HMAC 서명에 사용하는 canonical request 문자열을 생성한다.
+#[allow(clippy::too_many_arguments)] // 서명 프로토콜 필드 순서를 그대로 받는 경계 함수
 pub fn canonical_request(
     method: &str,
     target: &str,
@@ -116,7 +117,13 @@ mod tests {
     #[test]
     fn canonical_request_serializes_protocol_fields_in_signing_order() {
         assert_eq!(
-            canonical_request("post", "/reply?room=1", "1700000000000", "nonce-1", "abc123"),
+            canonical_request(
+                "post",
+                "/reply?room=1",
+                "1700000000000",
+                "nonce-1",
+                "abc123"
+            ),
             "POST\n/reply?room=1\n1700000000000\nnonce-1\nabc123"
         );
     }
