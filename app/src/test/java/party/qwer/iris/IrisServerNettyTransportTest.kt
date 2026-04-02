@@ -1,10 +1,16 @@
 package party.qwer.iris
 
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Request
 import party.qwer.iris.http.SseEventEnvelope
 import party.qwer.iris.http.initialSseFrames
 import party.qwer.iris.http.isBridgeReady
 import party.qwer.iris.model.ImageBridgeDiscoveryHook
 import party.qwer.iris.model.ImageBridgeHealthResult
+import java.nio.file.Files
+import java.util.concurrent.TimeUnit
+import kotlin.io.path.deleteIfExists
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -164,9 +170,61 @@ class IrisServerNettyTransportTest {
     }
 
     @Test
-    fun `runtime server disables http2 and enables h2c by default`() {
-        assertFalse(IrisServer.runtimeHttp2Enabled())
+    fun `runtime server enables http2 and h2c by default`() {
+        assertTrue(IrisServer.runtimeHttp2Enabled())
         assertTrue(IrisServer.runtimeH2cEnabled())
+    }
+
+    @Test
+    fun `runtime server accepts h2c prior knowledge health request`() {
+        val configDir = Files.createTempDirectory("iris-server-h2c-test")
+        val configPath = configDir.resolve("config.json")
+        val port = reservePort()
+        configPath.toFile().writeText(
+            """
+            {
+              "botHttpPort": $port,
+              "inboundSigningSecret": "inbound",
+              "outboundWebhookToken": "outbound",
+              "botControlToken": "control",
+              "bridgeToken": "bridge"
+            }
+            """.trimIndent(),
+        )
+
+        val server =
+            IrisServer(
+                configManager = ConfigManager(configPath = configPath.toString()),
+                notificationReferer = "ref",
+                messageSender = noopMessageSender,
+                bindHost = "127.0.0.1",
+            )
+        val client =
+            OkHttpClient
+                .Builder()
+                .protocols(listOf(Protocol.H2_PRIOR_KNOWLEDGE))
+                .readTimeout(5, TimeUnit.SECONDS)
+                .build()
+
+        try {
+            server.startServer()
+            val response =
+                client
+                    .newCall(
+                        Request
+                            .Builder()
+                            .url("http://127.0.0.1:$port/health")
+                            .get()
+                            .build(),
+                    ).execute()
+
+            assertEquals(200, response.code)
+            assertEquals("""{"status":"ok"}""", response.body.string())
+        } finally {
+            runCatching { server.stopServer() }
+            configPath.deleteIfExists()
+            configDir.deleteIfExists()
+        }
     }
 
     @Test
@@ -194,4 +252,50 @@ class IrisServerNettyTransportTest {
             System.setProperty(NETTY_NO_NATIVE_PROPERTY, previous)
         }
     }
+
+    private fun reservePort(): Int =
+        java.net.ServerSocket(0).use { socket ->
+            socket.localPort
+        }
+
+    private val noopMessageSender =
+        object : MessageSender {
+            override suspend fun sendMessageSuspend(
+                referer: String,
+                chatId: Long,
+                msg: String,
+                threadId: Long?,
+                threadScope: Int?,
+                requestId: String?,
+            ): ReplyAdmissionResult = ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
+
+            override suspend fun sendNativeMultiplePhotosHandlesSuspend(
+                room: Long,
+                imageHandles: List<VerifiedImagePayloadHandle>,
+                threadId: Long?,
+                threadScope: Int?,
+                requestId: String?,
+            ): ReplyAdmissionResult =
+                try {
+                    ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
+                } finally {
+                    imageHandles.forEach { handle ->
+                        runCatching { handle.close() }
+                    }
+                }
+
+            override suspend fun sendTextShareSuspend(
+                room: Long,
+                msg: String,
+                requestId: String?,
+            ): ReplyAdmissionResult = ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
+
+            override suspend fun sendReplyMarkdownSuspend(
+                room: Long,
+                msg: String,
+                threadId: Long?,
+                threadScope: Int?,
+                requestId: String?,
+            ): ReplyAdmissionResult = ReplyAdmissionResult(ReplyAdmissionStatus.ACCEPTED)
+        }
 }
