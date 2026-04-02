@@ -127,6 +127,24 @@ class AppRuntimeWiringTest {
         assertNotNull(plan.firstOrNull { it.name == "flushCheckpointJournal" })
     }
 
+    @Test
+    fun `startup rollback runs deferred steps in reverse order and continues after failure`() {
+        val calls = mutableListOf<String>()
+        val rollback =
+            StartupRollback().also {
+                it.defer { calls += "config" }
+                it.defer {
+                    calls += "reply"
+                    error("reply rollback failed")
+                }
+                it.defer { calls += "server" }
+            }
+
+        rollback.run()
+
+        assertEquals(listOf("server", "reply", "config"), calls)
+    }
+
     private fun snapshotData(chatId: Long): RoomSnapshotData =
         RoomSnapshotData(
             chatId = ChatId(chatId),

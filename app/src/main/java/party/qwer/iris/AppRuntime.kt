@@ -10,6 +10,7 @@ import party.qwer.iris.http.ReplyImageIngressPolicy
 import party.qwer.iris.persistence.CheckpointJournal
 import party.qwer.iris.persistence.SnapshotStateStore
 import party.qwer.iris.persistence.SqliteDriver
+import java.util.ArrayDeque
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal class AppRuntime(
@@ -24,7 +25,13 @@ internal class AppRuntime(
         if (!started.compareAndSet(false, true)) {
             return
         }
-        runningSnapshot = assembleStartup().toRunningSnapshot()
+        try {
+            runningSnapshot = assembleStartup().toRunningSnapshot()
+        } catch (error: Throwable) {
+            started.set(false)
+            runningSnapshot = null
+            throw error
+        }
     }
 
     suspend fun stop() {
@@ -40,127 +47,168 @@ internal class AppRuntime(
     }
 
     private fun assembleStartup(): AppRuntimeStartupAssembly {
+        val rollback = StartupRollback()
         val configManager = ConfigManager()
+        rollback.defer {
+            if (!configManager.saveConfigNow()) {
+                IrisLogger.error("[AppRuntime] Failed to save config during startup rollback")
+            }
+        }
         val bridgeClient = UdsImageBridgeClient()
         val replyImageIngressPolicy = ReplyImageIngressPolicy.fromEnv()
+        try {
+            val replyService =
+                ReplyRuntimeFactory
+                    .create(
+                        config = configManager,
+                        bridgeClient = bridgeClient,
+                        imagePolicy = replyImageIngressPolicy.imagePolicy,
+                    ).replyService
+            runBlocking { replyService.startSuspend() }
+            rollback.defer { runBlocking { replyService.shutdownSuspend() } }
+            IrisLogger.info("Message sender thread started")
 
-        val replyService =
-            ReplyRuntimeFactory
-                .create(
-                    config = configManager,
-                    bridgeClient = bridgeClient,
-                    imagePolicy = replyImageIngressPolicy.imagePolicy,
-                ).replyService
-        runBlocking { replyService.startSuspend() }
-        IrisLogger.info("Message sender thread started")
+            val storageRuntime = RuntimeBuilders.createStorageRuntime(configManager)
+            val kakaoDb = storageRuntime.kakaoDb
+            rollback.defer(kakaoDb::closeConnection)
+            val memberRepo = storageRuntime.memberRepository
 
-        val storageRuntime = RuntimeBuilders.createStorageRuntime(configManager)
-        val kakaoDb = storageRuntime.kakaoDb
-        val memberRepo = storageRuntime.memberRepository
-
-        val persistenceRuntime =
-            PersistenceFactory.createSqliteRuntime(
-                driver = PersistenceFactory.openAndroidDriver(),
-            )
-        val persistenceDriver = persistenceRuntime.driver
-        val webhookOutboxStore = persistenceRuntime.webhookOutboxStore
-        val checkpointJournal = persistenceRuntime.checkpointJournal
-        val snapshotStateStore = persistenceRuntime.snapshotStateStore
-        val webhookOutboxDispatcher = WebhookOutboxDispatcher(configManager, webhookOutboxStore)
-        webhookOutboxDispatcher.start()
-        val sseEventBus = SseEventBus(bufferSize = 100)
-        val snapshotRuntime =
-            SnapshotRuntimeFactory.create(
-                configManager = configManager,
-                kakaoDb = kakaoDb,
-                checkpointJournal = checkpointJournal,
-                memberRepository = memberRepo,
-                roomDirectoryQueries = storageRuntime.roomDirectoryQueries,
-                webhookOutboxStore = webhookOutboxStore,
-                sseEventBus = sseEventBus,
-                snapshotStateStore = snapshotStateStore,
-                roomEventStore = persistenceRuntime.roomEventStore,
-                missingTombstoneTtlMs = runtimeOptions.snapshotMissingTombstoneTtlMs,
-            )
-        val snapshotScope = snapshotRuntime.snapshotScope
-        val observerHelper = snapshotRuntime.observerHelper
-        observerHelper.seedSnapshotCache()
-
-        val dbObserver = snapshotRuntime.dbObserver
-        dbObserver.startPolling()
-        IrisLogger.info("DBObserver started")
-
-        val snapshotObserver = snapshotRuntime.snapshotObserver
-        snapshotObserver.start()
-        IrisLogger.info("SnapshotObserver started")
-
-        val kakaoProfileIndexer =
-            KakaoProfileIndexer(
-                profileStore = KakaoDbNotificationIdentityStore(kakaoDb),
-            )
-        kakaoProfileIndexer.launch()
-        IrisLogger.info("Kakao profile indexer started")
-
-        val imageDeleter =
-            ImageDeleter(
-                IRIS_IMAGE_DIR_PATH,
-                runtimeOptions.imageDeletionIntervalMs,
-                runtimeOptions.imageRetentionMs,
-            ).also {
-                it.startDeletion()
-                IrisLogger.info(
-                    "ImageDeleter started (intervalMs=${runtimeOptions.imageDeletionIntervalMs}, " +
-                        "retentionMs=${runtimeOptions.imageRetentionMs}).",
+            val persistenceRuntime =
+                PersistenceFactory.createSqliteRuntime(
+                    driver = PersistenceFactory.openAndroidDriver(),
                 )
-            }
-
-        val bridgeHealthCache =
-            BridgeHealthCache(
-                healthProvider = bridgeClient::queryHealth,
-                refreshIntervalMs = runtimeOptions.bridgeHealthRefreshMs,
-            ).also { it.start() }
-
-        val irisServer =
-            if (runtimeOptions.disableHttp) {
-                IrisLogger.info("[AppRuntime] IRIS_DISABLE_HTTP=1; skipping Iris HTTP server startup")
-                null
-            } else {
-                IrisServer(
-                    configManager,
-                    notificationReferer,
-                    replyService,
-                    replyImageIngressPolicy = replyImageIngressPolicy,
-                    bridgeHealthProvider = bridgeHealthCache::current,
-                    replyStatusProvider = replyService::replyStatusOrNull,
-                    memberRepo = memberRepo,
+            val persistenceDriver = persistenceRuntime.driver
+            rollback.defer(persistenceDriver::close)
+            val webhookOutboxStore = persistenceRuntime.webhookOutboxStore
+            val checkpointJournal = persistenceRuntime.checkpointJournal
+            val snapshotStateStore = persistenceRuntime.snapshotStateStore
+            rollback.defer(snapshotStateStore::close)
+            val webhookOutboxDispatcher = WebhookOutboxDispatcher(configManager, webhookOutboxStore)
+            webhookOutboxDispatcher.start()
+            rollback.defer(webhookOutboxDispatcher::close)
+            val sseEventBus = SseEventBus(bufferSize = 100)
+            rollback.defer(sseEventBus::close)
+            val snapshotRuntime =
+                SnapshotRuntimeFactory.create(
+                    configManager = configManager,
+                    kakaoDb = kakaoDb,
+                    checkpointJournal = checkpointJournal,
+                    memberRepository = memberRepo,
+                    roomDirectoryQueries = storageRuntime.roomDirectoryQueries,
+                    webhookOutboxStore = webhookOutboxStore,
                     sseEventBus = sseEventBus,
+                    snapshotStateStore = snapshotStateStore,
                     roomEventStore = persistenceRuntime.roomEventStore,
-                    bindHost = runtimeOptions.bindHost,
-                    nettyWorkerThreads = runtimeOptions.httpWorkerThreads,
-                ).also {
-                    it.startServer()
-                    IrisLogger.info("Iris Server started")
-                }
-            }
+                    missingTombstoneTtlMs = runtimeOptions.snapshotMissingTombstoneTtlMs,
+                )
+            val snapshotScope = snapshotRuntime.snapshotScope
+            rollback.defer(snapshotScope::cancel)
+            val observerHelper = snapshotRuntime.observerHelper
+            observerHelper.seedSnapshotCache()
+            rollback.defer(observerHelper::close)
 
-        return AppRuntimeStartupAssembly(
-            configManager = configManager,
-            replyService = replyService,
-            kakaoDb = kakaoDb,
-            webhookOutboxDispatcher = webhookOutboxDispatcher,
-            persistenceDriver = persistenceDriver,
-            sseEventBus = sseEventBus,
-            checkpointJournal = checkpointJournal,
-            snapshotStateStore = snapshotStateStore,
-            snapshotScope = snapshotScope,
-            observerHelper = observerHelper,
-            dbObserver = dbObserver,
-            snapshotObserver = snapshotObserver,
-            kakaoProfileIndexer = kakaoProfileIndexer,
-            imageDeleter = imageDeleter,
-            bridgeHealthCache = bridgeHealthCache,
-            irisServer = irisServer,
-        )
+            val dbObserver = snapshotRuntime.dbObserver
+            dbObserver.startPolling()
+            rollback.defer(dbObserver::stopPolling)
+            IrisLogger.info("DBObserver started")
+
+            val snapshotObserver = snapshotRuntime.snapshotObserver
+            snapshotObserver.start()
+            rollback.defer(snapshotObserver::stop)
+            IrisLogger.info("SnapshotObserver started")
+
+            val kakaoProfileIndexer =
+                KakaoProfileIndexer(
+                    profileStore = KakaoDbNotificationIdentityStore(kakaoDb),
+                )
+            kakaoProfileIndexer.launch()
+            rollback.defer(kakaoProfileIndexer::stop)
+            IrisLogger.info("Kakao profile indexer started")
+
+            val imageDeleter =
+                ImageDeleter(
+                    IRIS_IMAGE_DIR_PATH,
+                    runtimeOptions.imageDeletionIntervalMs,
+                    runtimeOptions.imageRetentionMs,
+                ).also {
+                    it.startDeletion()
+                    IrisLogger.info(
+                        "ImageDeleter started (intervalMs=${runtimeOptions.imageDeletionIntervalMs}, " +
+                            "retentionMs=${runtimeOptions.imageRetentionMs}).",
+                    )
+                }
+            rollback.defer(imageDeleter::stopDeletion)
+
+            val bridgeHealthCache =
+                BridgeHealthCache(
+                    healthProvider = bridgeClient::queryHealth,
+                    refreshIntervalMs = runtimeOptions.bridgeHealthRefreshMs,
+                ).also { it.start() }
+            rollback.defer(bridgeHealthCache::stop)
+
+            val irisServer =
+                if (runtimeOptions.disableHttp) {
+                    IrisLogger.info("[AppRuntime] IRIS_DISABLE_HTTP=1; skipping Iris HTTP server startup")
+                    null
+                } else {
+                    IrisServer(
+                        configManager,
+                        notificationReferer,
+                        replyService,
+                        replyImageIngressPolicy = replyImageIngressPolicy,
+                        bridgeHealthProvider = bridgeHealthCache::current,
+                        replyStatusProvider = replyService::replyStatusOrNull,
+                        memberRepo = memberRepo,
+                        sseEventBus = sseEventBus,
+                        roomEventStore = persistenceRuntime.roomEventStore,
+                        bindHost = runtimeOptions.bindHost,
+                        nettyWorkerThreads = runtimeOptions.httpWorkerThreads,
+                    ).also {
+                        it.startServer()
+                        rollback.defer(it::stopServer)
+                        IrisLogger.info("Iris Server started")
+                    }
+                }
+
+            return AppRuntimeStartupAssembly(
+                configManager = configManager,
+                replyService = replyService,
+                kakaoDb = kakaoDb,
+                webhookOutboxDispatcher = webhookOutboxDispatcher,
+                persistenceDriver = persistenceDriver,
+                sseEventBus = sseEventBus,
+                checkpointJournal = checkpointJournal,
+                snapshotStateStore = snapshotStateStore,
+                snapshotScope = snapshotScope,
+                observerHelper = observerHelper,
+                dbObserver = dbObserver,
+                snapshotObserver = snapshotObserver,
+                kakaoProfileIndexer = kakaoProfileIndexer,
+                imageDeleter = imageDeleter,
+                bridgeHealthCache = bridgeHealthCache,
+                irisServer = irisServer,
+            )
+        } catch (error: Throwable) {
+            rollback.run()
+            throw error
+        }
+    }
+}
+
+internal class StartupRollback {
+    private val actions = ArrayDeque<() -> Unit>()
+
+    fun defer(action: () -> Unit) {
+        actions.addFirst(action)
+    }
+
+    fun run() {
+        actions.forEach { action ->
+            runCatching { action() }
+                .onFailure { rollbackError ->
+                    IrisLogger.error("[AppRuntime] Startup rollback failed: ${rollbackError.message}", rollbackError)
+                }
+        }
     }
 }
 
