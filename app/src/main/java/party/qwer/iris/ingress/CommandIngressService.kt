@@ -5,6 +5,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import org.json.JSONObject
@@ -28,21 +29,6 @@ import party.qwer.iris.stableLogHash
 import java.io.Closeable
 import kotlin.math.absoluteValue
 
-private const val DEFAULT_DISPATCH_PARTITION_COUNT = 4
-private const val DEFAULT_PARTITION_QUEUE_CAPACITY = 64
-
-data class CommandIngressDispatchConfig(
-    val partitionCount: Int = DEFAULT_DISPATCH_PARTITION_COUNT,
-    val partitionQueueCapacity: Int = DEFAULT_PARTITION_QUEUE_CAPACITY,
-    val maxBufferedDispatches: Int = partitionCount * partitionQueueCapacity,
-) {
-    init {
-        require(partitionCount > 0) { "partitionCount must be positive" }
-        require(partitionQueueCapacity > 0) { "partitionQueueCapacity must be positive" }
-        require(maxBufferedDispatches > 0) { "maxBufferedDispatches must be positive" }
-    }
-}
-
 internal class CommandIngressService(
     private val db: ChatLogRepository,
     private val config: BotIdentityProvider,
@@ -51,21 +37,13 @@ internal class CommandIngressService(
     private val routingGateway: RoutingGateway,
     private val learnFromTimestampCorrelation: ((chatId: Long, userId: Long, messageCreatedAtMs: Long) -> Unit)? = null,
     dispatchDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    private val dispatchConfig: CommandIngressDispatchConfig = CommandIngressDispatchConfig(),
+    private val partitioningPolicy: IngressPartitioningPolicy = IngressPartitioningPolicy(),
     private val onMarkDirty: (chatId: Long) -> Unit,
 ) : Closeable {
     private val dispatchScope = CoroutineScope(SupervisorJob() + dispatchDispatcher)
-    private val dispatchSignals = List(dispatchConfig.partitionCount) { Channel<Unit>(Channel.CONFLATED) }
+    private val dispatchSignals = List(partitioningPolicy.partitionCount) { Channel<Unit>(Channel.CONFLATED) }
     private val dispatchLoopJobs: List<Job>
-
-    private val pendingLock = Any()
-    private val bufferedDispatches = ArrayDeque<DispatchRequest>()
-    private val pendingDispatches = List(dispatchConfig.partitionCount) { ArrayDeque<DispatchRequest>() }
-    private val orderedPendingLogIds = ArrayDeque<Long>()
-    private val trackedPendingLogIds = linkedSetOf<Long>()
-    private val completedLogIds = linkedSetOf<Long>()
-    private val blockedDispatches = arrayOfNulls<DispatchRequest>(dispatchConfig.partitionCount)
-    private var activeDispatchCount = 0
+    private val backlog = IngressBacklog(partitioningPolicy, ::partitionIndexForChat)
 
     @Volatile
     private var lastCommittedLogId: Long = 0L
@@ -76,9 +54,9 @@ internal class CommandIngressService(
     @Volatile
     private var lastBufferedLogId: Long = 0L
 
-    private val senderNameCache = lruMap<SenderNameCacheKey, String>(256)
-    private val roomMetadataCache = lruMap<Long, KakaoDB.RoomMetadata>(256)
     private val recentCommandFingerprints = lruMap<CommandFingerprint, Long>(MAX_COMMAND_FINGERPRINTS)
+    private val senderNameResolver = SenderNameResolver(db = db, memberRepo = memberRepo)
+    private val roomMetadataResolver = RoomMetadataResolver(db = db)
 
     init {
         dispatchLoopJobs =
@@ -133,16 +111,11 @@ internal class CommandIngressService(
     internal fun lastBufferedLogId(): Long = lastBufferedLogId
 
     internal fun progressSnapshot(): IngressProgressSnapshot =
-        synchronized(pendingLock) {
-            IngressProgressSnapshot(
-                lastPolledLogId = lastPolledLogId,
-                lastBufferedLogId = lastBufferedLogId,
-                lastCommittedLogId = lastCommittedLogId,
-                bufferedCount = trackedPendingLogIds.size,
-                blockedPartitionCount = blockedDispatches.count { it != null },
-                activeDispatchCount = activeDispatchCount,
-            )
-        }
+        backlog.snapshot(
+            lastPolledLogId = lastPolledLogId,
+            lastBufferedLogId = lastBufferedLogId,
+            lastCommittedLogId = lastCommittedLogId,
+        )
 
     override fun close() {
         dispatchSignals.forEach { signal ->
@@ -151,6 +124,7 @@ internal class CommandIngressService(
         dispatchLoopJobs.forEach { job ->
             job.cancel()
         }
+        dispatchScope.cancel()
         runCatching {
             routingGateway.close()
         }.onFailure {
@@ -158,10 +132,7 @@ internal class CommandIngressService(
         }
     }
 
-    private fun hasBlockedDispatch(): Boolean =
-        synchronized(pendingLock) {
-            blockedDispatches.any { it != null }
-        }
+    private fun hasBlockedDispatch(): Boolean = backlog.hasBlockedDispatch()
 
     private fun pollNewLogs(limit: Int): List<KakaoDB.ChatLogEntry> {
         val newLogs = db.pollChatLogsAfter(lastPolledLogId, limit)
@@ -174,91 +145,35 @@ internal class CommandIngressService(
     private fun bufferPolledLogs(newLogs: List<KakaoDB.ChatLogEntry>) {
         for (logEntry in newLogs) {
             onMarkDirty(logEntry.chatId)
-            if (!bufferDispatch(DispatchRequest(logEntry))) {
+            if (!bufferDispatch(ChatLogDispatch(logEntry))) {
                 break
             }
         }
     }
 
-    private fun remainingBufferCapacity(): Int =
-        synchronized(pendingLock) {
-            (dispatchConfig.maxBufferedDispatches - trackedPendingLogIds.size).coerceAtLeast(0)
-        }
+    private fun remainingBufferCapacity(): Int = backlog.remainingCapacity()
 
     private fun signalBlockedDispatches() {
-        blockedDispatches.indices.forEach { partitionIndex ->
-            val hasBlocked =
-                synchronized(pendingLock) {
-                    blockedDispatches[partitionIndex] != null
-                }
-            if (hasBlocked) {
-                dispatchSignals[partitionIndex].trySend(Unit)
-            }
+        backlog.blockedPartitions().forEach { partitionIndex ->
+            dispatchSignals[partitionIndex].trySend(Unit)
         }
     }
 
-    private fun bufferDispatch(request: DispatchRequest): Boolean {
-        val enqueued =
-            synchronized(pendingLock) {
-                if (request.logId <= lastCommittedLogId) {
-                    return true
-                }
-                if (trackedPendingLogIds.contains(request.logId)) {
-                    return true
-                }
-                if (trackedPendingLogIds.size >= dispatchConfig.maxBufferedDispatches) {
-                    return false
-                }
-
-                bufferedDispatches.addLast(request)
-                trackedPendingLogIds += request.logId
-                orderedPendingLogIds.addLast(request.logId)
-                if (request.logId > lastBufferedLogId) {
-                    lastBufferedLogId = request.logId
-                }
-                true
-            }
+    private fun bufferDispatch(dispatch: ChatLogDispatch): Boolean {
+        val enqueued = backlog.buffer(dispatch, lastCommittedLogId)
+        if (enqueued && dispatch.logId > lastBufferedLogId) {
+            lastBufferedLogId = dispatch.logId
+        }
         if (!enqueued) {
             IrisLogger.error(
                 "[CommandIngressService] Dispatch buffer saturated: " +
-                    "chatId=${request.logEntry.chatId}, logId=${request.logId}",
+                    "chatId=${dispatch.logEntry.chatId}, logId=${dispatch.logId}",
             )
         }
         return enqueued
     }
 
-    private fun scheduleBufferedDispatches(): Set<Int> {
-        val signaledPartitions =
-            synchronized(pendingLock) {
-                scheduleBufferedDispatchesLocked()
-            }
-        return signaledPartitions
-    }
-
-    private fun scheduleBufferedDispatchesLocked(): Set<Int> {
-        if (bufferedDispatches.isEmpty()) {
-            return emptySet()
-        }
-
-        val deferred = ArrayDeque<DispatchRequest>()
-        val signaledPartitions = linkedSetOf<Int>()
-        while (bufferedDispatches.isNotEmpty()) {
-            val request = bufferedDispatches.removeFirst()
-            val partitionIndex = partitionIndexForChat(request.logEntry.chatId)
-            if (canQueueDispatchLocked(partitionIndex)) {
-                pendingDispatches[partitionIndex].addLast(request)
-                signaledPartitions += partitionIndex
-            } else {
-                deferred.addLast(request)
-            }
-        }
-        bufferedDispatches.addAll(deferred)
-        return signaledPartitions
-    }
-
-    private fun canQueueDispatchLocked(partitionIndex: Int): Boolean =
-        blockedDispatches[partitionIndex] == null &&
-            pendingDispatches[partitionIndex].size < dispatchConfig.partitionQueueCapacity
+    private fun scheduleBufferedDispatches(): Set<Int> = backlog.scheduleReadyPartitions()
 
     private fun signalDispatches(partitionIndexes: Set<Int>) {
         partitionIndexes.forEach { partitionIndex ->
@@ -268,70 +183,24 @@ internal class CommandIngressService(
 
     private fun drainDispatchQueue(partitionIndex: Int) {
         while (true) {
-            val request = takeNextDispatch(partitionIndex) ?: return
-            val result = processLogEntry(request.logEntry)
-            val shouldContinue = completeDispatch(partitionIndex, request, result)
-            if (!shouldContinue) {
+            val dispatch = backlog.takeNext(partitionIndex) ?: return
+            val outcome = processLogEntry(dispatch.logEntry)
+            val continuation =
+                backlog.complete(
+                    partitionIndex = partitionIndex,
+                    dispatch = dispatch,
+                    outcome = outcome,
+                    onAdvanceCommittedLogId = ::advanceCommittedLogId,
+                )
+            signalDispatches(continuation.signalPartitions)
+            if (!continuation.shouldContinue) {
                 return
             }
         }
     }
 
-    private fun takeNextDispatch(partitionIndex: Int): DispatchRequest? =
-        synchronized(pendingLock) {
-            blockedDispatches[partitionIndex]?.let { blocked ->
-                blockedDispatches[partitionIndex] = null
-                activeDispatchCount += 1
-                return blocked
-            }
-
-            pendingDispatches[partitionIndex].removeFirstOrNull()?.also {
-                activeDispatchCount += 1
-            }
-        }
-
-    private fun completeDispatch(
-        partitionIndex: Int,
-        request: DispatchRequest,
-        result: DispatchResult,
-    ): Boolean {
-        val signalPartitions: Set<Int>
-        val shouldContinue =
-            synchronized(pendingLock) {
-                activeDispatchCount -= 1
-                when (result) {
-                    DispatchResult.COMPLETED -> {
-                        completedLogIds += request.logId
-                        advanceCommittedPrefixLocked()
-                        signalPartitions = scheduleBufferedDispatchesLocked()
-                        true
-                    }
-
-                    DispatchResult.RETRY_LATER -> {
-                        blockedDispatches[partitionIndex] = request
-                        signalPartitions = emptySet()
-                        false
-                    }
-                }
-            }
-        signalDispatches(signalPartitions)
-        return shouldContinue
-    }
-
-    private fun advanceCommittedPrefixLocked() {
-        while (orderedPendingLogIds.isNotEmpty()) {
-            val nextLogId = orderedPendingLogIds.first()
-            if (!completedLogIds.remove(nextLogId)) {
-                return
-            }
-            orderedPendingLogIds.removeFirst()
-            trackedPendingLogIds.remove(nextLogId)
-            advanceCommittedLogId(nextLogId)
-        }
-    }
-
-    private fun processLogEntry(logEntry: KakaoDB.ChatLogEntry): DispatchResult {
-        val metadata = parseMetadata(logEntry) ?: return DispatchResult.COMPLETED
+    private fun processLogEntry(logEntry: KakaoDB.ChatLogEntry): DispatchOutcome {
+        val metadata = parseMetadata(logEntry) ?: return DispatchOutcome.COMPLETED
         val decryptedMessage = decryptMessage(logEntry.message, metadata.enc, logEntry.userId)
         val parsedCommand = CommandParser.parse(decryptedMessage)
 
@@ -342,11 +211,11 @@ internal class CommandIngressService(
                 "[CommandIngressService] Skipping origin=${metadata.origin} for logId=${logEntry.id}, " +
                     "chatId=${logEntry.chatId}, userId=${logEntry.userId}",
             )
-            return DispatchResult.COMPLETED
+            return DispatchOutcome.COMPLETED
         }
 
         if (!shouldRouteCommand(logEntry, parsedCommand, metadata.origin)) {
-            return DispatchResult.COMPLETED
+            return DispatchOutcome.COMPLETED
         }
 
         return routeCommand(logEntry, parsedCommand, metadata.enc)
@@ -433,9 +302,9 @@ internal class CommandIngressService(
         logEntry: KakaoDB.ChatLogEntry,
         parsedCommand: ParsedCommand,
         enc: Int,
-    ): DispatchResult {
+    ): DispatchOutcome {
         val threadMetadata = resolveObservedThreadMetadata(logEntry, enc)
-        val roomMetadata = resolveRoomMetadata(logEntry.chatId)
+        val roomMetadata = roomMetadataResolver.resolve(logEntry.chatId)
         val senderRole =
             memberRepo?.resolveSenderRole(
                 logEntry.userId,
@@ -446,7 +315,7 @@ internal class CommandIngressService(
                 text = parsedCommand.normalizedText,
                 room = logEntry.chatId.toString(),
                 sender =
-                    resolveSenderName(
+                    senderNameResolver.resolve(
                         chatId = logEntry.chatId,
                         userId = logEntry.userId,
                         linkId = roomMetadata.linkId.toLongOrNull(),
@@ -468,7 +337,7 @@ internal class CommandIngressService(
             RoutingResult.SKIPPED,
             -> {
                 rememberCommandFingerprint(logEntry, parsedCommand.normalizedText)
-                DispatchResult.COMPLETED
+                DispatchOutcome.COMPLETED
             }
 
             RoutingResult.RETRY_LATER -> {
@@ -476,46 +345,10 @@ internal class CommandIngressService(
                     "[CommandIngressService] Failed to admit message for retryable delivery: " +
                         "chatId=${logEntry.chatId}, userId=${logEntry.userId}, logId=${logEntry.id}",
                 )
-                DispatchResult.RETRY_LATER
+                DispatchOutcome.RETRY_LATER
             }
         }
     }
-
-    private fun <K, V : Any> cachedResolve(
-        cache: LinkedHashMap<K, V>,
-        key: K,
-        fallback: V,
-        fetch: (K) -> V,
-    ): V {
-        synchronized(cache) { cache[key] }?.let { return it }
-        val resolved =
-            try {
-                fetch(key)
-            } catch (e: Exception) {
-                IrisLogger.debugLazy { "[CommandIngressService] cachedResolve failed for key=$key: ${e.message}" }
-                return fallback
-            }
-        return synchronized(cache) { cache.getOrPut(key) { resolved } }
-    }
-
-    private fun resolveSenderName(
-        chatId: Long,
-        userId: Long,
-        linkId: Long?,
-    ): String =
-        cachedResolve(
-            senderNameCache,
-            SenderNameCacheKey(chatId = chatId, userId = userId),
-            userId.toString(),
-        ) { key ->
-            memberRepo?.resolveDisplayName(
-                userId = key.userId,
-                chatId = key.chatId,
-                linkId = linkId,
-            ) ?: db.resolveSenderName(key.userId)
-        }
-
-    private fun resolveRoomMetadata(chatId: Long): KakaoDB.RoomMetadata = cachedResolve(roomMetadataCache, chatId, KakaoDB.RoomMetadata()) { db.resolveRoomMetadata(it) }
 
     private fun isDuplicateCommand(
         logEntry: KakaoDB.ChatLogEntry,
@@ -550,7 +383,7 @@ internal class CommandIngressService(
         checkpointJournal.advance(CHECKPOINT_STREAM_CHAT_LOGS, logId)
     }
 
-    private fun partitionIndexForChat(chatId: Long): Int = chatId.hashCode().absoluteValue % dispatchConfig.partitionCount
+    private fun partitionIndexForChat(chatId: Long): Int = chatId.hashCode().absoluteValue % partitioningPolicy.partitionCount
 
     companion object {
         private const val MAX_COMMAND_FINGERPRINTS = 256
@@ -565,30 +398,13 @@ internal class CommandIngressService(
         val message: String,
     )
 
-    private data class SenderNameCacheKey(
-        val chatId: Long,
-        val userId: Long,
-    )
-
     private data class ParsedLogMetadata(
         val enc: Int,
         val origin: String,
     )
-
-    private data class DispatchRequest(
-        val logEntry: KakaoDB.ChatLogEntry,
-    ) {
-        val logId: Long
-            get() = logEntry.id
-    }
-
-    private enum class DispatchResult {
-        COMPLETED,
-        RETRY_LATER,
-    }
 }
 
-private fun <K, V> lruMap(maxSize: Int): LinkedHashMap<K, V> =
+internal fun <K, V> lruMap(maxSize: Int): LinkedHashMap<K, V> =
     object : LinkedHashMap<K, V>(maxSize, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, V>?): Boolean = size > maxSize
     }
@@ -600,4 +416,6 @@ internal data class IngressProgressSnapshot(
     val bufferedCount: Int,
     val blockedPartitionCount: Int,
     val activeDispatchCount: Int,
+    val pendingByPartition: List<Int> = emptyList(),
+    val blockedLogIds: List<Long> = emptyList(),
 )

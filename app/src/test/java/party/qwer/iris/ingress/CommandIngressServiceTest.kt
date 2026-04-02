@@ -2,6 +2,7 @@ package party.qwer.iris.ingress
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -275,7 +276,7 @@ class CommandIngressServiceTest {
                     checkpointJournal = FakeCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
                     routingGateway = FakeRoutingGateway(result = RoutingResult.RETRY_LATER),
                     dispatchDispatcher = StandardTestDispatcher(testScheduler),
-                    dispatchConfig = CommandIngressDispatchConfig(partitionCount = 1, partitionQueueCapacity = 8),
+                    partitioningPolicy = IngressPartitioningPolicy(partitionCount = 1, partitionQueueCapacity = 8),
                     onMarkDirty = {},
                 )
 
@@ -308,7 +309,7 @@ class CommandIngressServiceTest {
                     checkpointJournal = FakeCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
                     routingGateway = FakeRoutingGateway(result = RoutingResult.RETRY_LATER),
                     dispatchDispatcher = StandardTestDispatcher(testScheduler),
-                    dispatchConfig = CommandIngressDispatchConfig(partitionCount = 1, partitionQueueCapacity = 1, maxBufferedDispatches = 1),
+                    partitioningPolicy = IngressPartitioningPolicy(partitionCount = 1, partitionQueueCapacity = 1, maxBufferedDispatches = 1),
                     onMarkDirty = {},
                 )
 
@@ -359,7 +360,7 @@ class CommandIngressServiceTest {
                     checkpointJournal = FakeCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
                     routingGateway = routingGateway,
                     dispatchDispatcher = dispatcher,
-                    dispatchConfig = CommandIngressDispatchConfig(partitionCount = 2, partitionQueueCapacity = 1, maxBufferedDispatches = 4),
+                    partitioningPolicy = IngressPartitioningPolicy(partitionCount = 2, partitionQueueCapacity = 1, maxBufferedDispatches = 4),
                     onMarkDirty = {},
                 )
 
@@ -382,6 +383,8 @@ class CommandIngressServiceTest {
                     bufferedCount = 3,
                     blockedPartitionCount = 1,
                     activeDispatchCount = 0,
+                    pendingByPartition = listOf(0, 0),
+                    blockedLogIds = listOf(11L),
                 ),
                 ingress.progressSnapshot(),
             )
@@ -422,7 +425,7 @@ class CommandIngressServiceTest {
                             override fun close() {}
                         },
                     dispatchDispatcher = dispatcher,
-                    dispatchConfig = CommandIngressDispatchConfig(partitionCount = 2, partitionQueueCapacity = 8),
+                    partitioningPolicy = IngressPartitioningPolicy(partitionCount = 2, partitionQueueCapacity = 8),
                     onMarkDirty = {},
                 )
 
@@ -500,6 +503,31 @@ class CommandIngressServiceTest {
             assertEquals(2, imageCmd.threadScope)
             ingress.close()
         }
+
+    @Test
+    fun `close cancels dispatch scope`() {
+        val ingress =
+            CommandIngressService(
+                db = FakeChatLogRepository(latestLogId = 10L),
+                config = config,
+                checkpointJournal = FakeCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
+                routingGateway = FakeRoutingGateway(),
+                dispatchDispatcher = Dispatchers.Unconfined,
+                onMarkDirty = {},
+            )
+
+        val dispatchScope =
+            CommandIngressService::class.java.getDeclaredField("dispatchScope").let { field ->
+                field.isAccessible = true
+                field.get(ingress) as kotlinx.coroutines.CoroutineScope
+            }
+        val job = checkNotNull(dispatchScope.coroutineContext[Job])
+        assertTrue(job.isActive)
+
+        ingress.close()
+
+        assertTrue(job.isCancelled)
+    }
 }
 
 private class FakeChatLogRepository(
