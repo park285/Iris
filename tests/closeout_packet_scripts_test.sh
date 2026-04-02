@@ -55,7 +55,8 @@ EOF
 
 python3 "$packet_dir/scripts/closeout_facts.py" "$packet_dir" >"$packet_dir/artifacts/metadata/packet-facts.json"
 python3 "$packet_dir/scripts/verify_closeout_packet.py" "$packet_dir"
-bash "$packet_dir/scripts/replay_closeout.sh"
+ANDROID_SDK_ROOT="$tmpdir/android-sdk" mkdir -p "$tmpdir/android-sdk"
+ANDROID_SDK_ROOT="$tmpdir/android-sdk" bash "$packet_dir/scripts/replay_closeout.sh"
 
 if [[ ! -f "$packet_dir/artifacts/metadata/replay-marker.txt" ]]; then
   echo "replay_closeout.sh did not invoke verify-all.sh"
@@ -64,6 +65,11 @@ fi
 
 if ! grep -Fq "$packet_dir" "$packet_dir/artifacts/metadata/replay-pwd.txt"; then
   echo "replay_closeout.sh did not execute from packet root"
+  exit 1
+fi
+
+if ! grep -Fq "$tmpdir/android-sdk" "$packet_dir/local.properties"; then
+  echo "replay_closeout.sh did not rewrite local.properties from ANDROID_SDK_ROOT fallback"
   exit 1
 fi
 

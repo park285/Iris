@@ -5,6 +5,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 output_dir="${1:-$repo_root/.tasklists/closeout-packet-$(date +%Y%m%d)}"
 
+rm -rf "$output_dir"
 mkdir -p "$output_dir"
 
 rsync -a --delete \
