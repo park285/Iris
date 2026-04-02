@@ -2,8 +2,8 @@ use crate::auth::{canonical_target, signed_headers};
 use crate::config::IrisConnection;
 use crate::models::{
     BridgeDiagnosticsResponse, HealthResponse, MemberActivityResponse, MemberListResponse,
-    QueryRequest, QueryResponse, ReplyAcceptedResponse, ReplyRequest, RoomInfoResponse,
-    RoomListResponse, StatsResponse, ThreadListResponse,
+    RecentMessagesRequest, RecentMessagesResponse, ReplyAcceptedResponse, ReplyRequest,
+    RoomEventRecord, RoomInfoResponse, RoomListResponse, StatsResponse, ThreadListResponse,
 };
 use anyhow::Result;
 use reqwest::Client;
@@ -133,9 +133,16 @@ impl IrisApi {
             .await?)
     }
 
-    pub async fn query(&self, req: &QueryRequest) -> Result<QueryResponse> {
+    pub async fn recent_messages(
+        &self,
+        chat_id: i64,
+        limit: i32,
+    ) -> Result<RecentMessagesResponse> {
         Ok(self
-            .signed_post_json("/query", req)?
+            .signed_post_json(
+                "/query/recent-messages",
+                &RecentMessagesRequest { chat_id, limit },
+            )?
             .send()
             .await?
             .error_for_status()?
@@ -163,6 +170,25 @@ impl IrisApi {
     pub async fn list_threads(&self, chat_id: i64) -> Result<ThreadListResponse> {
         Ok(self
             .signed_get(&format!("/rooms/{chat_id}/threads"), &[])?
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
+    }
+
+    pub async fn get_room_events(
+        &self,
+        chat_id: i64,
+        limit: u32,
+        after: i64,
+    ) -> Result<Vec<RoomEventRecord>> {
+        let query = vec![
+            ("limit".to_string(), limit.to_string()),
+            ("after".to_string(), after.to_string()),
+        ];
+        Ok(self
+            .signed_get(&format!("/rooms/{chat_id}/events"), &query)?
             .send()
             .await?
             .error_for_status()?

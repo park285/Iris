@@ -1,16 +1,19 @@
 use super::{View, ViewAction};
 use crossterm::event::{KeyCode, KeyEvent};
-use iris_common::models::SseEvent;
+use iris_common::models::{RoomEventRecord, SseEvent};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::widgets::{Block, List, ListItem, ListState};
 use std::collections::VecDeque;
+
+const MAX_EVENTS: usize = 500;
 
 pub struct EventsView {
     events: VecDeque<String>,
     state: ListState,
     paused: bool,
     filter_active: bool,
+    history_loaded: bool,
 }
 
 impl EventsView {
@@ -20,61 +23,58 @@ impl EventsView {
             state: ListState::default(),
             paused: false,
             filter_active: false,
+            history_loaded: false,
         }
     }
+
     pub fn push_event(&mut self, event: &SseEvent) {
         if self.paused {
             return;
         }
-        let ts = event
-            .timestamp
-            .map(|t| {
-                let s = t % 86400;
-                format!("{:02}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60)
-            })
-            .unwrap_or_default();
-        let line = match (event.event_type.as_str(), event.event.as_deref()) {
-            ("member_event", Some("join")) => format!(
-                "{} JOIN   {} entered",
-                ts,
-                event.nickname.as_deref().unwrap_or("?")
-            ),
-            ("member_event", Some("leave")) => format!(
-                "{} LEAVE  {} left{}",
-                ts,
-                event.nickname.as_deref().unwrap_or("?"),
-                if event.estimated == Some(true) {
-                    " (est)"
-                } else {
-                    ""
+        self.events.push_back(format_event_line(event));
+        self.trim_to_limit();
+        self.select_last_visible();
+    }
+
+    pub fn push_history(&mut self, records: &[RoomEventRecord]) {
+        let mut lines = Vec::new();
+        for record in records {
+            if let Ok(mut event) = serde_json::from_str::<SseEvent>(&record.payload) {
+                event.timestamp = Some(record.created_at / 1000);
+                event.chat_id = Some(record.chat_id);
+                if event.user_id.is_none() {
+                    event.user_id = Some(record.user_id);
                 }
-            ),
-            ("member_event", Some("kick")) => format!(
-                "{} KICK   {} kicked",
-                ts,
-                event.nickname.as_deref().unwrap_or("?")
-            ),
-            ("nickname_change", _) => format!(
-                "{} NICK   {} -> {}",
-                ts,
-                event.old_nickname.as_deref().unwrap_or("?"),
-                event.new_nickname.as_deref().unwrap_or("?")
-            ),
-            ("role_change", _) => format!(
-                "{} ROLE   {} -> {}",
-                ts,
-                event.old_role.as_deref().unwrap_or("?"),
-                event.new_role.as_deref().unwrap_or("?")
-            ),
-            ("profile_change", _) => {
-                format!("{} PROF   user {} changed", ts, event.user_id.unwrap_or(0))
+                lines.push(format_event_line(&event));
             }
-            _ => format!("{} ???    {:?}", ts, event.event_type),
-        };
-        self.events.push_back(line);
-        if self.events.len() > 500 {
+        }
+
+        for line in lines.into_iter().rev() {
+            self.events.push_front(line);
+        }
+        self.trim_to_limit();
+        self.history_loaded = true;
+        if self.state.selected().is_none() {
+            let len = self.visible_events().len();
+            self.state.select(if len == 0 { None } else { Some(0) });
+        }
+    }
+
+    pub const fn should_auto_load_history(&self) -> bool {
+        !self.history_loaded
+    }
+
+    pub fn mark_history_unavailable(&mut self) {
+        self.history_loaded = true;
+    }
+
+    fn trim_to_limit(&mut self) {
+        while self.events.len() > MAX_EVENTS {
             self.events.pop_front();
         }
+    }
+
+    fn select_last_visible(&mut self) {
         self.state
             .select(Some(self.visible_events().len().saturating_sub(1)));
     }
@@ -96,6 +96,54 @@ impl EventsView {
     #[cfg(test)]
     pub(crate) fn event_count(&self) -> usize {
         self.events.len()
+    }
+}
+
+fn format_event_line(event: &SseEvent) -> String {
+    let ts = event
+        .timestamp
+        .map(|t| {
+            let s = t % 86400;
+            format!("{:02}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60)
+        })
+        .unwrap_or_default();
+    match (event.event_type.as_str(), event.event.as_deref()) {
+        ("member_event", Some("join")) => format!(
+            "{} JOIN   {} entered",
+            ts,
+            event.nickname.as_deref().unwrap_or("?")
+        ),
+        ("member_event", Some("leave")) => format!(
+            "{} LEAVE  {} left{}",
+            ts,
+            event.nickname.as_deref().unwrap_or("?"),
+            if event.estimated == Some(true) {
+                " (est)"
+            } else {
+                ""
+            }
+        ),
+        ("member_event", Some("kick")) => format!(
+            "{} KICK   {} kicked",
+            ts,
+            event.nickname.as_deref().unwrap_or("?")
+        ),
+        ("nickname_change", _) => format!(
+            "{} NICK   {} -> {}",
+            ts,
+            event.old_nickname.as_deref().unwrap_or("?"),
+            event.new_nickname.as_deref().unwrap_or("?")
+        ),
+        ("role_change", _) => format!(
+            "{} ROLE   {} -> {}",
+            ts,
+            event.old_role.as_deref().unwrap_or("?"),
+            event.new_role.as_deref().unwrap_or("?")
+        ),
+        ("profile_change", _) => {
+            format!("{} PROF   user {} changed", ts, event.user_id.unwrap_or(0))
+        }
+        _ => format!("{} ???    {:?}", ts, event.event_type),
     }
 }
 
@@ -139,6 +187,7 @@ impl View for EventsView {
                 self.state.select(if len == 0 { None } else { Some(0) });
                 ViewAction::None
             }
+            KeyCode::Char('h') => ViewAction::LoadEventHistory,
             KeyCode::Up | KeyCode::Char('k') => {
                 let i = self.state.selected().unwrap_or(0);
                 self.state.select(Some(i.saturating_sub(1)));
@@ -232,5 +281,45 @@ mod tests {
                 .last()
                 .is_some_and(|line| line.contains("user-504"))
         );
+    }
+
+    #[test]
+    fn history_records_are_prepended_in_time_order() {
+        let mut view = EventsView::new();
+        view.push_event(&member_event("join"));
+
+        view.push_history(&[
+            RoomEventRecord {
+                id: 1,
+                chat_id: 1,
+                event_type: "member_event".to_string(),
+                user_id: 2,
+                payload: r#"{"type":"member_event","event":"join","nickname":"alice"}"#.to_string(),
+                created_at: 1_000,
+            },
+            RoomEventRecord {
+                id: 2,
+                chat_id: 1,
+                event_type: "member_event".to_string(),
+                user_id: 3,
+                payload: r#"{"type":"member_event","event":"leave","nickname":"bob"}"#.to_string(),
+                created_at: 2_000,
+            },
+        ]);
+
+        assert!(!view.should_auto_load_history());
+        assert_eq!(view.visible_events().len(), 3);
+        assert!(view.visible_events()[0].contains("alice"));
+        assert!(view.visible_events()[1].contains("bob"));
+    }
+
+    #[test]
+    fn history_key_requests_load() {
+        let mut view = EventsView::new();
+
+        assert!(matches!(
+            view.handle_key(key(KeyCode::Char('h'))),
+            ViewAction::LoadEventHistory
+        ));
     }
 }

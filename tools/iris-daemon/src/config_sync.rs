@@ -4,12 +4,10 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::Path;
 
-pub fn envsubst(template: &str, vars: &HashMap<String, String>) -> String {
-    let mut result = template.to_string();
-    for (key, value) in vars {
-        result = result.replace(&format!("${{{key}}}"), value);
-    }
-    result
+pub fn render_template_json(template: &str, vars: &HashMap<String, String>) -> Result<String> {
+    let mut value: serde_json::Value = serde_json::from_str(template)?;
+    replace_placeholders(&mut value, vars);
+    Ok(serde_json::to_string_pretty(&value)?)
 }
 
 pub fn collect_iris_env_vars() -> HashMap<String, String> {
@@ -27,7 +25,8 @@ pub async fn render_and_push(adb: &Adb, cfg: &DaemonConfig) -> Result<()> {
     let template = std::fs::read_to_string(template_path)
         .with_context(|| format!("config 템플릿 읽기 실패: {}", template_path.display()))?;
     let vars = collect_iris_env_vars();
-    let rendered = envsubst(&template, &vars);
+    let rendered = render_template_json(&template, &vars)
+        .with_context(|| format!("config 템플릿 렌더링 실패: {}", template_path.display()))?;
     let tmp_dir = std::env::temp_dir();
     let tmp_file = tmp_dir.join("iris-daemon-config-rendered.json");
     std::fs::write(&tmp_file, &rendered)
@@ -53,7 +52,8 @@ pub async fn check_and_sync(adb: &Adb, cfg: &DaemonConfig) -> Result<()> {
     let template = std::fs::read_to_string(template_path)
         .with_context(|| format!("config 템플릿 읽기 실패: {}", template_path.display()))?;
     let vars = collect_iris_env_vars();
-    let expected = envsubst(&template, &vars);
+    let expected = render_template_json(&template, &vars)
+        .with_context(|| format!("config 템플릿 렌더링 실패: {}", template_path.display()))?;
     let device_normalized = normalize_json(&device_config);
     let expected_normalized = normalize_json(&expected);
     if device_normalized == expected_normalized {
@@ -73,12 +73,35 @@ fn normalize_json(input: &str) -> String {
         .unwrap_or_else(|_| input.trim().to_string())
 }
 
+fn replace_placeholders(value: &mut serde_json::Value, vars: &HashMap<String, String>) {
+    match value {
+        serde_json::Value::String(raw) => {
+            let mut rendered = raw.clone();
+            for (key, value) in vars {
+                rendered = rendered.replace(&format!("${{{key}}}"), value);
+            }
+            *raw = rendered;
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                replace_placeholders(item, vars);
+            }
+        }
+        serde_json::Value::Object(entries) => {
+            for value in entries.values_mut() {
+                replace_placeholders(value, vars);
+            }
+        }
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn envsubst_replaces_dollar_brace_vars() {
+    fn render_template_json_replaces_dollar_brace_vars() {
         let template = r#"{"url": "${IRIS_WEBHOOK_URL}", "token": "${IRIS_SHARED_TOKEN}"}"#;
         let mut vars = HashMap::new();
         vars.insert(
@@ -86,33 +109,48 @@ mod tests {
             "http://example.com".to_string(),
         );
         vars.insert("IRIS_SHARED_TOKEN".to_string(), "secret123".to_string());
-        let result = envsubst(template, &vars);
+        let result = render_template_json(template, &vars).unwrap();
         assert_eq!(
-            result,
-            r#"{"url": "http://example.com", "token": "secret123"}"#
+            normalize_json(&result),
+            r#"{"token":"secret123","url":"http://example.com"}"#
         );
     }
 
     #[test]
-    fn envsubst_leaves_unknown_vars_intact() {
+    fn render_template_json_leaves_unknown_vars_intact() {
         let template = r#"{"url": "${UNKNOWN_VAR}"}"#;
         let vars = HashMap::new();
-        let result = envsubst(template, &vars);
-        assert_eq!(result, r#"{"url": "${UNKNOWN_VAR}"}"#);
+        let result = render_template_json(template, &vars).unwrap();
+        assert_eq!(normalize_json(&result), r#"{"url":"${UNKNOWN_VAR}"}"#);
     }
 
     #[test]
-    fn envsubst_handles_empty_template() {
+    fn render_template_json_rejects_non_json_template() {
         let vars = HashMap::new();
-        assert_eq!(envsubst("", &vars), "");
+        assert!(render_template_json("", &vars).is_err());
     }
 
     #[test]
-    fn envsubst_handles_multiple_occurrences() {
-        let template = "${A} and ${A} again";
+    fn render_template_json_handles_multiple_occurrences() {
+        let template = r#"{"message":"${A} and ${A} again"}"#;
         let mut vars = HashMap::new();
         vars.insert("A".to_string(), "x".to_string());
-        assert_eq!(envsubst(template, &vars), "x and x again");
+        let result = render_template_json(template, &vars).unwrap();
+        assert_eq!(normalize_json(&result), r#"{"message":"x and x again"}"#);
+    }
+
+    #[test]
+    fn render_template_json_escapes_embedded_quotes() {
+        let template = r#"{"token":"${TOKEN}"}"#;
+        let mut vars = HashMap::new();
+        vars.insert("TOKEN".to_string(), "\"quoted\"\nvalue".to_string());
+
+        let result = render_template_json(template, &vars).unwrap();
+
+        assert_eq!(
+            normalize_json(&result),
+            r#"{"token":"\"quoted\"\nvalue"}"#
+        );
     }
 
     #[test]

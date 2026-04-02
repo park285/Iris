@@ -1,12 +1,10 @@
 use super::{ReplyTarget, View, ViewAction};
+use super::{messages_formatter, messages_projection};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph};
 use std::collections::{HashMap, HashSet};
-
-type ThreadGroup<'a> = Vec<(usize, &'a ChatMessage)>;
-type ThreadGroups<'a> = HashMap<i64, ThreadGroup<'a>>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChatMessage {
@@ -90,83 +88,11 @@ impl MessagesView {
     }
 
     pub fn visible_rows(&self) -> Vec<VisibleRow> {
-        let mut rows = Vec::new();
-        let mut thread_groups: ThreadGroups<'_> = HashMap::new();
-
-        for (index, message) in self.messages.iter().enumerate() {
-            if let Some(thread_id) = message.thread_id {
-                thread_groups
-                    .entry(thread_id)
-                    .or_default()
-                    .push((index, message));
-            } else {
-                rows.push(VisibleRow::Message {
-                    index,
-                    message_id: message.id,
-                });
-            }
-        }
-
-        for (thread_id, mut group) in thread_groups {
-            group.sort_by_key(|(_, message)| message.created_at);
-            let (root_index, root_message) = group[0];
-            rows.push(VisibleRow::ThreadHeader {
-                thread_id,
-                root_index,
-                message_id: root_message.id,
-            });
-            if self.expanded_threads.contains(&thread_id) {
-                for (index, message) in group.into_iter().skip(1) {
-                    rows.push(VisibleRow::ThreadChild {
-                        thread_id,
-                        index,
-                        message_id: message.id,
-                    });
-                }
-            }
-        }
-
-        rows.sort_by_key(|row| match row {
-            VisibleRow::ThreadHeader { root_index, .. } => self.messages[*root_index].created_at,
-            VisibleRow::Message { index, .. } | VisibleRow::ThreadChild { index, .. } => {
-                self.messages[*index].created_at
-            }
-        });
-        rows
+        messages_projection::visible_rows(&self.messages, &self.expanded_threads)
     }
 
     pub fn render_line(&self, row: &VisibleRow) -> String {
-        let message = match row {
-            VisibleRow::ThreadHeader { root_index, .. } => &self.messages[*root_index],
-            VisibleRow::Message { index, .. } | VisibleRow::ThreadChild { index, .. } => {
-                &self.messages[*index]
-            }
-        };
-        let nickname = self
-            .nicknames
-            .get(&message.user_id)
-            .cloned()
-            .unwrap_or_else(|| message.user_id.to_string());
-        let content = match message.msg_type {
-            1 => message.message.clone(),
-            2 | 27 => "[image]".to_string(),
-            3 => "[file]".to_string(),
-            20 => "[emoticon]".to_string(),
-            26 => "[reply]".to_string(),
-            _ => "[unsupported]".to_string(),
-        };
-        match row {
-            VisibleRow::ThreadChild { .. } => format!("    {nickname}: {content}"),
-            VisibleRow::ThreadHeader { thread_id, .. } => {
-                let marker = if self.expanded_threads.contains(thread_id) {
-                    "▾"
-                } else {
-                    "▸"
-                };
-                format!("{marker} {nickname}: {content}")
-            }
-            VisibleRow::Message { .. } => format!("{nickname}: {content}"),
-        }
+        messages_formatter::render_line(&self.messages, row, &self.nicknames, &self.expanded_threads)
     }
 
     fn selected_target(&self) -> ReplyTarget {

@@ -1,3 +1,7 @@
+mod state;
+mod util;
+mod validate;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use iris_common::models::{ReplyRequest, ReplyType, RoomSummary, ThreadSummary};
 use ratatui::Frame;
@@ -8,78 +12,10 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use tui_textarea::TextArea;
 
 use super::path_input::PathInput;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum ModalFocus {
-    Type,
-    Room,
-    RoomSelector,
-    Thread,
-    ThreadId,
-    ThreadSelector,
-    Scope,
-    Content,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ThreadMode {
-    None,
-    Specified,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ThreadScope {
-    Thread, // 2
-    Both,   // 3
-    Room,   // 1
-}
-
-impl ThreadScope {
-    const fn value(self) -> u8 {
-        match self {
-            Self::Thread => 2,
-            Self::Both => 3,
-            Self::Room => 1,
-        }
-    }
-
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Thread => "thread",
-            Self::Both => "both",
-            Self::Room => "room",
-        }
-    }
-
-    const fn next(self) -> Self {
-        match self {
-            Self::Thread => Self::Both,
-            Self::Both => Self::Room,
-            Self::Room => Self::Thread,
-        }
-    }
-
-    const fn prev(self) -> Self {
-        match self {
-            Self::Thread => Self::Room,
-            Self::Room => Self::Both,
-            Self::Both => Self::Thread,
-        }
-    }
-}
-
-#[derive(Clone)]
-pub enum ReplyResult {
-    Success { request_id: String },
-    Error { message: String },
-}
-
-pub enum ModalAction {
-    None,
-    Close,
-    Send(ReplyRequest),
-    FetchThreads(i64),
-}
+pub use state::{ModalAction, ModalFocus, ReplyResult};
+use state::{ReplyValidationError, ThreadMode, ThreadScope, cycle_reply_type, is_open_chat};
+use util::{centered_rect, truncate_thread_origin};
+use validate::{apply_validation_error, build_data, validate_thread};
 
 pub struct ReplyModal {
     // 폼 필드
@@ -107,8 +43,6 @@ pub struct ReplyModal {
     pub thread_suggestions: Vec<ThreadSummary>,
     thread_selector_cursor: usize,
 
-    // 오픈채팅 여부
-    is_open_chat: bool,
 }
 
 impl ReplyModal {
@@ -117,11 +51,6 @@ impl ReplyModal {
         room_list: Vec<RoomSummary>,
         thread_id: Option<String>,
     ) -> Self {
-        let is_open_chat = room
-            .as_ref()
-            .and_then(|r| r.room_type.as_deref())
-            .is_some_and(|t| t.starts_with('O'));
-
         let mut text_area = TextArea::default();
         text_area.set_placeholder_text("메시지를 입력하세요...");
         text_area.set_block(Block::default().borders(Borders::ALL).title(" Content "));
@@ -132,6 +61,14 @@ impl ReplyModal {
         } else {
             ModalFocus::Type
         };
+        let room_selector_cursor =
+            room.as_ref()
+                .and_then(|selected| {
+                    room_list
+                        .iter()
+                        .position(|candidate| candidate.chat_id == selected.chat_id)
+                })
+                .unwrap_or(0);
 
         Self {
             reply_type: ReplyType::Text,
@@ -152,10 +89,9 @@ impl ReplyModal {
             result: None,
             sending: false,
             room_list,
-            room_selector_cursor: 0,
+            room_selector_cursor,
             thread_suggestions: Vec::new(),
             thread_selector_cursor: 0,
-            is_open_chat,
         }
     }
 
@@ -172,9 +108,9 @@ impl ReplyModal {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let meta_height = if self.is_open_chat && self.thread_mode == ThreadMode::Specified {
+        let meta_height = if is_open_chat(self.room.as_ref()) && self.thread_mode == ThreadMode::Specified {
             4
-        } else if self.is_open_chat {
+        } else if is_open_chat(self.room.as_ref()) {
             3
         } else {
             2
@@ -222,12 +158,12 @@ impl ReplyModal {
             row_idx += 1;
         }
 
-        if self.is_open_chat && row_idx < rows.len() {
+        if is_open_chat(self.room.as_ref()) && row_idx < rows.len() {
             frame.render_widget(Paragraph::new(self.render_thread_line()), rows[row_idx]);
             row_idx += 1;
         }
 
-        if self.is_open_chat && self.thread_mode == ThreadMode::Specified && row_idx < rows.len() {
+        if is_open_chat(self.room.as_ref()) && self.thread_mode == ThreadMode::Specified && row_idx < rows.len() {
             frame.render_widget(Paragraph::new(self.render_scope_line()), rows[row_idx]);
         }
     }
@@ -249,7 +185,7 @@ impl ReplyModal {
         ];
         let mut spans = vec![Span::styled("  Type    ", label_style)];
         for (rt, label) in &types {
-            let selected = std::mem::discriminant(rt) == std::mem::discriminant(&self.reply_type);
+            let selected = *rt == self.reply_type;
             let marker = if selected { "●" } else { "○" };
             let style = if selected {
                 Style::default().fg(Color::Cyan)
@@ -513,12 +449,7 @@ impl ReplyModal {
             .enumerate()
             .map(|(i, t)| {
                 let origin = t.origin_message.as_deref().unwrap_or("(원본 없음)");
-                let truncated = if origin.chars().count() > 40 {
-                    let cut: String = origin.chars().take(40).collect();
-                    format!("{cut}...")
-                } else {
-                    origin.to_string()
-                };
+                let truncated = truncate_thread_origin(origin);
                 let style = if i == self.thread_selector_cursor {
                     Style::default()
                         .fg(Color::Yellow)
@@ -585,7 +516,7 @@ impl ReplyModal {
         match self.focus {
             ModalFocus::Type => ModalFocus::Room,
             ModalFocus::Room => {
-                if self.is_open_chat {
+                if is_open_chat(self.room.as_ref()) {
                     ModalFocus::Thread
                 } else {
                     ModalFocus::Content
@@ -639,22 +570,11 @@ impl ReplyModal {
     }
 
     fn cycle_reply_type(&mut self, code: KeyCode) {
-        let types = [
-            ReplyType::Text,
-            ReplyType::Image,
-            ReplyType::ImageMultiple,
-            ReplyType::Markdown,
-        ];
-        let cur = types
-            .iter()
-            .position(|t| std::mem::discriminant(t) == std::mem::discriminant(&self.reply_type))
-            .unwrap_or(0);
-        let next = match code {
-            KeyCode::Right => (cur + 1) % types.len(),
-            KeyCode::Left => (cur + types.len() - 1) % types.len(),
-            _ => cur,
+        self.reply_type = match code {
+            KeyCode::Right => cycle_reply_type(self.reply_type, true),
+            KeyCode::Left => cycle_reply_type(self.reply_type, false),
+            _ => self.reply_type,
         };
-        self.reply_type = types[next].clone();
     }
 
     fn handle_enter(&mut self) -> ModalAction {
@@ -665,8 +585,12 @@ impl ReplyModal {
             }
             ModalFocus::Thread => {
                 if self.thread_mode == ThreadMode::Specified {
-                    self.focus = ModalFocus::ThreadSelector;
-                    ModalAction::FetchThreads(self.room.as_ref().map_or(0, |r| r.chat_id))
+                    if let Some(room) = self.room.as_ref() {
+                        self.focus = ModalFocus::ThreadSelector;
+                        ModalAction::FetchThreads(room.chat_id)
+                    } else {
+                        ModalAction::None
+                    }
                 } else {
                     self.thread_mode = ThreadMode::Specified;
                     self.focus = ModalFocus::ThreadId;
@@ -775,16 +699,15 @@ impl ReplyModal {
             KeyCode::Enter => {
                 if let Some(selected) = self.room_list.get(self.room_selector_cursor).cloned() {
                     let previous_chat_id = self.room.as_ref().map(|room| room.chat_id);
-                    let next_is_open_chat = selected
+                    let selected_is_open_chat = selected
                         .room_type
                         .as_deref()
                         .is_some_and(|t| t.starts_with('O'));
                     let room_changed = previous_chat_id != Some(selected.chat_id);
 
-                    self.is_open_chat = next_is_open_chat;
                     self.room = Some(selected);
 
-                    if room_changed || !self.is_open_chat {
+                    if room_changed || !selected_is_open_chat {
                         self.thread_mode = ThreadMode::None;
                         self.thread_id_input.clear();
                         self.thread_suggestions.clear();
@@ -859,12 +782,20 @@ impl ReplyModal {
             return ModalAction::None;
         };
 
-        let Ok((thread_id, thread_scope)) = self.validate_thread() else {
-            return ModalAction::None;
+        let (thread_id, thread_scope) = match self.validate_thread() {
+            Ok(thread) => thread,
+            Err(error) => {
+                self.apply_validation_error(error);
+                return ModalAction::None;
+            }
         };
 
-        let Ok(data) = self.build_data() else {
-            return ModalAction::None;
+        let data = match self.build_data() {
+            Ok(data) => data,
+            Err(error) => {
+                self.apply_validation_error(error);
+                return ModalAction::None;
+            }
         };
 
         self.sending = true;
@@ -879,68 +810,21 @@ impl ReplyModal {
     }
 
     #[allow(clippy::type_complexity)]
-    fn validate_thread(&mut self) -> Result<(Option<String>, Option<u8>), ()> {
-        match self.thread_mode {
-            ThreadMode::None => Ok((None, None)),
-            ThreadMode::Specified => {
-                if self.thread_id_input.is_empty() {
-                    self.result = Some(ReplyResult::Error {
-                        message: "threadId를 입력해주세요".to_string(),
-                    });
-                    self.focus = ModalFocus::ThreadId;
-                    return Err(());
-                }
-                if self.thread_id_input.parse::<i64>().is_err() {
-                    self.result = Some(ReplyResult::Error {
-                        message: "threadId는 숫자여야 합니다".to_string(),
-                    });
-                    self.focus = ModalFocus::ThreadId;
-                    return Err(());
-                }
-                Ok((Some(self.thread_id_input.clone()), Some(self.scope.value())))
-            }
-        }
+    fn apply_validation_error(&mut self, error: ReplyValidationError) {
+        apply_validation_error(&mut self.result, &mut self.focus, error);
     }
 
-    fn build_data(&mut self) -> Result<serde_json::Value, ()> {
-        match &self.reply_type {
-            ReplyType::Text | ReplyType::Markdown => {
-                let text = self.text_area.lines().join("\n");
-                if text.trim().is_empty() {
-                    self.result = Some(ReplyResult::Error {
-                        message: "메시지를 입력해주세요".to_string(),
-                    });
-                    return Err(());
-                }
-                Ok(serde_json::Value::String(text))
-            }
-            ReplyType::Image => {
-                if self.image_path.value.is_empty() {
-                    self.result = Some(ReplyResult::Error {
-                        message: "이미지 경로를 입력해주세요".to_string(),
-                    });
-                    return Err(());
-                }
-                Ok(serde_json::Value::String(self.image_path.value.clone()))
-            }
-            ReplyType::ImageMultiple => {
-                let paths: Vec<String> = self
-                    .image_paths
-                    .iter()
-                    .filter(|p| !p.value.is_empty())
-                    .map(|p| p.value.clone())
-                    .collect();
-                if paths.is_empty() {
-                    self.result = Some(ReplyResult::Error {
-                        message: "이미지 경로를 하나 이상 입력해주세요".to_string(),
-                    });
-                    return Err(());
-                }
-                Ok(serde_json::Value::Array(
-                    paths.into_iter().map(serde_json::Value::String).collect(),
-                ))
-            }
-        }
+    fn validate_thread(&self) -> Result<(Option<String>, Option<u8>), ReplyValidationError> {
+        validate_thread(self.thread_mode, &self.thread_id_input, self.scope)
+    }
+
+    fn build_data(&self) -> Result<serde_json::Value, ReplyValidationError> {
+        build_data(
+            &self.reply_type,
+            &self.text_area,
+            &self.image_path,
+            &self.image_paths,
+        )
     }
 
     pub fn set_result(&mut self, result: ReplyResult) {
@@ -957,25 +841,6 @@ impl ReplyModal {
         }
         self.result = Some(result);
     }
-}
-
-fn centered_rect(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
-    let vertical = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(area);
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(vertical[1])[1]
 }
 
 #[cfg(test)]
@@ -1016,6 +881,15 @@ mod tests {
 
         assert_eq!(modal.thread_id_input, "777");
         assert_eq!(modal.thread_mode, ThreadMode::Specified);
+    }
+
+    #[test]
+    fn new_with_context_aligns_room_selector_cursor_with_preselected_room() {
+        let open_room = make_room(10, "OM");
+        let regular_room = make_room(20, "DirectChat");
+        let modal = ReplyModal::new_with_context(Some(regular_room.clone()), vec![open_room, regular_room], None);
+
+        assert_eq!(modal.room_selector_cursor, 1);
     }
 
     #[test]
@@ -1102,5 +976,16 @@ mod tests {
 
         assert_eq!(truncated.chars().count(), 43); // 40 chars + "..." (3 chars)
         assert!(truncated.ends_with("가..."));
+    }
+
+    #[test]
+    fn thread_selector_does_not_fetch_threads_without_room_context() {
+        let mut modal = ReplyModal::new_with_context(None, Vec::new(), None);
+        modal.focus = ModalFocus::Thread;
+        modal.thread_mode = ThreadMode::Specified;
+
+        let action = modal.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(matches!(action, ModalAction::None));
     }
 }

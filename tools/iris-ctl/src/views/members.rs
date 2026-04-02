@@ -1,14 +1,15 @@
 use super::{View, ViewAction};
+use super::members_render::format_last_active;
+use super::{members_projection, members_render};
 use crossterm::event::{KeyCode, KeyEvent};
 use iris_common::models::MemberInfo;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Stylize;
-use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, TableState};
-use std::time::{SystemTime, UNIX_EPOCH};
+use ratatui::widgets::{Block, Paragraph, Row, Table, TableState};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum RoleFilter {
+pub(crate) enum RoleFilter {
     All,
     Owners,
     Admins,
@@ -17,7 +18,7 @@ enum RoleFilter {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum SortMode {
+pub(crate) enum SortMode {
     Activity,
     Name,
 }
@@ -62,70 +63,12 @@ impl MembersView {
     }
 
     fn rebuild_filtered_cache(&mut self) {
-        let lower_search = (!self.search.is_empty()).then(|| self.search.to_lowercase());
-        let mut filtered_indices: Vec<usize> = self
-            .members
-            .iter()
-            .enumerate()
-            .filter(|(_, member)| {
-                self.role_matches(member) && Self::search_matches(member, lower_search.as_deref())
-            })
-            .map(|(index, _)| index)
-            .collect();
-
-        match self.sort_mode {
-            SortMode::Activity => filtered_indices.sort_by(|a, b| self.compare_by_activity(*a, *b)),
-            SortMode::Name => filtered_indices.sort_by(|a, b| self.compare_by_name(*a, *b)),
-        }
-        self.filtered_indices = filtered_indices;
-    }
-
-    const fn role_matches(&self, member: &MemberInfo) -> bool {
-        match self.role_filter {
-            RoleFilter::All => true,
-            RoleFilter::Owners => member.role_code == 1,
-            RoleFilter::Admins => member.role_code == 4,
-            RoleFilter::Bots => member.role_code == 8,
-            RoleFilter::Members => {
-                member.role_code != 1 && member.role_code != 4 && member.role_code != 8
-            }
-        }
-    }
-
-    fn search_matches(member: &MemberInfo, query: Option<&str>) -> bool {
-        query.is_none_or(|query| {
-            member
-                .nickname
-                .as_deref()
-                .unwrap_or("")
-                .to_lowercase()
-                .contains(query)
-        })
-    }
-
-    fn compare_by_activity(&self, left_index: usize, right_index: usize) -> std::cmp::Ordering {
-        let left = &self.members[left_index];
-        let right = &self.members[right_index];
-        right
-            .message_count
-            .cmp(&left.message_count)
-            .then_with(|| right.last_active_at.cmp(&left.last_active_at))
-            .then_with(|| {
-                left.nickname
-                    .as_deref()
-                    .unwrap_or("")
-                    .cmp(right.nickname.as_deref().unwrap_or(""))
-            })
-    }
-
-    fn compare_by_name(&self, left_index: usize, right_index: usize) -> std::cmp::Ordering {
-        let left = &self.members[left_index];
-        let right = &self.members[right_index];
-        left.nickname
-            .as_deref()
-            .unwrap_or("")
-            .cmp(right.nickname.as_deref().unwrap_or(""))
-            .then_with(|| left.user_id.cmp(&right.user_id))
+        self.filtered_indices = members_projection::rebuild_filtered_indices(
+            &self.members,
+            &self.search,
+            self.role_filter,
+            self.sort_mode,
+        );
     }
 
     fn restore_selection(&mut self, selected_user_id: Option<i64>) {
@@ -170,44 +113,11 @@ impl MembersView {
     }
 
     fn render_title(&self, filtered_count: usize) -> String {
-        let filter_label = match self.role_filter {
-            RoleFilter::All => "all",
-            RoleFilter::Owners => "owners",
-            RoleFilter::Admins => "admins",
-            RoleFilter::Bots => "bots",
-            RoleFilter::Members => "members",
-        };
-        let sort_label = match self.sort_mode {
-            SortMode::Activity => "activity",
-            SortMode::Name => "name",
-        };
-        format!(" Members ({filtered_count}) [{filter_label}|{sort_label}] ")
-    }
-
-    const fn member_role_label(role_code: i32) -> &'static str {
-        match role_code {
-            1 => "* owner",
-            4 => "# admin",
-            8 => "@ bot",
-            _ => "  member",
-        }
+        members_render::render_title(filtered_count, self.role_filter, self.sort_mode)
     }
 
     fn render_rows<'a>(filtered: &[&'a MemberInfo]) -> Vec<Row<'a>> {
-        filtered
-            .iter()
-            .enumerate()
-            .map(|(index, member)| {
-                Row::new([
-                    Cell::from((index + 1).to_string()),
-                    Cell::from(member.nickname.as_deref().unwrap_or("?")),
-                    Cell::from(Self::member_role_label(member.role_code)),
-                    Cell::from(member.message_count.to_string()),
-                    Cell::from(last_active_label(member.last_active_at)),
-                    Cell::from(member.user_id.to_string()),
-                ])
-            })
-            .collect()
+        members_render::render_rows(filtered)
     }
 
     fn render_table(&self, frame: &mut Frame<'_>, area: Rect, filtered: &[&MemberInfo]) {
@@ -362,31 +272,6 @@ impl MembersView {
     fn filtered_cache_len(&self) -> usize {
         self.filtered_indices.len()
     }
-}
-
-fn format_last_active(ts: Option<i64>, now_epoch_secs: i64) -> String {
-    let Some(ts) = ts else {
-        return "-".to_string();
-    };
-    let delta = now_epoch_secs.saturating_sub(ts);
-    if delta < 60 {
-        "just now".to_string()
-    } else if delta < 3600 {
-        format!("{}m ago", delta / 60)
-    } else if delta < 86_400 {
-        format!("{}h ago", delta / 3600)
-    } else {
-        format!("{}d ago", delta / 86_400)
-    }
-}
-
-fn last_active_label(ts: Option<i64>) -> String {
-    let now_epoch_secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .and_then(|duration| i64::try_from(duration.as_secs()).ok())
-        .unwrap_or(0);
-    format_last_active(ts, now_epoch_secs)
 }
 
 impl View for MembersView {

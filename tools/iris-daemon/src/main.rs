@@ -7,6 +7,7 @@ mod config_sync;
 mod daemon;
 mod health;
 mod init;
+mod launch_spec;
 mod process;
 mod rollback;
 mod state;

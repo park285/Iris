@@ -1,5 +1,9 @@
 pub mod events;
 pub mod members;
+mod members_projection;
+mod members_render;
+mod messages_formatter;
+mod messages_projection;
 pub mod messages;
 pub mod path_input;
 pub mod reply_modal;
@@ -30,6 +34,7 @@ pub enum ViewAction {
     SelectRoom(i64),
     ShowRoomStats(i64),
     SelectMember(i64, i64),
+    LoadEventHistory,
     Quit,
     Back,
     OpenReply(ReplyTarget),

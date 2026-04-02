@@ -4,7 +4,7 @@ use ratatui::layout::{Constraint, Direction, Layout};
 
 use crate::views::reply_modal::{ModalAction, ReplyModal};
 use crate::views::{ReplyTarget, TabId, View, ViewAction, events, members, messages, rooms, stats};
-use iris_common::models::{ReplyRequest, SseEvent};
+use iris_common::models::{ReplyRequest, RoomEventRecord, SseEvent};
 use ratatui::widgets::{Block, Tabs};
 
 pub use crate::views::reply_modal::ReplyResult;
@@ -12,6 +12,7 @@ pub use crate::views::reply_modal::ReplyResult;
 pub enum AppEvent {
     Terminal(Event),
     Server(SseEvent),
+    EventHistoryLoaded(Vec<RoomEventRecord>),
 }
 
 pub struct App {
@@ -25,6 +26,7 @@ pub struct App {
     pub reply_modal: Option<ReplyModal>,
     pub pending_reply: Option<ReplyRequest>,
     pub pending_thread_fetch: Option<i64>,
+    pub pending_event_history_load: bool,
 }
 
 impl App {
@@ -40,6 +42,7 @@ impl App {
             reply_modal: None,
             pending_reply: None,
             pending_thread_fetch: None,
+            pending_event_history_load: false,
         }
     }
     pub fn render(&self, frame: &mut Frame<'_>) {
@@ -77,6 +80,20 @@ impl App {
         self.stats_view.select_room(chat_id);
         self.messages_view.set_chat_id(chat_id);
     }
+
+    fn has_event_history_target(&self) -> bool {
+        self.rooms_view.selected_chat_id().is_some() || !self.rooms_view.rooms.is_empty()
+    }
+
+    fn maybe_queue_event_history_load(&mut self) {
+        if matches!(self.active_tab, TabId::Events)
+            && self.events_view.should_auto_load_history()
+            && self.has_event_history_target()
+        {
+            self.pending_event_history_load = true;
+        }
+    }
+
     fn apply_action(&mut self, action: ViewAction) -> bool {
         match action {
             ViewAction::Quit => true,
@@ -98,6 +115,7 @@ impl App {
             }
             ViewAction::SwitchTo(tab) => {
                 self.active_tab = tab;
+                self.maybe_queue_event_history_load();
                 false
             }
             ViewAction::Back => {
@@ -106,6 +124,15 @@ impl App {
             }
             ViewAction::OpenReply(target) => {
                 self.open_reply_modal(target);
+                false
+            }
+            ViewAction::LoadEventHistory => {
+                if self.has_event_history_target() {
+                    self.pending_event_history_load = true;
+                    self.status = "Loading event history...".to_string();
+                } else {
+                    self.status = "Select a room first to load event history".to_string();
+                }
                 false
             }
             ViewAction::None => false,
@@ -182,6 +209,7 @@ impl App {
     fn cycle_tab_forward(&mut self) {
         let tabs = TabId::all();
         self.active_tab = tabs[(self.active_tab.index() + 1) % tabs.len()];
+        self.maybe_queue_event_history_load();
     }
 
     fn cycle_tab_backward(&mut self) {
@@ -191,6 +219,7 @@ impl App {
         } else {
             self.active_tab.index() - 1
         }];
+        self.maybe_queue_event_history_load();
     }
 
     fn dispatch_active_view_key(&mut self, key: KeyEvent) -> ViewAction {
@@ -231,6 +260,11 @@ impl App {
                 self.events_view.push_event(&sse);
                 false
             }
+            AppEvent::EventHistoryLoaded(records) => {
+                self.events_view.push_history(&records);
+                self.status = format!("Loaded {} event history records", records.len());
+                false
+            }
         }
     }
 }
@@ -239,6 +273,21 @@ impl App {
 mod tests {
     use super::*;
     use crossterm::event::Event;
+    use iris_common::models::{RoomEventRecord, RoomSummary};
+
+    fn sample_room(chat_id: i64) -> RoomSummary {
+        RoomSummary {
+            chat_id,
+            room_type: Some("open".to_string()),
+            link_id: None,
+            active_members_count: Some(3),
+            link_name: Some(format!("room-{chat_id}")),
+            link_url: None,
+            member_limit: None,
+            searchable: None,
+            bot_role: None,
+        }
+    }
 
     #[test]
     fn show_room_stats_binds_room_context_and_switches_tab() {
@@ -303,17 +352,7 @@ mod tests {
     fn messages_tab_reply_opens_modal_with_thread_prefilled() {
         let mut app = App::new();
         app.rooms_view
-            .set_rooms(vec![iris_common::models::RoomSummary {
-                chat_id: 1,
-                room_type: Some("OM".to_string()),
-                link_id: None,
-                active_members_count: Some(2),
-                link_name: Some("room".to_string()),
-                link_url: None,
-                member_limit: None,
-                searchable: None,
-                bot_role: None,
-            }]);
+            .set_rooms(vec![sample_room(1)]);
         app.bind_room_context(1);
         app.active_tab = TabId::Messages;
         app.messages_view.set_messages(vec![messages::ChatMessage {
@@ -329,5 +368,55 @@ mod tests {
         assert!(!app.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)));
         let modal = app.reply_modal.as_ref().expect("reply modal should open");
         assert_eq!(modal.thread_id_input, "10");
+    }
+
+    #[test]
+    fn switching_to_events_marks_history_load_pending_when_room_exists() {
+        let mut app = App::new();
+        app.rooms_view.set_rooms(vec![sample_room(42)]);
+
+        assert!(!app.apply_action(ViewAction::SwitchTo(TabId::Events)));
+
+        assert!(matches!(app.active_tab, TabId::Events));
+        assert!(app.pending_event_history_load);
+    }
+
+    #[test]
+    fn switching_to_events_without_rooms_does_not_mark_history_load_pending() {
+        let mut app = App::new();
+
+        assert!(!app.apply_action(ViewAction::SwitchTo(TabId::Events)));
+
+        assert!(matches!(app.active_tab, TabId::Events));
+        assert!(!app.pending_event_history_load);
+    }
+
+    #[test]
+    fn manual_event_history_load_without_room_sets_guidance_status() {
+        let mut app = App::new();
+
+        assert!(!app.apply_action(ViewAction::LoadEventHistory));
+
+        assert!(!app.pending_event_history_load);
+        assert_eq!(app.status, "Select a room first to load event history");
+    }
+
+    #[test]
+    fn event_history_loaded_updates_view_and_status() {
+        let mut app = App::new();
+
+        assert!(
+            !app.handle_app_event(AppEvent::EventHistoryLoaded(vec![RoomEventRecord {
+                id: 1,
+                chat_id: 1,
+                event_type: "member_event".to_string(),
+                user_id: 7,
+                payload: r#"{"type":"member_event","event":"join","nickname":"alice"}"#.to_string(),
+                created_at: 1_000,
+            }]))
+        );
+
+        assert_eq!(app.events_view.event_count(), 1);
+        assert_eq!(app.status, "Loaded 1 event history records");
     }
 }

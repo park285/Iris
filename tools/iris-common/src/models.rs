@@ -119,6 +119,17 @@ pub struct MemberActivityResponse {
     pub message_types: std::collections::HashMap<String, i32>,
 }
 
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RoomEventRecord {
+    pub id: i64,
+    pub chat_id: i64,
+    pub event_type: String,
+    pub user_id: i64,
+    pub payload: String,
+    pub created_at: i64,
+}
+
 #[derive(Deserialize, Debug, Clone)]
 pub struct SseEvent {
     #[serde(rename = "type")]
@@ -209,7 +220,7 @@ pub struct BridgeDiagnosticsHook {
 
 // --- Reply models ---
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ReplyType {
     Text,
@@ -252,26 +263,30 @@ pub struct ErrorResponse {
 }
 
 #[derive(Serialize, Debug, Clone)]
-pub struct QueryRequest {
-    pub query: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bind: Option<Vec<serde_json::Value>>,
-    pub decrypt: bool,
+#[serde(rename_all = "camelCase")]
+pub struct RecentMessagesRequest {
+    pub chat_id: i64,
+    pub limit: i32,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct QueryColumn {
-    pub name: String,
-    pub sqlite_type: String,
+pub struct RecentMessagesResponse {
+    pub chat_id: i64,
+    pub messages: Vec<RecentMessage>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct QueryResponse {
-    pub row_count: usize,
-    pub columns: Vec<QueryColumn>,
-    pub rows: Vec<Vec<Option<serde_json::Value>>>,
+pub struct RecentMessage {
+    pub id: i64,
+    pub chat_id: i64,
+    pub user_id: i64,
+    pub message: String,
+    #[serde(rename = "type")]
+    pub msg_type: i32,
+    pub created_at: i64,
+    pub thread_id: Option<i64>,
 }
 
 // --- Thread models ---
@@ -394,44 +409,40 @@ mod tests {
     }
 
     #[test]
-    fn query_request_serializes_bind_and_decrypt() {
-        let req = QueryRequest {
-            query: "SELECT id, message FROM chat_logs WHERE chat_id = ? LIMIT 50".to_string(),
-            bind: Some(vec![serde_json::json!(123)]),
-            decrypt: true,
+    fn recent_messages_request_serializes_chat_id_and_limit() {
+        let req = RecentMessagesRequest {
+            chat_id: 123,
+            limit: 25,
         };
 
         let json = serde_json::to_value(&req).unwrap();
 
-        assert_eq!(
-            json["query"],
-            "SELECT id, message FROM chat_logs WHERE chat_id = ? LIMIT 50"
-        );
-        assert_eq!(json["bind"][0], 123);
-        assert_eq!(json["decrypt"], true);
+        assert_eq!(json["chatId"], 123);
+        assert_eq!(json["limit"], 25);
     }
 
     #[test]
-    fn query_response_parses_rows_and_columns() {
+    fn recent_messages_response_parses_messages() {
         let payload = r#"{
-            "rowCount": 2,
-            "columns": [
-                {"name": "id", "sqliteType": "INTEGER"},
-                {"name": "message", "sqliteType": "TEXT"}
-            ],
-            "rows": [
-                [101, "hello"],
-                [102, "world"]
+            "chatId": 123,
+            "messages": [
+                {
+                    "id": 1,
+                    "chatId": 123,
+                    "userId": 7,
+                    "message": "hello",
+                    "type": 1,
+                    "createdAt": 1000,
+                    "threadId": 99
+                }
             ]
         }"#;
 
-        let parsed: QueryResponse = serde_json::from_str(payload).unwrap();
+        let parsed: RecentMessagesResponse = serde_json::from_str(payload).unwrap();
 
-        assert_eq!(parsed.row_count, 2);
-        assert_eq!(parsed.columns[0].name, "id");
-        assert_eq!(parsed.columns[1].sqlite_type, "TEXT");
-        assert_eq!(parsed.rows.len(), 2);
-        assert_eq!(parsed.rows[0][0], Some(serde_json::json!(101)));
-        assert_eq!(parsed.rows[1][1], Some(serde_json::json!("world")));
+        assert_eq!(parsed.chat_id, 123);
+        assert_eq!(parsed.messages.len(), 1);
+        assert_eq!(parsed.messages[0].msg_type, 1);
+        assert_eq!(parsed.messages[0].thread_id, Some(99));
     }
 }

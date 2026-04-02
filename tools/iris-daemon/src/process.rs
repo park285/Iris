@@ -1,5 +1,6 @@
 use crate::adb::Adb;
 use crate::config::DaemonConfig;
+use crate::launch_spec::{LaunchSpec, iris_control_path};
 use anyhow::{Result, bail};
 use std::time::Duration;
 use tokio::process::Command;
@@ -9,7 +10,6 @@ const KAKAOTALK_PACKAGE: &str = "com.kakao.talk";
 const SIGTERM_WAIT_SECS: u64 = 5;
 const STARTUP_RETRY_COUNT: usize = 10;
 const KILL_RETRY_WAIT_SECS: u64 = 1;
-const DEFAULT_IRIS_CONTROL_PATH: &str = "/root/work/Iris/iris_control";
 
 pub async fn iris_pid(adb: &Adb) -> Option<u32> {
     let output = adb
@@ -90,17 +90,9 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
-fn env_or_default(key: &str, fallback: &str) -> String {
-    std::env::var(key).unwrap_or_else(|_| fallback.to_string())
-}
-
-fn iris_control_path() -> String {
-    env_or_default("IRIS_CONTROL_PATH", DEFAULT_IRIS_CONTROL_PATH)
-}
-
 async fn run_iris_control(subcommand: &str) -> Result<()> {
-    let output = Command::new(iris_control_path())
-        .arg(subcommand)
+    let spec = LaunchSpec::iris_control(subcommand);
+    let output = Command::from(spec.to_command())
         .output()
         .await?;
 
@@ -167,15 +159,17 @@ mod tests {
     }
 
     #[test]
-    fn start_command_includes_runtime_arguments() {
-        assert_eq!(iris_control_path(), DEFAULT_IRIS_CONTROL_PATH);
+    fn iris_control_path_defaults_to_expected_binary() {
+        assert_eq!(iris_control_path(), "/root/work/Iris/iris_control");
     }
 
     #[test]
-    fn start_command_excludes_token_env_vars() {
-        let path = iris_control_path();
-        assert!(!path.contains("IRIS_WEBHOOK_TOKEN"));
-        assert!(!path.contains("IRIS_BOT_TOKEN"));
+    fn start_launch_spec_uses_iris_control_binary_without_embedding_tokens() {
+        let spec = LaunchSpec::iris_control("start");
+
+        assert_eq!(spec.args, vec!["start".to_string()]);
+        assert!(!spec.program.contains("IRIS_WEBHOOK_TOKEN"));
+        assert!(!spec.program.contains("IRIS_BOT_TOKEN"));
     }
 
     #[test]

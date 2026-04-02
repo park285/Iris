@@ -162,10 +162,10 @@ mod tests {
     #[test]
     fn parse_message_ignores_event_field_and_parses_data() {
         let last_id = Arc::new(AtomicI64::new(0));
-        let message =
-            "id: 42\nevent: member_event\ndata: {\"type\":\"member_event\",\"event\":\"leave\",\"timestamp\":2}";
+        let message = "id: 42\nevent: member_event\ndata: {\"type\":\"member_event\",\"event\":\"leave\",\"timestamp\":2}";
 
-        let event = parse_message(message, &last_id).expect("event should parse despite event: field");
+        let event =
+            parse_message(message, &last_id).expect("event should parse despite event: field");
 
         assert_eq!(last_id.load(Ordering::Relaxed), 42);
         assert_eq!(event.event_type, "member_event");
@@ -180,7 +180,11 @@ mod tests {
         let result = parse_message(message, &last_id);
 
         assert!(result.is_none(), "comment-only message should return None");
-        assert_eq!(last_id.load(Ordering::Relaxed), 5, "last_id should be unchanged");
+        assert_eq!(
+            last_id.load(Ordering::Relaxed),
+            5,
+            "last_id should be unchanged"
+        );
     }
 
     #[test]
@@ -191,7 +195,11 @@ mod tests {
         let result = parse_message(message, &last_id);
 
         assert!(result.is_none(), "keepalive comment should return None");
-        assert_eq!(last_id.load(Ordering::Relaxed), 10, "last_id should be unchanged");
+        assert_eq!(
+            last_id.load(Ordering::Relaxed),
+            10,
+            "last_id should be unchanged"
+        );
     }
 
     #[test]
@@ -201,7 +209,11 @@ mod tests {
 
         let event = parse_message(message, &last_id).expect("event should parse without id");
 
-        assert_eq!(last_id.load(Ordering::Relaxed), 99, "last_id should remain unchanged");
+        assert_eq!(
+            last_id.load(Ordering::Relaxed),
+            99,
+            "last_id should remain unchanged"
+        );
         assert_eq!(event.event_type, "member_event");
     }
 
@@ -213,6 +225,10 @@ mod tests {
         let result = parse_message(message, &last_id);
 
         assert!(result.is_none(), "malformed JSON should return None");
-        assert_eq!(last_id.load(Ordering::Relaxed), 50, "id should still be updated");
+        assert_eq!(
+            last_id.load(Ordering::Relaxed),
+            50,
+            "id should still be updated"
+        );
     }
 }
