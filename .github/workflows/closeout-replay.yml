@@ -2,6 +2,21 @@ name: closeout-replay
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/closeout-replay.yml"
+      - "app/**"
+      - "bridge/**"
+      - "imagebridge-protocol/**"
+      - "tools/**"
+      - "scripts/**"
+      - "docs/**"
+      - "tests/**"
+      - "build.gradle.kts"
+      - "settings.gradle.kts"
+      - "gradle.properties"
+      - "gradle/**"
+      - "gradlew"
   push:
     branches:
       - main
