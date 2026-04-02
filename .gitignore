@@ -64,3 +64,9 @@ docs/closeout-*.tar.gz
 /AGENTS.md
 /CLAUDE.md
 /review.txt
+/scripts/closeout_facts.py
+/scripts/export-closeout-packet.sh
+/scripts/replay_closeout.sh
+/scripts/verify-all.sh
+/scripts/verify-iris-skill-sync.sh
+/scripts/verify_closeout_packet.py
