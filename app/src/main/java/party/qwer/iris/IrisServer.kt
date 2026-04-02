@@ -193,7 +193,7 @@ internal class IrisServer(
         private const val DEFAULT_BIND_HOST = "127.0.0.1"
         private const val DEFAULT_NETTY_WORKER_THREADS = 2
         private const val DEFAULT_ENABLE_HTTP2 = false
-        private const val DEFAULT_ENABLE_H2C = false
+        private const val DEFAULT_ENABLE_H2C = true
 
         internal fun runtimeHttp2Enabled(): Boolean = DEFAULT_ENABLE_HTTP2
 

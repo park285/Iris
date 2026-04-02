@@ -164,9 +164,9 @@ class IrisServerNettyTransportTest {
     }
 
     @Test
-    fun `runtime server disables http2 and h2c by default`() {
+    fun `runtime server disables http2 and enables h2c by default`() {
         assertFalse(IrisServer.runtimeHttp2Enabled())
-        assertFalse(IrisServer.runtimeH2cEnabled())
+        assertTrue(IrisServer.runtimeH2cEnabled())
     }
 
     @Test
