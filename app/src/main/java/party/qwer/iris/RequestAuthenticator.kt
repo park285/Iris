@@ -3,7 +3,6 @@ package party.qwer.iris
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.time.Instant
-import java.util.LinkedHashMap
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
@@ -158,54 +157,6 @@ internal class RequestAuthenticator(
         return normalized
     }
 
-    private class NonceWindow(
-        private val maxAgeMs: Long,
-        private val maxNonceEntries: Int,
-        private val purgeIntervalMs: Long,
-    ) {
-        private val nonceTimestamps = LinkedHashMap<String, Long>()
-        private var lastPurgeAt = 0L
-
-        init {
-            require(maxNonceEntries > 0) { "maxNonceEntries must be greater than zero" }
-            require(purgeIntervalMs >= 0L) { "purgeIntervalMs must be non-negative" }
-        }
-
-        fun tryRecord(
-            nonce: String,
-            now: Long,
-        ): Boolean =
-            synchronized(this) {
-                maybePurge(now)
-                if (nonceTimestamps.containsKey(nonce)) {
-                    return false
-                }
-
-                if (nonceTimestamps.size >= maxNonceEntries) {
-                    purgeExpiredNonces(now)
-                    lastPurgeAt = now
-                    if (nonceTimestamps.size >= maxNonceEntries) {
-                        return false
-                    }
-                }
-
-                nonceTimestamps[nonce] = now
-                true
-            }
-
-        private fun maybePurge(now: Long) {
-            if (now - lastPurgeAt < purgeIntervalMs) {
-                return
-            }
-            purgeExpiredNonces(now)
-            lastPurgeAt = now
-        }
-
-        private fun purgeExpiredNonces(now: Long) {
-            val cutoff = now - maxAgeMs
-            nonceTimestamps.entries.removeIf { (_, seenAt) -> seenAt < cutoff }
-        }
-    }
 }
 
 private const val SHA256_HEX_LENGTH = 64
@@ -229,7 +180,14 @@ internal fun signIrisRequestWithBodyHash(
     nonce: String,
     bodySha256Hex: String,
 ): String {
-    val canonical = listOf(method.uppercase(), path, timestamp, nonce, bodySha256Hex).joinToString("\n")
+    val canonical =
+        IrisCanonicalRequest(
+            method = method,
+            target = path,
+            timestampMs = timestamp,
+            nonce = nonce,
+            bodySha256Hex = bodySha256Hex,
+        ).serialize()
     val mac = Mac.getInstance("HmacSHA256")
     mac.init(SecretKeySpec(secret.toByteArray(StandardCharsets.UTF_8), "HmacSHA256"))
     return mac.doFinal(canonical.toByteArray(StandardCharsets.UTF_8)).joinToString("") { byte -> "%02x".format(byte) }

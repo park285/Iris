@@ -22,6 +22,24 @@ pub fn canonical_target(path: &str, query: &[(String, String)]) -> String {
     format!("{path}?{encoded}")
 }
 
+/// HMAC 서명에 사용하는 canonical request 문자열을 생성한다.
+pub fn canonical_request(
+    method: &str,
+    target: &str,
+    timestamp_ms: &str,
+    nonce: &str,
+    body_sha256_hex: &str,
+) -> String {
+    format!(
+        "{}\n{}\n{}\n{}\n{}",
+        method.to_uppercase(),
+        target,
+        timestamp_ms,
+        nonce,
+        body_sha256_hex
+    )
+}
+
 /// HMAC-SHA256 서명 헤더를 생성한다.
 pub fn signed_headers(token: &str, method: &str, target: &str, body: &[u8]) -> Result<HeaderMap> {
     let now_ms = SystemTime::now()
@@ -46,14 +64,7 @@ pub fn signed_headers_with(
     nonce: &str,
 ) -> Result<HeaderMap> {
     let body_hash = hex_sha256(body);
-    let canonical = format!(
-        "{}\n{}\n{}\n{}\n{}",
-        method.to_uppercase(),
-        target,
-        timestamp_ms,
-        nonce,
-        body_hash
-    );
+    let canonical = canonical_request(method, target, timestamp_ms, nonce, &body_hash);
     let mut mac = HmacSha256::new_from_slice(token.as_bytes())?;
     mac.update(canonical.as_bytes());
     let signature = hex_bytes(&mac.finalize().into_bytes());
@@ -100,6 +111,14 @@ mod tests {
     #[test]
     fn canonical_target_returns_path_when_no_query() {
         assert_eq!(canonical_target("/health", &[]), "/health");
+    }
+
+    #[test]
+    fn canonical_request_serializes_protocol_fields_in_signing_order() {
+        assert_eq!(
+            canonical_request("post", "/reply?room=1", "1700000000000", "nonce-1", "abc123"),
+            "POST\n/reply?room=1\n1700000000000\nnonce-1\nabc123"
+        );
     }
 
     #[test]

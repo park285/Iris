@@ -5,6 +5,23 @@ import kotlin.test.assertEquals
 
 class RequestAuthenticatorTest {
     @Test
+    fun `canonical request serializes protocol fields in signing order`() {
+        val canonical =
+            IrisCanonicalRequest(
+                method = "post",
+                target = "/reply?room=1",
+                timestampMs = "1700000000000",
+                nonce = "nonce-1",
+                bodySha256Hex = "abc123",
+            )
+
+        assertEquals(
+            "POST\n/reply?room=1\n1700000000000\nnonce-1\nabc123",
+            canonical.serialize(),
+        )
+    }
+
+    @Test
     fun `rejects legacy bot token without signature`() {
         val authenticator = RequestAuthenticator(nowEpochMs = { 1_000L })
 
@@ -366,10 +383,6 @@ class RequestAuthenticatorTest {
     private fun cachedNonceCount(authenticator: RequestAuthenticator): Int {
         val field = RequestAuthenticator::class.java.getDeclaredField("nonceWindow")
         field.isAccessible = true
-        val nonceWindow = field.get(authenticator)
-        val mapField = nonceWindow.javaClass.getDeclaredField("nonceTimestamps")
-        mapField.isAccessible = true
-        val nonceTimestamps = mapField.get(nonceWindow) as Map<*, *>
-        return nonceTimestamps.size
+        return (field.get(authenticator) as NonceWindow).size()
     }
 }

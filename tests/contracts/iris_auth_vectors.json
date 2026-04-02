@@ -1,0 +1,86 @@
+[
+  {
+    "name": "get-config-empty-body",
+    "secret": "secret",
+    "method": "GET",
+    "target": "/config",
+    "timestampMs": "1000",
+    "nonce": "nonce-1",
+    "body": "",
+    "bodySha256Hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "canonicalRequest": "GET\n/config\n1000\nnonce-1\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "signature": "6ab7b7cb7175ac20f93c9a7207858232aa58793f884dd3633064aee195c471f1"
+  },
+  {
+    "name": "post-reply-json-body",
+    "secret": "secret",
+    "method": "POST",
+    "target": "/reply?room=1",
+    "timestampMs": "1700000000000",
+    "nonce": "reply-1",
+    "body": "{\"message\":\"hello\"}",
+    "bodySha256Hex": "9b2d43affbf49a367028df2e1414f84c0e099ac98c3d54a8a80157fd7771af25",
+    "canonicalRequest": "POST\n/reply?room=1\n1700000000000\nreply-1\n9b2d43affbf49a367028df2e1414f84c0e099ac98c3d54a8a80157fd7771af25",
+    "signature": "3c2df745b925d0f833e26cb3d68d4cc22f8063aee91785b2a1375d0568188b60"
+  },
+  {
+    "name": "get-stats-query-body-hash",
+    "secret": "tok",
+    "method": "GET",
+    "target": "/rooms/42/stats?limit=5&period=7d",
+    "timestampMs": "500",
+    "nonce": "n1",
+    "body": "",
+    "bodySha256Hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "canonicalRequest": "GET\n/rooms/42/stats?limit=5&period=7d\n500\nn1\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "signature": "578c36195bd0d04e31e6a0b4b6570145a27db0aa213ca2d48799996effde88a3"
+  },
+  {
+    "name": "post-reply-unicode-body",
+    "secret": "secret",
+    "method": "POST",
+    "target": "/reply?room=42",
+    "timestampMs": "2000",
+    "nonce": "unicode-n1",
+    "body": "{\"message\":\"안녕하세요\"}",
+    "bodySha256Hex": "66d6525b6b86c1b30a1670f3c83a8b096eb31f8e06249d54d172b65572f42ff5",
+    "canonicalRequest": "POST\n/reply?room=42\n2000\nunicode-n1\n66d6525b6b86c1b30a1670f3c83a8b096eb31f8e06249d54d172b65572f42ff5",
+    "signature": "ac11d1309405f399d750bdfcbc519bda81fc2d31b114ed0ac45ce76d14aa6848"
+  },
+  {
+    "name": "get-percent-encoded-path",
+    "secret": "tok",
+    "method": "GET",
+    "target": "/rooms/42/stats%2Fdetail?key=val",
+    "timestampMs": "3000",
+    "nonce": "pct-n1",
+    "body": "",
+    "bodySha256Hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "canonicalRequest": "GET\n/rooms/42/stats%2Fdetail?key=val\n3000\npct-n1\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "signature": "71df7f95eb0c7cd4d70cb65816cc472ed210720caac8086de61295a8475f4eb4"
+  },
+  {
+    "name": "get-repeated-query-param",
+    "secret": "secret",
+    "method": "GET",
+    "target": "/query?a=1&a=3&b=2",
+    "timestampMs": "4000",
+    "nonce": "repeat-n1",
+    "body": "",
+    "bodySha256Hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "canonicalRequest": "GET\n/query?a=1&a=3&b=2\n4000\nrepeat-n1\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "signature": "b8c0775aa4112bcfaea680bcecebaa81e564f637a7983f96a76837c124cea7a9"
+  },
+  {
+    "name": "post-lowercase-method-normalization",
+    "secret": "secret",
+    "method": "post",
+    "target": "/reply",
+    "timestampMs": "5000",
+    "nonce": "case-n1",
+    "body": "{\"data\":\"test\"}",
+    "bodySha256Hex": "476b9a271bf3fffee4c1eeaf353719f4a5437ccd4decc0a9a176dff6baf700f9",
+    "canonicalRequest": "POST\n/reply\n5000\ncase-n1\n476b9a271bf3fffee4c1eeaf353719f4a5437ccd4decc0a9a176dff6baf700f9",
+    "signature": "70dac30df5303a717abee50570174a66ccdb71c9d4812ab4722afac63986c5bc"
+  }
+]
