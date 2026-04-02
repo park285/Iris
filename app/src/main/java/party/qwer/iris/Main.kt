@@ -2,7 +2,6 @@
 // 출처: jiru/kakaodecrypt
 package party.qwer.iris
 
-import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -23,19 +22,7 @@ class Main {
                             runtimeOptions = RuntimeOptions.fromEnv(),
                             notificationReferer = readNotificationReferer(),
                         )
-                    runtime.start()
-                    Runtime.getRuntime().addShutdownHook(
-                        Thread {
-                            runBlocking {
-                                runtime.stop()
-                            }
-                        },
-                    )
-                    try {
-                        awaitCancellation()
-                    } finally {
-                        runtime.stop()
-                    }
+                    AppRuntimeSupervisor(runtime).runUntilStopped()
                 }
             } catch (e: Exception) {
                 IrisLogger.error("Iris Error: ${e.message}", e)

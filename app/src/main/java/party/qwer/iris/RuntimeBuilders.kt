@@ -12,6 +12,16 @@ import party.qwer.iris.storage.RoomStatsQueries
 import party.qwer.iris.storage.ThreadQueries
 
 internal object RuntimeBuilders {
+    internal class ShutdownPlanException(
+        failures: List<Pair<String, Throwable>>,
+    ) : IllegalStateException(
+            "shutdown plan failed for ${failures.size} step(s): ${failures.joinToString { it.first }}",
+        ) {
+        init {
+            failures.forEach { (_, error) -> addSuppressed(error) }
+        }
+    }
+
     data class StorageRuntime(
         val kakaoDb: KakaoDB,
         val memberRepository: MemberRepository,
@@ -189,6 +199,16 @@ internal object RuntimeBuilders {
         )
 
     fun runShutdownPlan(plan: List<ShutdownStep>) {
-        plan.forEach { step -> step.action() }
+        val failures = mutableListOf<Pair<String, Throwable>>()
+        plan.forEach { step ->
+            runCatching { step.action() }
+                .onFailure { error ->
+                    failures += step.name to error
+                    IrisLogger.error("[AppRuntime] Shutdown step ${step.name} failed: ${error.message}", error)
+                }
+        }
+        if (failures.isNotEmpty()) {
+            throw ShutdownPlanException(failures)
+        }
     }
 }

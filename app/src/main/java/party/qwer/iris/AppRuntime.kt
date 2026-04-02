@@ -11,40 +11,110 @@ import party.qwer.iris.persistence.CheckpointJournal
 import party.qwer.iris.persistence.SnapshotStateStore
 import party.qwer.iris.persistence.SqliteDriver
 import java.util.ArrayDeque
-import java.util.concurrent.atomic.AtomicBoolean
 
 internal class AppRuntime(
     private val runtimeOptions: RuntimeOptions,
     private val notificationReferer: String,
+    private val startupSnapshotFactory: (() -> AppRuntimeRunningSnapshot)? = null,
 ) {
-    private val started = AtomicBoolean(false)
-    private val stopped = AtomicBoolean(false)
-    private var runningSnapshot: AppRuntimeRunningSnapshot? = null
+    private sealed interface RuntimeState {
+        data object New : RuntimeState
+
+        data object Starting : RuntimeState
+
+        data class Running(
+            val snapshot: AppRuntimeRunningSnapshot,
+        ) : RuntimeState
+
+        data object Stopping : RuntimeState
+
+        data object Stopped : RuntimeState
+    }
+
+    private val stateLock = Any()
+    private var state: RuntimeState = RuntimeState.New
+    private var stopRequestedWhileStarting = false
 
     fun start() {
-        if (!started.compareAndSet(false, true)) {
-            return
+        runBlocking { startSuspend() }
+    }
+
+    suspend fun startSuspend() {
+        synchronized(stateLock) {
+            when (state) {
+                RuntimeState.New, RuntimeState.Stopped -> {
+                    state = RuntimeState.Starting
+                    stopRequestedWhileStarting = false
+                }
+                RuntimeState.Starting, RuntimeState.Stopping, is RuntimeState.Running -> return
+            }
         }
-        try {
-            runningSnapshot = assembleStartup().toRunningSnapshot()
-        } catch (error: Throwable) {
-            started.set(false)
-            runningSnapshot = null
-            throw error
+
+        val snapshot =
+            try {
+                startupSnapshotFactory?.invoke() ?: assembleStartup().toRunningSnapshot()
+            } catch (error: Throwable) {
+                synchronized(stateLock) {
+                    state = RuntimeState.Stopped
+                }
+                throw error
+            }
+
+        val shouldStopImmediately =
+            synchronized(stateLock) {
+                state = RuntimeState.Running(snapshot)
+                stopRequestedWhileStarting
+            }
+
+        if (shouldStopImmediately) {
+            stop()
         }
     }
 
     suspend fun stop() {
-        if (!stopped.compareAndSet(false, true)) {
-            return
-        }
-        val snapshot = runningSnapshot ?: return
+        val snapshot =
+            synchronized(stateLock) {
+                when (val current = state) {
+                    RuntimeState.New,
+                    RuntimeState.Stopped,
+                    -> return
+
+                    RuntimeState.Starting -> {
+                        stopRequestedWhileStarting = true
+                        return
+                    }
+
+                    RuntimeState.Stopping -> return
+                    is RuntimeState.Running -> {
+                        state = RuntimeState.Stopping
+                        current.snapshot
+                    }
+                }
+            }
+
         withContext(Dispatchers.IO) {
             IrisLogger.info("[AppRuntime] Shutdown signal received, cleaning up...")
-            snapshot.runShutdown()
-            IrisLogger.info("[AppRuntime] Cleanup completed")
+            try {
+                snapshot.runShutdown()
+                IrisLogger.info("[AppRuntime] Cleanup completed")
+            } finally {
+                synchronized(stateLock) {
+                    state = RuntimeState.Stopped
+                }
+            }
         }
     }
+
+    internal fun lifecycleStateForTest(): String =
+        synchronized(stateLock) {
+            when (state) {
+                RuntimeState.New -> "NEW"
+                RuntimeState.Starting -> "STARTING"
+                is RuntimeState.Running -> "RUNNING"
+                RuntimeState.Stopping -> "STOPPING"
+                RuntimeState.Stopped -> "STOPPED"
+            }
+        }
 
     private fun assembleStartup(): AppRuntimeStartupAssembly {
         val rollback = StartupRollback()
@@ -157,6 +227,7 @@ internal class AppRuntime(
                         replyService,
                         replyImageIngressPolicy = replyImageIngressPolicy,
                         bridgeHealthProvider = bridgeHealthCache::current,
+                        configReadinessProvider = configManager::runtimeConfigReadiness,
                         replyStatusProvider = replyService::replyStatusOrNull,
                         memberRepo = memberRepo,
                         sseEventBus = sseEventBus,
@@ -261,8 +332,7 @@ private data class AppRuntimeStartupAssembly(
 internal data class AppRuntimeRunningSnapshot(
     val shutdownHooks: RuntimeBuilders.ShutdownHooks,
 ) {
-    fun shutdownPlan(): List<RuntimeBuilders.ShutdownStep> =
-        RuntimeBuilders.buildShutdownPlan(shutdownHooks)
+    fun shutdownPlan(): List<RuntimeBuilders.ShutdownStep> = RuntimeBuilders.buildShutdownPlan(shutdownHooks)
 
     fun runShutdown() {
         RuntimeBuilders.runShutdownPlan(shutdownPlan())
