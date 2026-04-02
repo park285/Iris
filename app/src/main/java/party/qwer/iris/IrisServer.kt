@@ -19,6 +19,7 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import party.qwer.iris.http.AuthSupport
 import party.qwer.iris.http.ReplyImageIngressPolicy
+import party.qwer.iris.http.RuntimeConfigReadiness
 import party.qwer.iris.http.installConfigRoutes
 import party.qwer.iris.http.installHealthRoutes
 import party.qwer.iris.http.installMemberRoutes
@@ -47,6 +48,7 @@ internal class IrisServer(
     private val messageSender: MessageSender,
     private val replyImageIngressPolicy: ReplyImageIngressPolicy = ReplyImageIngressPolicy.fromEnv(),
     private val bridgeHealthProvider: (() -> ImageBridgeHealthResult?)? = null,
+    private val configReadinessProvider: (() -> RuntimeConfigReadiness)? = null,
     private val replyStatusProvider: ((String) -> ReplyStatusSnapshot?)? = null,
     private val memberRepo: MemberRepository? = null,
     private val sseEventBus: SseEventBus? = null,
@@ -172,7 +174,7 @@ internal class IrisServer(
 
     private fun Application.configureRouting() {
         routing {
-            installHealthRoutes(authSupport, bridgeHealthProvider, chatRoomIntrospectProvider)
+            installHealthRoutes(authSupport, bridgeHealthProvider, configReadinessProvider, chatRoomIntrospectProvider)
             installConfigRoutes(authSupport, configManager, serverJson)
             installReplyRoutes(
                 authSupport = authSupport,

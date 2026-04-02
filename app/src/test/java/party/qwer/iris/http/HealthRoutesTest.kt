@@ -3,7 +3,9 @@ package party.qwer.iris.http
 import party.qwer.iris.model.ImageBridgeDiscoveryHook
 import party.qwer.iris.model.ImageBridgeHealthResult
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class HealthRoutesTest {
@@ -42,6 +44,50 @@ class HealthRoutesTest {
             )
 
         assertTrue(isBridgeReady(health))
+    }
+
+    @Test
+    fun `readiness failure prioritizes bootstrap config before bridge state`() {
+        val reason =
+            readinessFailureReason(
+                bridgeHealth = healthResult(requiredHookStates = REQUIRED_HOOK_NAMES.associateWith { true }),
+                configReadiness =
+                    RuntimeConfigReadiness(
+                        inboundSigningSecretConfigured = false,
+                        outboundWebhookTokenConfigured = true,
+                        botControlTokenConfigured = true,
+                        bridgeTokenConfigured = true,
+                        defaultWebhookEndpointConfigured = true,
+                    ),
+            )
+
+        assertEquals("config not ready: inbound signing secret not configured", reason)
+    }
+
+    @Test
+    fun `readiness failure reports bridge when config is complete`() {
+        val reason =
+            readinessFailureReason(
+                bridgeHealth =
+                    healthResult(
+                        reachable = false,
+                        requiredHookStates = REQUIRED_HOOK_NAMES.associateWith { true },
+                    ),
+                configReadiness = RuntimeConfigReadiness.allConfigured(),
+            )
+
+        assertEquals("bridge not ready", reason)
+    }
+
+    @Test
+    fun `readiness failure returns null when config and bridge are ready`() {
+        val reason =
+            readinessFailureReason(
+                bridgeHealth = healthResult(requiredHookStates = REQUIRED_HOOK_NAMES.associateWith { true }),
+                configReadiness = RuntimeConfigReadiness.allConfigured(),
+            )
+
+        assertNull(reason)
     }
 
     private fun healthResult(

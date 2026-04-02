@@ -17,8 +17,11 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import okhttp3.Request
+import party.qwer.iris.ConfigManager
 import party.qwer.iris.ConfigProvider
+import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
 import party.qwer.iris.IrisLogger
+import party.qwer.iris.http.RuntimeBootstrapState
 import party.qwer.iris.persistence.ClaimTransitionResult
 import party.qwer.iris.persistence.ClaimedDelivery
 import party.qwer.iris.persistence.FailureOutcome
@@ -32,22 +35,30 @@ internal class WebhookOutboxDispatcher(
     transportOverride: String? = null,
     private val partitionCount: Int = 4,
     private val deliveryPolicy: WebhookDeliveryPolicy = WebhookDeliveryPolicy(),
-    private val claimTransitionObserver: ClaimTransitionObserver = ClaimTransitionObserver { operation, entry, result ->
-        if (result == ClaimTransitionResult.STALE_CLAIM) {
-            IrisLogger.warn(
-                "[OutboxDispatcher] Stale claim ignored: operation=$operation, id=${entry.id}, messageId=${entry.messageId}",
-            )
-        }
-    },
+    private val claimTransitionObserver: ClaimTransitionObserver =
+        ClaimTransitionObserver { operation, entry, result ->
+            if (result == ClaimTransitionResult.STALE_CLAIM) {
+                IrisLogger.warn(
+                    "[OutboxDispatcher] Stale claim ignored: operation=$operation, id=${entry.id}, messageId=${entry.messageId}",
+                )
+            }
+        },
     private val backoffDelayProvider: (Int) -> Long = ::nextBackoffDelayMs,
     private val clock: () -> Long = System::currentTimeMillis,
     dispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val createRequestOverride: ((WebhookDelivery) -> Request)? = null,
     private val executeRequestOverride: (suspend (Request, String) -> Int)? = null,
+    clientFactoryOverride: WebhookHttpClientFactory? = null,
 ) : Closeable {
     private val scopeJob = SupervisorJob()
     private val coroutineScope = CoroutineScope(scopeJob + dispatcher)
-    private val clientFactory = WebhookHttpClientFactory(resolveWebhookTransport(transportOverride), okhttp3.Dispatcher(), okhttp3.ConnectionPool())
+    private val clientFactory =
+        clientFactoryOverride
+            ?: WebhookHttpClientFactory(
+                resolveWebhookTransport(transportOverride),
+                okhttp3.Dispatcher(),
+                okhttp3.ConnectionPool(),
+            )
     private val requestFactory = WebhookRequestFactory(config)
     private val deliveryClient = WebhookDeliveryClient(clientFactory)
     private val requestBuilder: (WebhookDelivery) -> Request = createRequestOverride ?: requestFactory::create
@@ -135,6 +146,15 @@ internal class WebhookOutboxDispatcher(
         var attemptStarted = false
         var heartbeatJob: Job? = null
         try {
+            bootstrapFailureReason()?.let { reason ->
+                releaseClaimIfOutstanding(
+                    entry = entry,
+                    nextAttemptAt = clock() + deliveryPolicy.pollIntervalMs,
+                    reason = "dispatcher bootstrap not ready: $reason",
+                )
+                return
+            }
+
             val url = config.webhookEndpointFor(entry.route).takeIf { it.isNotBlank() }
             if (url.isNullOrBlank()) {
                 resolveRejectedBeforeAttempt(entry, "no webhook URL configured for route=${entry.route}")
@@ -212,6 +232,28 @@ internal class WebhookOutboxDispatcher(
         }
     }
 
+    private fun bootstrapFailureReason(): String? =
+        when (val runtimeConfig = config) {
+            is ConfigManager ->
+                when (val state = runtimeConfig.runtimeBootstrapState()) {
+                    RuntimeBootstrapState.Ready -> null
+                    is RuntimeBootstrapState.Blocked -> state.reason
+                }
+            else -> {
+                val inboundConfigured = runtimeConfig.activeInboundSigningSecret().isNotBlank()
+                val outboundConfigured = runtimeConfig.activeOutboundWebhookToken().isNotBlank()
+                val botControlConfigured = runtimeConfig.activeBotControlToken().isNotBlank()
+                val defaultWebhookConfigured = runtimeConfig.webhookEndpointFor(DEFAULT_WEBHOOK_ROUTE).isNotBlank()
+                when {
+                    !inboundConfigured -> "inbound signing secret not configured"
+                    !outboundConfigured -> "outbound webhook token not configured"
+                    !botControlConfigured -> "bot control token not configured"
+                    !defaultWebhookConfigured -> "default webhook endpoint not configured"
+                    else -> null
+                }
+            }
+        }
+
     private fun scheduleRetryOrDead(
         entry: ClaimedDelivery,
         reason: String?,
@@ -260,11 +302,7 @@ internal class WebhookOutboxDispatcher(
         }
         releaseOutstandingClaims()
         scopeJob.cancelAndJoin()
-        clientFactory
-            .clientFor("http://127.0.0.1")
-            .dispatcher.executorService
-            .shutdownNow()
-        clientFactory.clientFor("http://127.0.0.1").connectionPool.evictAll()
+        clientFactory.shutdownSharedResources()
         store.close()
     }
 
@@ -283,7 +321,8 @@ internal class WebhookOutboxDispatcher(
             return false
         }
         observeResult(
-            "requeueClaim", entry,
+            "requeueClaim",
+            entry,
             store.requeueClaim(
                 id = entry.id,
                 claimToken = entry.claimToken,

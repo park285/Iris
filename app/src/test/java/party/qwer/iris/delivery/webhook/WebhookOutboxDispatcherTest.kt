@@ -30,6 +30,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -38,8 +39,8 @@ class WebhookOutboxDispatcherTest {
 
     @Test
     fun `dispatcher retries claims when partition queue is saturated`() {
-        val configPath = Files.createTempFile("iris-outbox-dispatcher", ".json").toFile().absolutePath
-        val config = ConfigManager(configPath = configPath)
+        val configPath = temporaryConfigPath("iris-outbox-dispatcher")
+        val config = createBootstrappedConfigManager(configPath)
         val port = reservePort()
         config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, "http://127.0.0.1:$port/webhook/iris")
 
@@ -99,8 +100,8 @@ class WebhookOutboxDispatcherTest {
     fun `dispatcher periodically recovers expired claims while running`() =
         runTest {
             val dispatcher = StandardTestDispatcher(testScheduler)
-            val configPath = Files.createTempFile("iris-outbox-dispatcher", ".json").toFile().absolutePath
-            val config = ConfigManager(configPath = configPath)
+            val configPath = temporaryConfigPath("iris-outbox-dispatcher")
+            val config = createBootstrappedConfigManager(configPath)
             val store = RecordingWebhookDeliveryStore(claimedEntries = emptyList())
             val recoveryInterval = 10_000L
             val outboxDispatcher =
@@ -135,8 +136,8 @@ class WebhookOutboxDispatcherTest {
     fun `dispatcher recovers expired claims immediately on start`() =
         runTest {
             val dispatcher = StandardTestDispatcher(testScheduler)
-            val configPath = Files.createTempFile("iris-outbox-dispatcher", ".json").toFile().absolutePath
-            val config = ConfigManager(configPath = configPath)
+            val configPath = temporaryConfigPath("iris-outbox-dispatcher")
+            val config = createBootstrappedConfigManager(configPath)
             val store = RecordingWebhookDeliveryStore(claimedEntries = emptyList())
             val outboxDispatcher =
                 WebhookOutboxDispatcher(
@@ -179,8 +180,8 @@ class WebhookOutboxDispatcherTest {
                 executor = Executors.newSingleThreadExecutor()
                 start()
             }
-        val configPath = Files.createTempFile("iris-outbox-dispatcher", ".json").toFile().absolutePath
-        val config = ConfigManager(configPath = configPath)
+        val configPath = temporaryConfigPath("iris-outbox-dispatcher")
+        val config = createBootstrappedConfigManager(configPath)
         config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, "http://127.0.0.1:$port/webhook/iris")
         val store =
             RecordingWebhookDeliveryStore(
@@ -218,6 +219,34 @@ class WebhookOutboxDispatcherTest {
     }
 
     @Test
+    fun `closeSuspend is safe when transport security mode requires TLS`() =
+        runBlocking {
+            val configPath = temporaryConfigPath("iris-outbox-tls-close")
+            val config = createBootstrappedConfigManager(configPath)
+            val store = RecordingWebhookDeliveryStore(claimedEntries = emptyList())
+            val dispatcher =
+                WebhookOutboxDispatcher(
+                    config = config,
+                    store = store,
+                    clientFactoryOverride =
+                        WebhookHttpClientFactory(
+                            transport = WebhookTransport.HTTP1,
+                            sharedDispatcher = okhttp3.Dispatcher(),
+                            sharedConnectionPool = okhttp3.ConnectionPool(),
+                            transportSecurityMode = TransportSecurityMode.TLS_REQUIRED,
+                        ),
+                )
+
+            try {
+                dispatcher.closeSuspend()
+            } finally {
+                Files.deleteIfExists(Path.of(configPath))
+            }
+
+            assertEquals(1, store.closeCallCount.get())
+        }
+
+    @Test
     fun `shutdown after successful http attempt still marks sent`() {
         val requestStarted = CountDownLatch(1)
         val sentLatch = CountDownLatch(1)
@@ -232,8 +261,8 @@ class WebhookOutboxDispatcherTest {
                 executor = Executors.newSingleThreadExecutor()
                 start()
             }
-        val configPath = Files.createTempFile("iris-outbox-sent-shutdown", ".json").toFile().absolutePath
-        val config = ConfigManager(configPath = configPath)
+        val configPath = temporaryConfigPath("iris-outbox-sent-shutdown")
+        val config = createBootstrappedConfigManager(configPath)
         config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, "http://127.0.0.1:$port/webhook/iris")
         val store =
             RecordingWebhookDeliveryStore(
@@ -277,8 +306,8 @@ class WebhookOutboxDispatcherTest {
                 executor = Executors.newSingleThreadExecutor()
                 start()
             }
-        val configPath = Files.createTempFile("iris-outbox-pre-attempt", ".json").toFile().absolutePath
-        val config = ConfigManager(configPath = configPath)
+        val configPath = temporaryConfigPath("iris-outbox-pre-attempt")
+        val config = createBootstrappedConfigManager(configPath)
         config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, "http://127.0.0.1:$port/webhook/iris")
         val releaseLatch = CountDownLatch(1)
         val store =
@@ -322,14 +351,14 @@ class WebhookOutboxDispatcherTest {
     }
 
     @Test
-    fun `missing webhook URL resolves as RejectedBeforeAttempt`() {
-        val configPath = Files.createTempFile("iris-outbox-no-url", ".json").toFile().absolutePath
-        val config = ConfigManager(configPath = configPath)
+    fun `missing webhook URL requeues while bootstrap config is incomplete`() {
+        val configPath = temporaryConfigPath("iris-outbox-no-url")
+        val config = temporaryUnbootstrappedConfigManager(configPath)
         val latch = CountDownLatch(1)
         val store =
             RecordingWebhookDeliveryStore(
                 claimedEntries = listOf(claimedEntry(id = 1L, roomId = 1L, messageId = "msg-no-url")),
-                onDead = { latch.countDown() },
+                onRelease = { latch.countDown() },
             )
 
         try {
@@ -346,14 +375,15 @@ class WebhookOutboxDispatcherTest {
             Files.deleteIfExists(Path.of(configPath))
         }
 
-        assertEquals(1, store.resolvedOutcomes.size)
-        assertTrue(store.resolvedOutcomes.single() is FailureOutcome.RejectedBeforeAttempt)
+        assertEquals(listOf(1L), store.releasedIds.toList())
+        assertTrue(store.resolvedOutcomes.isEmpty())
+        assertTrue(store.releaseReasons.any { it.contains("dispatcher bootstrap not ready") })
     }
 
     @Test
     fun `pre attempt request creation failure resolves as RejectedBeforeAttempt not requeue`() {
-        val configPath = Files.createTempFile("iris-outbox-invalid-request", ".json").toFile().absolutePath
-        val config = ConfigManager(configPath = configPath)
+        val configPath = temporaryConfigPath("iris-outbox-invalid-request")
+        val config = createBootstrappedConfigManager(configPath)
         config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, "http://127.0.0.1:65535/webhook/iris")
 
         val deadLatch = CountDownLatch(1)
@@ -385,8 +415,8 @@ class WebhookOutboxDispatcherTest {
 
     @Test
     fun `unexpected pre attempt local exception resolves retry not dead letter`() {
-        val configPath = Files.createTempFile("iris-outbox-unexpected-pre-attempt", ".json").toFile().absolutePath
-        val config = ConfigManager(configPath = configPath)
+        val configPath = temporaryConfigPath("iris-outbox-unexpected-pre-attempt")
+        val config = createBootstrappedConfigManager(configPath)
         config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, "http://127.0.0.1:65535/webhook/iris")
 
         val retryLatch = CountDownLatch(1)
@@ -417,9 +447,40 @@ class WebhookOutboxDispatcherTest {
     }
 
     @Test
+    fun `close suspend is safe under tls required transport security`() =
+        runTest {
+            val configPath = temporaryConfigPath("iris-outbox-tls-close")
+            val config = createBootstrappedConfigManager(configPath)
+            val store = RecordingWebhookDeliveryStore(claimedEntries = emptyList())
+            val clientFactory =
+                WebhookHttpClientFactory(
+                    transport = WebhookTransport.HTTP1,
+                    sharedDispatcher = okhttp3.Dispatcher(),
+                    sharedConnectionPool = okhttp3.ConnectionPool(),
+                    transportSecurityMode = TransportSecurityMode.TLS_REQUIRED,
+                )
+            val outboxDispatcher =
+                WebhookOutboxDispatcher(
+                    config = config,
+                    store = store,
+                    clientFactoryOverride = clientFactory,
+                )
+
+            try {
+                outboxDispatcher.closeSuspend()
+            } finally {
+                Files.deleteIfExists(Path.of(configPath))
+            }
+
+            assertFailsWith<IllegalArgumentException> {
+                clientFactory.clientFor("http://127.0.0.1")
+            }
+        }
+
+    @Test
     fun `delivery timeout after attempt start resolves retry instead of requeue`() {
-        val configPath = Files.createTempFile("iris-outbox-timeout", ".json").toFile().absolutePath
-        val config = ConfigManager(configPath = configPath)
+        val configPath = temporaryConfigPath("iris-outbox-timeout")
+        val config = createBootstrappedConfigManager(configPath)
         config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, "http://127.0.0.1:65535/webhook/iris")
 
         val retryLatch = CountDownLatch(1)
@@ -463,8 +524,8 @@ class WebhookOutboxDispatcherTest {
 
     @Test
     fun `long running delivery renews claim while in flight`() {
-        val configPath = Files.createTempFile("iris-outbox-heartbeat", ".json").toFile().absolutePath
-        val config = ConfigManager(configPath = configPath)
+        val configPath = temporaryConfigPath("iris-outbox-heartbeat")
+        val config = createBootstrappedConfigManager(configPath)
         config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, "http://127.0.0.1:65535/webhook/iris")
 
         val renewLatch = CountDownLatch(2)
@@ -520,8 +581,8 @@ class WebhookOutboxDispatcherTest {
                 executor = Executors.newSingleThreadExecutor()
                 start()
             }
-        val configPath = Files.createTempFile("iris-outbox-400", ".json").toFile().absolutePath
-        val config = ConfigManager(configPath = configPath)
+        val configPath = temporaryConfigPath("iris-outbox-400")
+        val config = createBootstrappedConfigManager(configPath)
         config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, "http://127.0.0.1:$port/webhook/iris")
         val latch = CountDownLatch(1)
         val store =
@@ -563,8 +624,8 @@ class WebhookOutboxDispatcherTest {
                 executor = Executors.newSingleThreadExecutor()
                 start()
             }
-        val configPath = Files.createTempFile("iris-outbox-503-retry", ".json").toFile().absolutePath
-        val config = ConfigManager(configPath = configPath)
+        val configPath = temporaryConfigPath("iris-outbox-503-retry")
+        val config = createBootstrappedConfigManager(configPath)
         config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, "http://127.0.0.1:$port/webhook/iris")
         val retryLatch = CountDownLatch(1)
         val store =
@@ -616,8 +677,8 @@ class WebhookOutboxDispatcherTest {
                 executor = Executors.newSingleThreadExecutor()
                 start()
             }
-        val configPath = Files.createTempFile("iris-outbox-stale", ".json").toFile().absolutePath
-        val config = ConfigManager(configPath = configPath)
+        val configPath = temporaryConfigPath("iris-outbox-stale")
+        val config = createBootstrappedConfigManager(configPath)
         config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, "http://127.0.0.1:$port/webhook/iris")
         val sentLatch = CountDownLatch(1)
         val store =
@@ -650,8 +711,8 @@ class WebhookOutboxDispatcherTest {
 
     @Test
     fun `dispatcher uses delivery policy max attempts instead of legacy dispatcher constant`() {
-        val configPath = Files.createTempFile("iris-outbox-policy", ".json").toFile().absolutePath
-        val config = ConfigManager(configPath = configPath)
+        val configPath = temporaryConfigPath("iris-outbox-policy")
+        val config = createBootstrappedConfigManager(configPath)
         val port = reservePort()
         config.setWebhookEndpoint(DEFAULT_WEBHOOK_ROUTE, "http://127.0.0.1:$port/webhook/iris")
         val deadLatch = CountDownLatch(1)
@@ -728,6 +789,7 @@ private class RecordingWebhookDeliveryStore(
     private val onDead: () -> Unit = {},
 ) : WebhookDeliveryStore {
     private var claimed = false
+    val closeCallCount = AtomicInteger(0)
     val retriedIds = CopyOnWriteArrayList<Long>()
     val retryReasons = CopyOnWriteArrayList<String>()
     val renewedIds = CopyOnWriteArrayList<Long>()
@@ -808,11 +870,40 @@ private class RecordingWebhookDeliveryStore(
         return 0
     }
 
-    override fun close() {}
+    override fun close() {
+        closeCallCount.incrementAndGet()
+    }
 }
 
 private fun dummyRequest(url: String = "http://127.0.0.1/dummy"): Request =
-    Request.Builder()
+    Request
+        .Builder()
         .url(url)
         .post("{}".toRequestBody("application/json; charset=utf-8".toMediaType()))
         .build()
+
+private fun temporaryConfigPath(prefix: String): String =
+    Files
+        .createTempDirectory(prefix)
+        .resolve("config.json")
+        .toString()
+
+private fun createBootstrappedConfigManager(configPath: String): ConfigManager {
+    Files.write(
+        Path.of(configPath),
+        """
+        {
+          "inboundSigningSecret": "inbound-secret",
+          "outboundWebhookToken": "outbound-secret",
+          "botControlToken": "bot-control-secret",
+          "bridgeToken": "bridge-secret"
+        }
+        """.trimIndent().toByteArray(),
+    )
+    return ConfigManager(configPath = configPath)
+}
+
+private fun temporaryUnbootstrappedConfigManager(configPath: String): ConfigManager {
+    Files.write(Path.of(configPath), """{"botName":"Iris"}""".toByteArray())
+    return ConfigManager(configPath = configPath)
+}

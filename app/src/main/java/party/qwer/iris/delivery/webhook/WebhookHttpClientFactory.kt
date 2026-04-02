@@ -67,8 +67,8 @@ internal fun resolveTransportSecurityMode(
 
 internal class WebhookHttpClientFactory(
     transport: WebhookTransport,
-    sharedDispatcher: Dispatcher,
-    sharedConnectionPool: ConnectionPool,
+    private val sharedDispatcher: Dispatcher,
+    private val sharedConnectionPool: ConnectionPool,
     private val transportSecurityMode: TransportSecurityMode =
         resolveTransportSecurityMode(
             rawMode = System.getenv(TRANSPORT_SECURITY_MODE_ENV),
@@ -125,6 +125,11 @@ internal class WebhookHttpClientFactory(
             }
         }
         return defaultClient
+    }
+
+    fun shutdownSharedResources() {
+        sharedDispatcher.executorService.shutdownNow()
+        sharedConnectionPool.evictAll()
     }
 
     private fun isLoopbackWebhookUrl(webhookUrl: String): Boolean {
