@@ -7,6 +7,14 @@ import kotlin.test.assertSame
 
 class H2cDispatcherClientConfigTest {
     @Test
+    fun `webhook transport defaults to h2c when unset`() {
+        assertEquals(WebhookTransport.H2C, resolveWebhookTransport(null))
+        assertEquals(WebhookTransport.H2C, resolveWebhookTransport("  "))
+        assertEquals(WebhookTransport.H2C, resolveWebhookTransport("h2c"))
+        assertEquals(WebhookTransport.HTTP1, resolveWebhookTransport("http1"))
+    }
+
+    @Test
     fun `shares dispatcher and connection pool across transport clients`() {
         val sharedDispatcher = okhttp3.Dispatcher()
         val sharedConnectionPool = okhttp3.ConnectionPool()
@@ -76,6 +84,10 @@ class H2cDispatcherClientConfigTest {
             TransportSecurityMode.TLS_REQUIRED,
             resolveTransportSecurityMode(rawMode = "tls_required", allowCleartextHttp = true),
         )
+        assertEquals(
+            TransportSecurityMode.LOOPBACK_HTTP_ALLOWED,
+            resolveTransportSecurityMode(rawMode = "cleartext_http_allowed", allowCleartextHttp = false),
+        )
     }
 
     @Test
@@ -94,7 +106,7 @@ class H2cDispatcherClientConfigTest {
     }
 
     @Test
-    fun `private overlay cleartext webhook is allowed in loopback mode`() {
+    fun `loopback cleartext webhook is allowed in loopback mode`() {
         val factory =
             WebhookHttpClientFactory(
                 transport = WebhookTransport.H2C,
@@ -103,9 +115,24 @@ class H2cDispatcherClientConfigTest {
                 transportSecurityMode = TransportSecurityMode.LOOPBACK_HTTP_ALLOWED,
             )
 
-        val client = factory.clientFor("http://100.100.1.3:30001/webhook/iris")
+        val client = factory.clientFor("http://127.0.0.1:30001/webhook/iris")
         val h2cClient = readClientField(factory, "h2cClient")
         assertSame(h2cClient, client)
+    }
+
+    @Test
+    fun `private overlay cleartext webhook is rejected in loopback mode`() {
+        val factory =
+            WebhookHttpClientFactory(
+                transport = WebhookTransport.H2C,
+                sharedDispatcher = okhttp3.Dispatcher(),
+                sharedConnectionPool = okhttp3.ConnectionPool(),
+                transportSecurityMode = TransportSecurityMode.LOOPBACK_HTTP_ALLOWED,
+            )
+
+        assertFailsWith<IllegalArgumentException> {
+            factory.clientFor("http://100.100.1.3:30001/webhook/iris")
+        }
     }
 
     @Test
@@ -121,6 +148,21 @@ class H2cDispatcherClientConfigTest {
         val client = factory.clientFor("http://100.100.1.3:30001/webhook/iris")
         val h2cClient = readClientField(factory, "h2cClient")
         assertSame(h2cClient, client)
+    }
+
+    @Test
+    fun `public cleartext webhook is rejected in private overlay mode`() {
+        val factory =
+            WebhookHttpClientFactory(
+                transport = WebhookTransport.H2C,
+                sharedDispatcher = okhttp3.Dispatcher(),
+                sharedConnectionPool = okhttp3.ConnectionPool(),
+                transportSecurityMode = TransportSecurityMode.PRIVATE_OVERLAY_HTTP_ALLOWED,
+            )
+
+        assertFailsWith<IllegalArgumentException> {
+            factory.clientFor("http://8.8.8.8:30001/webhook/iris")
+        }
     }
 
     private fun readDispatcherField(h2cDispatcher: H2cDispatcher): okhttp3.Dispatcher =

@@ -53,7 +53,7 @@ internal fun resolveTransportSecurityMode(
     return when (normalized) {
         "tls_required", "tls", "https_only" -> TransportSecurityMode.TLS_REQUIRED
         "loopback_http_allowed", "loopback" -> TransportSecurityMode.LOOPBACK_HTTP_ALLOWED
-        "private_overlay_http_allowed", "private_overlay", "cleartext_http_allowed" ->
+        "private_overlay_http_allowed", "private_overlay" ->
             TransportSecurityMode.PRIVATE_OVERLAY_HTTP_ALLOWED
 
         else ->
@@ -106,17 +106,37 @@ internal class WebhookHttpClientFactory(
                     throw IllegalArgumentException("cleartext HTTP webhook is disabled by transport security mode")
 
                 TransportSecurityMode.LOOPBACK_HTTP_ALLOWED -> {
-                    if (!isTrustedPrivateWebhookUrl(webhookUrl)) {
+                    if (!isLoopbackWebhookUrl(webhookUrl)) {
                         throw IllegalArgumentException(
                             "cleartext HTTP webhook requires loopback host or IRIS_WEBHOOK_TRANSPORT_SECURITY_MODE=PRIVATE_OVERLAY_HTTP_ALLOWED",
                         )
                     }
                 }
 
-                TransportSecurityMode.PRIVATE_OVERLAY_HTTP_ALLOWED -> Unit
+                TransportSecurityMode.PRIVATE_OVERLAY_HTTP_ALLOWED -> {
+                    if (!isTrustedPrivateWebhookUrl(webhookUrl)) {
+                        throw IllegalArgumentException(
+                            "cleartext HTTP webhook requires a trusted private-network host " +
+                                "(loopback, RFC1918, CGNAT, or IPv6 ULA) when " +
+                                "IRIS_WEBHOOK_TRANSPORT_SECURITY_MODE=PRIVATE_OVERLAY_HTTP_ALLOWED",
+                        )
+                    }
+                }
             }
         }
         return defaultClient
+    }
+
+    private fun isLoopbackWebhookUrl(webhookUrl: String): Boolean {
+        val host = webhookUrl.toHttpUrlOrNull()?.host?.lowercase() ?: return false
+        if (host == "localhost") {
+            return true
+        }
+        val address =
+            runCatching { InetAddress.getByName(host) }
+                .getOrNull()
+                ?: return false
+        return address.isLoopbackAddress
     }
 
     private fun isTrustedPrivateWebhookUrl(webhookUrl: String): Boolean {
