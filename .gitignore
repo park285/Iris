@@ -56,3 +56,11 @@ image.png
 docs/closeout-*/
 docs/closeout-*.tar.gz
 *-review-request-*.tar.gz
+
+# Internal-only paths
+/.github/
+/docs/
+/artifacts/
+/AGENTS.md
+/CLAUDE.md
+/review.txt
