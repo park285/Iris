@@ -4,6 +4,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -11,7 +13,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.withTimeout
 import party.qwer.iris.ReplyAdmissionStatus
 import party.qwer.iris.ReplyQueueKey
 import kotlin.test.Test
@@ -488,6 +490,30 @@ class ReplyAdmissionServiceTest {
         }
 
     @Test
+    fun `enqueue falls back to shutdown when actor channel is already closed`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val service =
+                ReplyAdmissionService(
+                    workerIdleTimeoutMs = 60_000L,
+                    dispatcher = dispatcher,
+                )
+            service.startSuspend()
+
+            val commands =
+                ReplyAdmissionService::class.java.getDeclaredField("commands").let { field ->
+                    field.isAccessible = true
+                    @Suppress("UNCHECKED_CAST")
+                    field.get(service) as Channel<Any?>
+                }
+            commands.close()
+
+            val result = service.enqueueSuspend(ReplyQueueKey(chatId = 1L, threadId = null), stubReplyLaneJob())
+
+            assertEquals(ReplyAdmissionStatus.SHUTDOWN, result.status)
+        }
+
+    @Test
     fun `debugSnapshotSuspend exposes queue depth and worker age`() =
         runTest {
             val dispatcher = StandardTestDispatcher(testScheduler)
@@ -524,6 +550,91 @@ class ReplyAdmissionServiceTest {
 
             release.complete(Unit)
             advanceUntilIdle()
+            service.shutdownSuspend()
+        }
+
+    @Test
+    fun `shutdown drains buffered command waiters without hanging`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val service =
+                ReplyAdmissionService(
+                    maxWorkers = 1,
+                    perWorkerQueueCapacity = 8,
+                    workerIdleTimeoutMs = 60_000L,
+                    dispatcher = dispatcher,
+                )
+            service.startSuspend()
+
+            val key = ReplyQueueKey(chatId = 1L, threadId = null)
+            val started = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, service.enqueueSuspend(key, controlledReplyLaneJob(started, release)).status)
+            runCurrent()
+            started.await()
+
+            val pending =
+                List(4) {
+                    backgroundScope.async {
+                        service.enqueueSuspend(key, stubReplyLaneJob())
+                    }
+                }
+            runCurrent()
+
+            val shutdownJob =
+                backgroundScope.launch {
+                    service.shutdownSuspend()
+                }
+            runCurrent()
+
+            release.complete(Unit)
+            advanceUntilIdle()
+
+            withTimeout(250) {
+                shutdownJob.join()
+            }
+            pending.forEach { deferred ->
+                assertTrue(deferred.isCompleted, "buffered enqueue waiter should complete during shutdown drain")
+            }
+            assertTrue(shutdownJob.isCompleted, "shutdown should finish after buffered command drain")
+        }
+
+    @Test
+    fun `actor handler failure falls back without killing later commands`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            var failClock = true
+            val service =
+                ReplyAdmissionService(
+                    maxWorkers = 16,
+                    perWorkerQueueCapacity = 16,
+                    workerIdleTimeoutMs = 60_000L,
+                    dispatcher = dispatcher,
+                    clock = {
+                        check(!failClock) { "clock boom" }
+                        10_000L
+                    },
+                )
+            service.startSuspend()
+
+            val failed =
+                withTimeout(250) {
+                    service.enqueueSuspend(
+                        ReplyQueueKey(chatId = 1L, threadId = null),
+                        stubReplyLaneJob(),
+                    )
+                }
+            assertEquals(ReplyAdmissionStatus.SHUTDOWN, failed.status)
+
+            failClock = false
+            val recovered =
+                withTimeout(250) {
+                    service.enqueueSuspend(
+                        ReplyQueueKey(chatId = 2L, threadId = null),
+                        stubReplyLaneJob(),
+                    )
+                }
+            assertEquals(ReplyAdmissionStatus.ACCEPTED, recovered.status)
             service.shutdownSuspend()
         }
 

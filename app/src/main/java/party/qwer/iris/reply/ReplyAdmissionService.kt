@@ -9,6 +9,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ClosedSendChannelException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import party.qwer.iris.IrisLogger
@@ -110,7 +111,9 @@ internal class ReplyAdmissionService(
 
     private val commands = Channel<AdmissionCommand>(commandChannelCapacity)
     private val commandScope = buildCoroutineScope()
+    private val actorJob: Job
     private val jobProcessor = initialJobProcessor
+
     @Volatile
     private var commandActorClosed = false
 
@@ -121,11 +124,16 @@ internal class ReplyAdmissionService(
     private var nextWorkerId = 0L
 
     init {
-        commandScope.launch {
-            for (command in commands) {
-                handleCommand(command)
+        actorJob =
+            commandScope.launch {
+                try {
+                    for (command in commands) {
+                        handleCommandSafely(command)
+                    }
+                } finally {
+                    commandActorClosed = true
+                }
             }
-        }
     }
 
     suspend fun startSuspend() {
@@ -133,7 +141,10 @@ internal class ReplyAdmissionService(
             IrisLogger.error("[ReplyAdmissionService] Cannot start after actor shutdown")
             return
         }
-        val started = dispatchSuspend<AdmissionCommand.Start, Boolean> { AdmissionCommand.Start(it) }
+        val started =
+            dispatchSuspend<AdmissionCommand.Start, Boolean>(
+                onActorClosed = { false },
+            ) { AdmissionCommand.Start(it) }
         if (started) {
             IrisLogger.debug("[ReplyAdmissionService] started")
         }
@@ -146,7 +157,9 @@ internal class ReplyAdmissionService(
         }
         IrisLogger.info("[ReplyAdmissionService] Restarting...")
         val plan =
-            dispatchSuspend<AdmissionCommand.Restart, DetachedWorkersPlan> {
+            dispatchSuspend<AdmissionCommand.Restart, DetachedWorkersPlan>(
+                onActorClosed = { DetachedWorkersPlan(allowed = false) },
+            ) {
                 AdmissionCommand.Restart(it)
             }
         if (!plan.allowed) {
@@ -154,7 +167,9 @@ internal class ReplyAdmissionService(
         }
         closeWorkersSuspend(plan.workers)
         plan.workerScope?.cancel()
-        dispatchSuspend<AdmissionCommand.RestartCompleted, Unit> {
+        dispatchSuspend<AdmissionCommand.RestartCompleted, Unit>(
+            onActorClosed = { Unit },
+        ) {
             AdmissionCommand.RestartCompleted(it)
         }
         IrisLogger.info("[ReplyAdmissionService] Restart complete")
@@ -166,13 +181,15 @@ internal class ReplyAdmissionService(
         }
         IrisLogger.info("[ReplyAdmissionService] Shutting down...")
         val plan =
-            dispatchSuspend<AdmissionCommand.Shutdown, DetachedWorkersPlan> {
+            dispatchSuspend<AdmissionCommand.Shutdown, DetachedWorkersPlan>(
+                onActorClosed = { DetachedWorkersPlan(allowed = false) },
+            ) {
                 AdmissionCommand.Shutdown(it)
             }
         closeWorkersSuspend(plan.workers)
         plan.workerScope?.cancel()
         closingWorkers.clear()
-        closeCommandActor()
+        closeCommandActorAndWait()
         IrisLogger.info("[ReplyAdmissionService] Shutdown complete")
     }
 
@@ -183,19 +200,54 @@ internal class ReplyAdmissionService(
         if (commandActorClosed) {
             return ReplyAdmissionResult(ReplyAdmissionStatus.SHUTDOWN, "reply sender unavailable")
         }
-        return dispatchSuspend<AdmissionCommand.Enqueue, ReplyAdmissionResult> {
-            AdmissionCommand.Enqueue(key, job, it)
-        }
+        return dispatchSuspend<AdmissionCommand.Enqueue, ReplyAdmissionResult>(
+            onActorClosed = {
+                ReplyAdmissionResult(ReplyAdmissionStatus.SHUTDOWN, "reply sender unavailable")
+            },
+        ) { AdmissionCommand.Enqueue(key, job, it) }
     }
 
     internal suspend fun debugSnapshotSuspend(): ReplyAdmissionDebugSnapshot =
         if (commandActorClosed) {
             currentDebugSnapshot()
         } else {
-            dispatchSuspend<AdmissionCommand.DebugSnapshot, ReplyAdmissionDebugSnapshot> {
+            dispatchSuspend<AdmissionCommand.DebugSnapshot, ReplyAdmissionDebugSnapshot>(
+                onActorClosed = { currentDebugSnapshot() },
+            ) {
                 AdmissionCommand.DebugSnapshot(it)
             }
         }
+
+    private suspend fun handleCommandSafely(command: AdmissionCommand) {
+        try {
+            handleCommand(command)
+        } catch (error: Throwable) {
+            IrisLogger.error("[ReplyAdmissionService] actor command failed: ${error.message}", error)
+            failCommand(command, error)
+        }
+    }
+
+    private fun failCommand(
+        command: AdmissionCommand,
+        error: Throwable,
+    ) {
+        when (command) {
+            is AdmissionCommand.Start -> command.reply.complete(false)
+            is AdmissionCommand.Restart -> command.reply.complete(DetachedWorkersPlan(allowed = false))
+            is AdmissionCommand.RestartCompleted -> command.reply.complete(Unit)
+            is AdmissionCommand.Shutdown -> command.reply.complete(DetachedWorkersPlan(allowed = false))
+            is AdmissionCommand.Enqueue ->
+                command.reply.complete(
+                    ReplyAdmissionResult(
+                        ReplyAdmissionStatus.SHUTDOWN,
+                        error.message ?: "reply sender unavailable",
+                    ),
+                )
+            is AdmissionCommand.DebugSnapshot -> command.reply.complete(currentDebugSnapshot())
+            is AdmissionCommand.WorkerClosed -> Unit
+            is AdmissionCommand.WorkerDequeued -> Unit
+        }
+    }
 
     private suspend fun handleCommand(command: AdmissionCommand) {
         when (command) {
@@ -297,18 +349,29 @@ internal class ReplyAdmissionService(
     }
 
     private fun handleWorkerDequeued(command: AdmissionCommand.WorkerDequeued) {
-        val current = workerRegistry[command.key] ?: return
-        if (current.workerId != command.workerId) {
-            return
+        workerRegistry[command.key]
+            ?.takeIf { it.workerId == command.workerId }
+            ?.let { current ->
+                val mailboxState = current.mailboxState as? WorkerMailboxState.Open ?: return@let
+                workerRegistry[command.key] =
+                    current.copy(
+                        mailboxState =
+                            mailboxState.copy(
+                                queuedJobs = (mailboxState.queuedJobs - 1).coerceAtLeast(0),
+                            ),
+                    )
+            }
+
+        closingWorkers[command.workerId]?.let { current ->
+            val mailboxState = current.mailboxState as? WorkerMailboxState.Closing ?: return@let
+            closingWorkers[command.workerId] =
+                current.copy(
+                    mailboxState =
+                        mailboxState.copy(
+                            queuedJobs = (mailboxState.queuedJobs - 1).coerceAtLeast(0),
+                        ),
+                )
         }
-        val mailboxState = current.mailboxState as? WorkerMailboxState.Open ?: return
-        workerRegistry[command.key] =
-            current.copy(
-                mailboxState =
-                    mailboxState.copy(
-                        queuedJobs = (mailboxState.queuedJobs - 1).coerceAtLeast(0),
-                    ),
-            )
     }
 
     private fun getOrCreateWorkerInternal(key: ReplyQueueKey): WorkerHandle? {
@@ -502,9 +565,19 @@ internal class ReplyAdmissionService(
         )
     }
 
-    private suspend fun <C : AdmissionCommand, T> dispatchSuspend(build: (CompletableDeferred<T>) -> C): T {
+    private suspend fun <C : AdmissionCommand, T> dispatchSuspend(
+        onActorClosed: () -> T,
+        build: (CompletableDeferred<T>) -> C,
+    ): T {
+        if (commandActorClosed) {
+            return onActorClosed()
+        }
         val reply = CompletableDeferred<T>()
-        commands.send(build(reply))
+        try {
+            commands.send(build(reply))
+        } catch (_: ClosedSendChannelException) {
+            return onActorClosed()
+        }
         return reply.await()
     }
 
@@ -520,12 +593,12 @@ internal class ReplyAdmissionService(
                     .sortedWith(compareBy({ it.key.chatId.value }, { it.key.threadId?.value ?: -1L }, { it.workerId })),
         )
 
-    private fun closeCommandActor() {
+    private suspend fun closeCommandActorAndWait() {
         if (commandActorClosed) {
             return
         }
-        commandActorClosed = true
         commands.close()
+        actorJob.join()
         commandScope.cancel()
     }
 
