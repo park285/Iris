@@ -5,13 +5,18 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import okhttp3.Request
 import party.qwer.iris.ConfigProvider
 import party.qwer.iris.IrisLogger
 import party.qwer.iris.persistence.ClaimTransitionResult
@@ -37,12 +42,16 @@ internal class WebhookOutboxDispatcher(
     private val backoffDelayProvider: (Int) -> Long = ::nextBackoffDelayMs,
     private val clock: () -> Long = System::currentTimeMillis,
     dispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val createRequestOverride: ((WebhookDelivery) -> Request)? = null,
+    private val executeRequestOverride: (suspend (Request, String) -> Int)? = null,
 ) : Closeable {
     private val scopeJob = SupervisorJob()
     private val coroutineScope = CoroutineScope(scopeJob + dispatcher)
     private val clientFactory = WebhookHttpClientFactory(resolveWebhookTransport(transportOverride), okhttp3.Dispatcher(), okhttp3.ConnectionPool())
     private val requestFactory = WebhookRequestFactory(config)
     private val deliveryClient = WebhookDeliveryClient(clientFactory)
+    private val requestBuilder: (WebhookDelivery) -> Request = createRequestOverride ?: requestFactory::create
+    private val requestExecutor: suspend (Request, String) -> Int = executeRequestOverride ?: { request, url -> deliveryClient.execute(request, url) }
     private val routePartitions = ConcurrentHashMap<String, RoutePartitions>()
     private val outstandingClaims = ConcurrentHashMap<Long, ClaimedDelivery>()
 
@@ -124,16 +133,11 @@ internal class WebhookOutboxDispatcher(
 
     private suspend fun processEntry(entry: ClaimedDelivery) {
         var attemptStarted = false
+        var heartbeatJob: Job? = null
         try {
             val url = config.webhookEndpointFor(entry.route).takeIf { it.isNotBlank() }
             if (url.isNullOrBlank()) {
-                observeResult(
-                    "resolveFailure", entry,
-                    store.resolveFailure(
-                        entry.id, entry.claimToken,
-                        FailureOutcome.RejectedBeforeAttempt("no webhook URL configured for route=${entry.route}"),
-                    ),
-                )
+                resolveRejectedBeforeAttempt(entry, "no webhook URL configured for route=${entry.route}")
                 return
             }
 
@@ -147,7 +151,7 @@ internal class WebhookOutboxDispatcher(
             }
 
             val request =
-                requestFactory.create(
+                requestBuilder(
                     WebhookDelivery(
                         url = url,
                         messageId = entry.messageId,
@@ -158,7 +162,16 @@ internal class WebhookOutboxDispatcher(
                 )
 
             attemptStarted = true
-            val statusCode = deliveryClient.execute(request, url)
+            heartbeatJob = coroutineScope.launchClaimHeartbeat(entry)
+            val statusCode =
+                try {
+                    withTimeout(deliveryPolicy.deliveryTimeoutMs) {
+                        requestExecutor(request, url)
+                    }
+                } catch (timeout: TimeoutCancellationException) {
+                    scheduleRetryOrDead(entry, "delivery timeout after ${deliveryPolicy.deliveryTimeoutMs}ms")
+                    return
+                }
 
             when {
                 statusCode in 200..299 -> observeResult("markSent", entry, store.markSent(entry.id, entry.claimToken))
@@ -176,17 +189,25 @@ internal class WebhookOutboxDispatcher(
                 scheduleRetryOrDead(entry, "delivery cancelled after attempt start")
             }
             throw cancelled
-        } catch (error: Exception) {
+        } catch (error: DeterministicPreAttemptRejectException) {
             if (!attemptStarted) {
-                releaseClaimIfOutstanding(
-                    entry = entry,
-                    nextAttemptAt = clock(),
-                    reason = "unexpected error before delivery attempt: ${error.message}",
-                )
+                resolveRejectedBeforeAttempt(entry, "invalid local delivery input before attempt: ${error.message}")
             } else {
                 scheduleRetryOrDead(entry, error.message)
             }
+        } catch (error: Exception) {
+            scheduleRetryOrDead(
+                entry,
+                if (!attemptStarted) {
+                    "unexpected local failure before delivery attempt: ${error.message}"
+                } else {
+                    error.message
+                },
+            )
         } finally {
+            withContext(NonCancellable) {
+                heartbeatJob?.cancelAndJoin()
+            }
             outstandingClaims.remove(entry.id, entry)
         }
     }
@@ -272,6 +293,36 @@ internal class WebhookOutboxDispatcher(
         )
         return true
     }
+
+    private fun resolveRejectedBeforeAttempt(
+        entry: ClaimedDelivery,
+        reason: String,
+    ): ClaimTransitionResult =
+        observeResult(
+            "resolveFailure",
+            entry,
+            store.resolveFailure(
+                entry.id,
+                entry.claimToken,
+                FailureOutcome.RejectedBeforeAttempt(reason),
+            ),
+        )
+
+    private fun CoroutineScope.launchClaimHeartbeat(entry: ClaimedDelivery): Job =
+        launch {
+            while (isActive) {
+                delay(deliveryPolicy.claimHeartbeatIntervalMs)
+                val result =
+                    observeResult(
+                        "renewClaim",
+                        entry,
+                        store.renewClaim(entry.id, entry.claimToken),
+                    )
+                if (result == ClaimTransitionResult.STALE_CLAIM) {
+                    return@launch
+                }
+            }
+        }
 
     private data class RoutePartitions(
         val route: String,

@@ -5,7 +5,9 @@ import okio.Buffer
 import party.qwer.iris.ConfigProvider
 import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 
 class WebhookRequestFactoryTest {
@@ -45,6 +47,25 @@ class WebhookRequestFactoryTest {
         val request = factory.create(delivery)
 
         assertNull(request.header("X-Iris-Token"))
+    }
+
+    @Test
+    fun `wraps malformed webhook url as deterministic pre attempt reject`() {
+        val factory = WebhookRequestFactory(config = TestConfigProvider(outboundWebhookToken = ""))
+        val delivery =
+            WebhookDelivery(
+                url = "http://127.0.0.1:bad-port/webhook/iris",
+                messageId = "kakao-log-44-default",
+                route = DEFAULT_WEBHOOK_ROUTE,
+                payloadJson = """{"message":"hello"}""",
+            )
+
+        val error =
+            assertFailsWith<DeterministicPreAttemptRejectException> {
+                factory.create(delivery)
+            }
+
+        assertContains(error.message.orEmpty(), "invalid webhook request input")
     }
 
     private fun RequestBody?.readUtf8(): String {

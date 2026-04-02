@@ -72,12 +72,22 @@ interface WebhookDeliveryStore : Closeable {
     /**
      * 시도로 카운트하지 않는 CLAIMED -> RETRY 복귀.
      * 셧다운, 큐 포화 등 시스템 사유로 처리를 포기할 때 사용. failedAttemptCount 변경 없음.
+     * requeueClaim은 HTTP 시도 전에만 사용해야 함.
      */
     fun requeueClaim(
         id: Long,
         claimToken: String,
         nextAttemptAt: Long,
         reason: String?,
+    ): ClaimTransitionResult
+
+    /**
+     * 장시간 처리 중 CLAIMED lease를 연장한다.
+     * recoverExpiredClaims가 in-flight 엔트리를 회수하지 않도록 heartbeat 용도로 사용한다.
+     */
+    fun renewClaim(
+        id: Long,
+        claimToken: String,
     ): ClaimTransitionResult
 
     fun recoverExpiredClaims(olderThanMs: Long): Int

@@ -123,6 +123,21 @@ class SqliteWebhookDeliveryStore(
             ),
         )
 
+    override fun renewClaim(
+        id: Long,
+        claimToken: String,
+    ): ClaimTransitionResult {
+        val now = clock()
+        return transitionResult(
+            db.update(
+                """UPDATE ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE}
+                   SET claimed_at = ?, updated_at = ?
+                   WHERE id = ? AND claim_token = ? AND status = 'CLAIMED'""",
+                listOf(now, now, id, claimToken),
+            ),
+        )
+    }
+
     override fun recoverExpiredClaims(olderThanMs: Long): Int {
         val cutoff = clock() - olderThanMs
         return db.update(

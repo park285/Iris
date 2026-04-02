@@ -17,18 +17,25 @@ internal class WebhookRequestFactory(
     private val config: ActiveSecretProvider,
 ) {
     fun create(delivery: WebhookDelivery): Request =
-        Request
-            .Builder()
-            .url(delivery.url)
-            .post(delivery.payloadJson.toRequestBody(APPLICATION_JSON.toMediaType()))
-            .header(HEADER_IRIS_MESSAGE_ID, delivery.messageId)
-            .header(HEADER_IRIS_ROUTE, delivery.route)
-            .apply {
-                val webhookToken = config.activeOutboundWebhookToken()
-                if (webhookToken.isNotBlank()) {
-                    header(HEADER_IRIS_TOKEN, webhookToken)
-                }
-            }.build()
+        try {
+            Request
+                .Builder()
+                .url(delivery.url)
+                .post(delivery.payloadJson.toRequestBody(APPLICATION_JSON.toMediaType()))
+                .header(HEADER_IRIS_MESSAGE_ID, delivery.messageId)
+                .header(HEADER_IRIS_ROUTE, delivery.route)
+                .apply {
+                    val webhookToken = config.activeOutboundWebhookToken()
+                    if (webhookToken.isNotBlank()) {
+                        header(HEADER_IRIS_TOKEN, webhookToken)
+                    }
+                }.build()
+        } catch (error: IllegalArgumentException) {
+            throw DeterministicPreAttemptRejectException(
+                "invalid webhook request input for route=${delivery.route}: ${error.message}",
+                error,
+            )
+        }
 
     companion object {
         private const val HEADER_IRIS_TOKEN = "X-Iris-Token"

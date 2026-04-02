@@ -413,6 +413,74 @@ class SqliteWebhookDeliveryStoreTest {
     }
 
     @Test
+    fun `renewClaim extends claim lease and delays recovery`() {
+        var now = 1000L
+        val (helper, store) = createStore(clock = { now })
+
+        helper.use {
+            store.use {
+                store.enqueue(
+                    PendingWebhookDelivery(
+                        messageId = "message-1",
+                        roomId = 100L,
+                        route = "default",
+                        payloadJson = "{\"text\":\"hello\"}",
+                    ),
+                )
+
+                val claim = store.claimReady(limit = 1).single()
+
+                now = 1500L
+                assertEquals(
+                    ClaimTransitionResult.APPLIED,
+                    store.renewClaim(claim.id, claim.claimToken),
+                )
+
+                now = 1800L
+                assertEquals(0, store.recoverExpiredClaims(olderThanMs = 600L))
+
+                now = 2200L
+                assertEquals(1, store.recoverExpiredClaims(olderThanMs = 600L))
+            }
+        }
+    }
+
+    @Test
+    fun `renewClaim with stale claimToken returns STALE_CLAIM`() {
+        var now = 1000L
+        val (helper, store) = createStore(clock = { now })
+
+        helper.use {
+            store.use {
+                store.enqueue(
+                    PendingWebhookDelivery(
+                        messageId = "message-1",
+                        roomId = 100L,
+                        route = "default",
+                        payloadJson = "{\"text\":\"hello\"}",
+                    ),
+                )
+
+                val firstClaim = store.claimReady(limit = 1).single()
+
+                now = 32_000L
+                assertEquals(1, store.recoverExpiredClaims(olderThanMs = 30_000L))
+
+                val secondClaim = store.claimReady(limit = 1).single()
+
+                assertEquals(
+                    ClaimTransitionResult.STALE_CLAIM,
+                    store.renewClaim(firstClaim.id, firstClaim.claimToken),
+                )
+                assertEquals(
+                    ClaimTransitionResult.APPLIED,
+                    store.renewClaim(secondClaim.id, secondClaim.claimToken),
+                )
+            }
+        }
+    }
+
+    @Test
     fun `claimReady assigns distinct claimToken per row`() {
         val (helper, store) = createStore()
 
