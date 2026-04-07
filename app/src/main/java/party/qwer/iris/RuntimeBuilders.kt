@@ -37,6 +37,7 @@ internal object RuntimeBuilders {
         val stopServer: () -> Unit = {},
         val stopDbObserver: () -> Unit = {},
         val stopSnapshotObserver: () -> Unit = {},
+        val stopMemberIdentityObserver: () -> Unit = {},
         val stopProfileIndexer: () -> Unit = {},
         val stopImageDeleter: () -> Unit = {},
         val closeWebhookOutbox: () -> Unit = {},
@@ -48,6 +49,7 @@ internal object RuntimeBuilders {
         val persistConfig: () -> Unit = {},
         val flushCheckpointJournal: () -> Unit = {},
         val closeSnapshotStateStore: () -> Unit = {},
+        val closeMemberIdentityStateStore: () -> Unit = {},
         val closePersistenceDriver: () -> Unit = {},
         val closeKakaoDb: () -> Unit = {},
     )
@@ -183,6 +185,7 @@ internal object RuntimeBuilders {
             ShutdownStep(name = "stopServer", action = hooks.stopServer),
             ShutdownStep(name = "stopDbObserver", action = hooks.stopDbObserver),
             ShutdownStep(name = "stopSnapshotObserver", action = hooks.stopSnapshotObserver),
+            ShutdownStep(name = "stopMemberIdentityObserver", action = hooks.stopMemberIdentityObserver),
             ShutdownStep(name = "stopProfileIndexer", action = hooks.stopProfileIndexer),
             ShutdownStep(name = "stopImageDeleter", action = hooks.stopImageDeleter),
             ShutdownStep(name = "closeWebhookOutbox", action = hooks.closeWebhookOutbox),
@@ -194,6 +197,7 @@ internal object RuntimeBuilders {
             ShutdownStep(name = "persistConfig", action = hooks.persistConfig),
             ShutdownStep(name = "flushCheckpointJournal", action = hooks.flushCheckpointJournal),
             ShutdownStep(name = "closeSnapshotStateStore", action = hooks.closeSnapshotStateStore),
+            ShutdownStep(name = "closeMemberIdentityStateStore", action = hooks.closeMemberIdentityStateStore),
             ShutdownStep(name = "closePersistenceDriver", action = hooks.closePersistenceDriver),
             ShutdownStep(name = "closeKakaoDb", action = hooks.closeKakaoDb),
         )

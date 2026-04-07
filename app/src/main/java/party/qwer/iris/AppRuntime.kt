@@ -7,10 +7,26 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import party.qwer.iris.delivery.webhook.WebhookOutboxDispatcher
 import party.qwer.iris.http.ReplyImageIngressPolicy
+import party.qwer.iris.http.SseSubscriberPolicy
 import party.qwer.iris.persistence.CheckpointJournal
+import party.qwer.iris.persistence.MemberIdentityStateStore
 import party.qwer.iris.persistence.SnapshotStateStore
 import party.qwer.iris.persistence.SqliteDriver
+import party.qwer.iris.persistence.SseEventStore
 import java.util.ArrayDeque
+
+private const val DEFAULT_SSE_BUFFER_SIZE = 100
+
+internal fun createRuntimeSseEventBus(
+    store: SseEventStore,
+    bufferSize: Int = DEFAULT_SSE_BUFFER_SIZE,
+    clock: () -> Long = System::currentTimeMillis,
+): SseEventBus =
+    SseEventBus(
+        policy = SseSubscriberPolicy(bufferCapacity = bufferSize, replayWindowSize = bufferSize),
+        clock = clock,
+        store = store,
+    )
 
 internal class AppRuntime(
     private val runtimeOptions: RuntimeOptions,
@@ -152,11 +168,13 @@ internal class AppRuntime(
             val webhookOutboxStore = persistenceRuntime.webhookOutboxStore
             val checkpointJournal = persistenceRuntime.checkpointJournal
             val snapshotStateStore = persistenceRuntime.snapshotStateStore
+            val memberIdentityStateStore = persistenceRuntime.memberIdentityStateStore
             rollback.defer(snapshotStateStore::close)
+            rollback.defer(memberIdentityStateStore::close)
             val webhookOutboxDispatcher = WebhookOutboxDispatcher(configManager, webhookOutboxStore)
             webhookOutboxDispatcher.start()
             rollback.defer(webhookOutboxDispatcher::close)
-            val sseEventBus = SseEventBus(bufferSize = 100)
+            val sseEventBus = createRuntimeSseEventBus(store = persistenceRuntime.sseEventStore)
             rollback.defer(sseEventBus::close)
             val snapshotRuntime =
                 SnapshotRuntimeFactory.create(
@@ -168,8 +186,11 @@ internal class AppRuntime(
                     webhookOutboxStore = webhookOutboxStore,
                     sseEventBus = sseEventBus,
                     snapshotStateStore = snapshotStateStore,
+                    memberIdentityStateStore = memberIdentityStateStore,
                     roomEventStore = persistenceRuntime.roomEventStore,
+                    snapshotFullReconcileIntervalMs = runtimeOptions.snapshotFullReconcileIntervalMs,
                     missingTombstoneTtlMs = runtimeOptions.snapshotMissingTombstoneTtlMs,
+                    roomEventRetentionMs = runtimeOptions.roomEventRetentionMs,
                 )
             val snapshotScope = snapshotRuntime.snapshotScope
             rollback.defer(snapshotScope::cancel)
@@ -186,6 +207,11 @@ internal class AppRuntime(
             snapshotObserver.start()
             rollback.defer(snapshotObserver::stop)
             IrisLogger.info("SnapshotObserver started")
+
+            val memberIdentityObserver = snapshotRuntime.memberIdentityObserver
+            memberIdentityObserver.start()
+            rollback.defer(memberIdentityObserver::stop)
+            IrisLogger.info("MemberIdentityObserver started")
 
             val kakaoProfileIndexer =
                 KakaoProfileIndexer(
@@ -250,10 +276,12 @@ internal class AppRuntime(
                 sseEventBus = sseEventBus,
                 checkpointJournal = checkpointJournal,
                 snapshotStateStore = snapshotStateStore,
+                memberIdentityStateStore = memberIdentityStateStore,
                 snapshotScope = snapshotScope,
                 observerHelper = observerHelper,
                 dbObserver = dbObserver,
                 snapshotObserver = snapshotObserver,
+                memberIdentityObserver = memberIdentityObserver,
                 kakaoProfileIndexer = kakaoProfileIndexer,
                 imageDeleter = imageDeleter,
                 bridgeHealthCache = bridgeHealthCache,
@@ -292,10 +320,12 @@ private data class AppRuntimeStartupAssembly(
     val sseEventBus: SseEventBus,
     val checkpointJournal: CheckpointJournal,
     val snapshotStateStore: SnapshotStateStore,
+    val memberIdentityStateStore: MemberIdentityStateStore,
     val snapshotScope: CoroutineScope,
     val observerHelper: ObserverHelper,
     val dbObserver: DBObserver,
     val snapshotObserver: SnapshotObserver,
+    val memberIdentityObserver: MemberIdentityObserver,
     val kakaoProfileIndexer: KakaoProfileIndexer,
     val imageDeleter: ImageDeleter,
     val bridgeHealthCache: BridgeHealthCache,
@@ -308,6 +338,7 @@ private data class AppRuntimeStartupAssembly(
                     stopServer = { irisServer?.stopServer() },
                     stopDbObserver = dbObserver::stopPolling,
                     stopSnapshotObserver = snapshotObserver::stop,
+                    stopMemberIdentityObserver = memberIdentityObserver::stop,
                     stopProfileIndexer = kakaoProfileIndexer::stop,
                     stopImageDeleter = imageDeleter::stopDeletion,
                     closeWebhookOutbox = webhookOutboxDispatcher::close,
@@ -323,6 +354,7 @@ private data class AppRuntimeStartupAssembly(
                     },
                     flushCheckpointJournal = checkpointJournal::flushNow,
                     closeSnapshotStateStore = snapshotStateStore::close,
+                    closeMemberIdentityStateStore = memberIdentityStateStore::close,
                     closePersistenceDriver = persistenceDriver::close,
                     closeKakaoDb = kakaoDb::closeConnection,
                 ),

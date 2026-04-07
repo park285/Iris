@@ -6,6 +6,7 @@ import kotlinx.coroutines.SupervisorJob
 import party.qwer.iris.delivery.webhook.OutboxRoutingGateway
 import party.qwer.iris.ingress.CommandIngressService
 import party.qwer.iris.persistence.CheckpointJournal
+import party.qwer.iris.persistence.MemberIdentityStateStore
 import party.qwer.iris.persistence.RoomEventStore
 import party.qwer.iris.persistence.SnapshotStateStore
 import party.qwer.iris.persistence.WebhookDeliveryStore
@@ -23,11 +24,10 @@ internal data class SnapshotRuntime(
     val observerHelper: ObserverHelper,
     val dbObserver: DBObserver,
     val snapshotObserver: SnapshotObserver,
+    val memberIdentityObserver: MemberIdentityObserver,
 )
 
 internal object SnapshotRuntimeFactory {
-    private const val DEFAULT_EVENT_RETENTION_MS = 7L * 24 * 60 * 60 * 1000 // 7일
-
     fun create(
         configManager: ConfigManager,
         kakaoDb: KakaoDB,
@@ -37,8 +37,11 @@ internal object SnapshotRuntimeFactory {
         webhookOutboxStore: WebhookDeliveryStore,
         sseEventBus: SseEventBus,
         snapshotStateStore: SnapshotStateStore,
+        memberIdentityStateStore: MemberIdentityStateStore,
         roomEventStore: RoomEventStore? = null,
+        snapshotFullReconcileIntervalMs: Long = 60_000L,
         missingTombstoneTtlMs: Long? = null,
+        roomEventRetentionMs: Long? = null,
     ): SnapshotRuntime {
         val routingGateway = OutboxRoutingGateway(configManager, webhookOutboxStore)
         val roomSnapshotReader =
@@ -55,12 +58,16 @@ internal object SnapshotRuntimeFactory {
                 emitter = SnapshotEventEmitter(sseEventBus, routingGateway, eventStore = roomEventStore),
                 stateStore = snapshotStateStore,
             )
+        val memberEventEmitter = SnapshotEventEmitter(sseEventBus, routingGateway, eventStore = roomEventStore)
         val ingressService =
             CommandIngressService(
                 db = kakaoDb,
                 config = configManager,
                 checkpointJournal = checkpointJournal,
                 memberRepo = memberRepository,
+                memberIdentityStateStore = memberIdentityStateStore,
+                roomEventStore = roomEventStore,
+                nicknameEventEmitter = memberEventEmitter,
                 routingGateway = routingGateway,
                 learnFromTimestampCorrelation = kakaoDb::learnFromTimestampCorrelation,
                 onMarkDirty = { chatId ->
@@ -83,9 +90,18 @@ internal object SnapshotRuntimeFactory {
                 SnapshotObserver(
                     snapshotCoordinator,
                     checkpointJournal,
+                    fullReconcileIntervalMs = snapshotFullReconcileIntervalMs,
                     missingTombstoneTtlMs = missingTombstoneTtlMs,
                     roomEventStore = roomEventStore,
-                    eventRetentionMs = DEFAULT_EVENT_RETENTION_MS,
+                    eventRetentionMs = roomEventRetentionMs,
+                ),
+            memberIdentityObserver =
+                MemberIdentityObserver(
+                    roomSnapshotReader = roomSnapshotReader,
+                    emitter = memberEventEmitter,
+                    stateStore = memberIdentityStateStore,
+                    roomEventStore = roomEventStore,
+                    intervalMs = configManager.dbPollingRate,
                 ),
         )
     }

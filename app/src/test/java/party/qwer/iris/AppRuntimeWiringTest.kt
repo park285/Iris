@@ -5,6 +5,7 @@ import party.qwer.iris.persistence.IrisDatabaseSchema
 import party.qwer.iris.persistence.JdbcSqliteHelper
 import party.qwer.iris.persistence.PendingWebhookDelivery
 import party.qwer.iris.persistence.PersistedSnapshotState
+import party.qwer.iris.persistence.SqliteSseEventStore
 import party.qwer.iris.snapshot.RoomSnapshotReadResult
 import party.qwer.iris.storage.ChatId
 import party.qwer.iris.storage.UserId
@@ -92,6 +93,30 @@ class AppRuntimeWiringTest {
         assertEquals(expectedRoomIds, reader.listRoomChatIds())
         assertEquals(RoomSnapshotReadResult.Present(snapshots.getValue(ChatId(11L))), reader.snapshot(ChatId(11L)))
         assertEquals(RoomSnapshotReadResult.Present(snapshots.getValue(ChatId(22L))), reader.snapshot(ChatId(22L)))
+    }
+
+    @Test
+    fun `runtime SSE bus replays persisted events across restart`() {
+        val helper = JdbcSqliteHelper.inMemory()
+        IrisDatabaseSchema.createSseEventsTable(helper)
+        val store = SqliteSseEventStore(helper)
+
+        createRuntimeSseEventBus(store = store, bufferSize = 2, clock = { 1_000L }).use { firstBus ->
+            firstBus.emit("session-1", "snapshot")
+        }
+
+        createRuntimeSseEventBus(store = store, bufferSize = 2, clock = { 2_000L }).use { secondBus ->
+            secondBus.emit("session-2", "member_event")
+
+            val replay = secondBus.replayEnvelopes(0L)
+            assertEquals(2, replay.size)
+            assertEquals("session-1", replay[0].payload)
+            assertEquals("snapshot", replay[0].eventType)
+            assertEquals("session-2", replay[1].payload)
+            assertEquals("member_event", replay[1].eventType)
+        }
+
+        helper.close()
     }
 
     @Test
@@ -400,7 +425,9 @@ class AppRuntimeWiringTest {
             bindHost = "127.0.0.1",
             httpWorkerThreads = 1,
             bridgeHealthRefreshMs = 1_000L,
+            snapshotFullReconcileIntervalMs = 1_000L,
             snapshotMissingTombstoneTtlMs = null,
+            roomEventRetentionMs = null,
             imageDeletionIntervalMs = 1_000L,
             imageRetentionMs = 1_000L,
         )
