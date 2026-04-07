@@ -556,13 +556,14 @@ class SnapshotObserverTest {
                         snapshotObserverTestSnapshot(chatId = chatId, members = setOf(chatId)),
                         snapshotObserverTestSnapshot(chatId = chatId, members = setOf(chatId, chatId + 10_000L)),
                     )
-                } + mapOf(
-                    1L to
-                        listOf(
-                            snapshotObserverTestSnapshot(chatId = 1L, members = setOf(1L)),
-                            snapshotObserverTestSnapshot(chatId = 1L, members = setOf(1L, 10_001L)),
-                        ),
-                )
+                } +
+                    mapOf(
+                        1L to
+                            listOf(
+                                snapshotObserverTestSnapshot(chatId = 1L, members = setOf(1L)),
+                                snapshotObserverTestSnapshot(chatId = 1L, members = setOf(1L, 10_001L)),
+                            ),
+                    )
             val snapshotReader =
                 SnapshotObserverTestSnapshotReader(
                     rooms = listOf(1L) + rooms,
@@ -597,7 +598,10 @@ class SnapshotObserverTest {
 
             coordinator.send(party.qwer.iris.snapshot.SnapshotCommand.SeedCache)
             rooms.forEach { chatId ->
-                coordinator.send(party.qwer.iris.snapshot.SnapshotCommand.MarkDirty(ChatId(chatId)))
+                coordinator.send(
+                    party.qwer.iris.snapshot.SnapshotCommand
+                        .MarkDirty(ChatId(chatId)),
+                )
             }
             runCurrent()
             try {
@@ -664,7 +668,10 @@ class SnapshotObserverTest {
                 )
 
             coordinator.send(party.qwer.iris.snapshot.SnapshotCommand.SeedCache)
-            coordinator.send(party.qwer.iris.snapshot.SnapshotCommand.MarkDirty(ChatId(100L)))
+            coordinator.send(
+                party.qwer.iris.snapshot.SnapshotCommand
+                    .MarkDirty(ChatId(100L)),
+            )
             runCurrent()
             try {
                 observer.start()

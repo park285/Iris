@@ -33,7 +33,11 @@ internal class MemberIdentityObserver(
     private val knownNicknames = linkedMapOf<ChatId, Map<UserId, String>>()
     private val lastAlertedNicknames = linkedMapOf<ChatId, MutableMap<UserId, String>>()
     private val lastLoadedEventIdByChat = linkedMapOf<ChatId, Long>()
-    private val serverJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
+    private val serverJson =
+        Json {
+            ignoreUnknownKeys = true
+            explicitNulls = false
+        }
 
     @Volatile
     private var job: Job? = null
@@ -224,7 +228,8 @@ internal class MemberIdentityObserver(
         userId: UserId,
     ): String? {
         refreshAlertHistory(chatId)
-        return lastAlertedNicknames.getOrPut(chatId) { linkedMapOf() }[userId]
+        return lastAlertedNicknames
+            .getOrPut(chatId) { linkedMapOf() }[userId]
             ?.trim()
             ?.takeIf { it.isNotBlank() }
     }
