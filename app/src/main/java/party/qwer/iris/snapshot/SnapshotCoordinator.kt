@@ -54,8 +54,10 @@ internal class SnapshotCoordinator(
         val pendingDebugReplies: MutableList<CompletableDeferred<SnapshotCoordinatorDebugSnapshot>> = mutableListOf(),
         var pendingSeedCache: Boolean = false,
         var pendingFullReconcile: Boolean = false,
+        var pendingSweepBudget: Int = 0,
         var pendingDrainBudget: Int = 0,
         var pendingPruneCutoffEpochMs: Long? = null,
+        var roomSweepCursor: Int = 0,
     ) {
         fun markDirty(chatId: ChatId) {
             if (chatId.value <= 0L) return
@@ -120,6 +122,9 @@ internal class SnapshotCoordinator(
         when (command) {
             SnapshotCommand.SeedCache -> state.pendingSeedCache = true
             SnapshotCommand.FullReconcile -> state.pendingFullReconcile = true
+            is SnapshotCommand.SweepRooms -> {
+                state.pendingSweepBudget = maxOf(state.pendingSweepBudget, command.budget.coerceAtLeast(0))
+            }
             is SnapshotCommand.PruneMissing -> {
                 val cutoffEpochMs = command.cutoffEpochMs.coerceAtLeast(0L)
                 state.pendingPruneCutoffEpochMs =
@@ -148,6 +153,13 @@ internal class SnapshotCoordinator(
             if (state.pendingFullReconcile) {
                 state.pendingFullReconcile = false
                 handleFullReconcile(state)
+                handled = true
+            }
+
+            val sweepBudget = state.pendingSweepBudget
+            if (sweepBudget > 0) {
+                state.pendingSweepBudget = 0
+                handleSweepRooms(state, sweepBudget)
                 handled = true
             }
 
@@ -344,6 +356,38 @@ internal class SnapshotCoordinator(
         }
 
         (state.previousSnapshots.keys + currentRoomIds).forEach(state::markDirty)
+    }
+
+    private fun handleSweepRooms(
+        state: SnapshotCoordinatorState,
+        budget: Int,
+    ) {
+        if (budget <= 0) {
+            return
+        }
+
+        val candidateRoomIds =
+            linkedSetOf<ChatId>()
+                .apply {
+                    addAll(state.previousSnapshots.keys)
+                    addAll(roomSnapshotReader.listRoomChatIds().filter { it.value > 0L })
+                }.toList()
+                .sortedBy(ChatId::value)
+
+        if (candidateRoomIds.isEmpty()) {
+            state.roomSweepCursor = 0
+            return
+        }
+
+        val startIndex = state.roomSweepCursor.mod(candidateRoomIds.size)
+        val sweepCount = minOf(budget, candidateRoomIds.size)
+
+        repeat(sweepCount) { offset ->
+            val index = (startIndex + offset) % candidateRoomIds.size
+            state.markDirty(candidateRoomIds[index])
+        }
+
+        state.roomSweepCursor = (startIndex + sweepCount) % candidateRoomIds.size
     }
 
     private fun handlePruneMissing(

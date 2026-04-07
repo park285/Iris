@@ -33,6 +33,68 @@ import kotlin.test.assertTrue
 @OptIn(ExperimentalCoroutinesApi::class)
 class SnapshotObserverTest {
     @Test
+    fun `full reconcile emits profile change without new chat log`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val snapshotReader =
+                SnapshotObserverTestSnapshotReader(
+                    rooms = listOf(100L),
+                    snapshots =
+                        mapOf(
+                            100L to
+                                listOf(
+                                    snapshotObserverTestSnapshot(chatId = 100L, members = setOf(1L), nicknames = mapOf(1L to "Alice"), profileImages = mapOf(1L to "profile-a")),
+                                    snapshotObserverTestSnapshot(chatId = 100L, members = setOf(1L), nicknames = mapOf(1L to "Alice"), profileImages = mapOf(1L to "profile-b")),
+                                ),
+                        ),
+                )
+            val checkpointJournal =
+                BatchedCheckpointJournal(
+                    store = SnapshotObserverTestCheckpointStore(initial = mapOf("chat_logs" to 10L)),
+                    flushIntervalMs = Long.MAX_VALUE,
+                    clock = { testScheduler.currentTime },
+                )
+            val bus = SseEventBus(bufferSize = 16)
+            val coordinatorScope = CoroutineScope(SupervisorJob() + dispatcher)
+            val eventStore = RecordingRoomEventStore()
+            val coordinator =
+                SnapshotCoordinator(
+                    scope = coordinatorScope,
+                    roomSnapshotReader = snapshotReader,
+                    diffEngine = RoomSnapshotManager(),
+                    emitter = SnapshotEventEmitter(bus, SnapshotObserverTestRoutingGateway(), eventStore = eventStore),
+                )
+            val observer =
+                SnapshotObserver(
+                    snapshotCoordinator = coordinator,
+                    checkpointJournal = checkpointJournal,
+                    intervalMs = 50L,
+                    maxRoomsPerTick = 32,
+                    fullReconcileIntervalMs = 200L,
+                    roomEventStore = eventStore,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            coordinator.send(party.qwer.iris.snapshot.SnapshotCommand.SeedCache)
+            runCurrent()
+            try {
+                observer.start()
+                advanceTimeBy(250L)
+                runCurrent()
+                observer.stopSuspend()
+
+                assertTrue(
+                    eventStore.insertedEvents.any { it.eventType == "profile_change" },
+                    "profile change should be emitted on periodic full reconcile even without new chat logs",
+                )
+            } finally {
+                bus.close()
+                coordinatorScope.cancel()
+            }
+        }
+
+    @Test
     fun `full reconcile triggers after configured interval`() =
         runTest {
             val dispatcher = StandardTestDispatcher(testScheduler)
@@ -224,6 +286,64 @@ class SnapshotObserverTest {
         }
 
     @Test
+    fun `event store prune does not run when room event store is missing`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val diffEngine = SnapshotObserverTestDiffEngine()
+            val snapshotReader =
+                SnapshotObserverTestSnapshotReader(
+                    rooms = listOf(100L),
+                    snapshots =
+                        mapOf(
+                            100L to
+                                listOf(
+                                    snapshotObserverTestSnapshot(chatId = 100L, members = setOf(1L)),
+                                ),
+                        ),
+                )
+            val checkpointJournal =
+                BatchedCheckpointJournal(
+                    store = SnapshotObserverTestCheckpointStore(),
+                    flushIntervalMs = Long.MAX_VALUE,
+                    clock = { testScheduler.currentTime },
+                )
+            val bus = SseEventBus(bufferSize = 16)
+            val coordinatorScope = CoroutineScope(SupervisorJob() + dispatcher)
+            val coordinator =
+                SnapshotCoordinator(
+                    scope = coordinatorScope,
+                    roomSnapshotReader = snapshotReader,
+                    diffEngine = diffEngine,
+                    emitter = SnapshotEventEmitter(bus, SnapshotObserverTestRoutingGateway()),
+                )
+            val observer =
+                SnapshotObserver(
+                    snapshotCoordinator = coordinator,
+                    checkpointJournal = checkpointJournal,
+                    intervalMs = 50L,
+                    fullReconcileIntervalMs = Long.MAX_VALUE,
+                    eventRetentionMs = 100L,
+                    roomEventStore = null,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            coordinator.send(party.qwer.iris.snapshot.SnapshotCommand.SeedCache)
+            runCurrent()
+            try {
+                observer.start()
+                advanceTimeBy(250L)
+                runCurrent()
+                observer.stopSuspend()
+
+                assertTrue(snapshotReader.snapshotCalls.isNotEmpty(), "roomEventStore=null이어도 observer 루프는 계속 동작해야 함")
+            } finally {
+                bus.close()
+                coordinatorScope.cancel()
+            }
+        }
+
+    @Test
     fun `adaptive drain increases budget under backlog pressure`() =
         runTest {
             val dispatcher = StandardTestDispatcher(testScheduler)
@@ -283,12 +403,293 @@ class SnapshotObserverTest {
                 coordinatorScope.cancel()
             }
         }
+
+    @Test
+    fun `idle room sweep emits profile change without chat log dirty signal`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val snapshotReader =
+                SnapshotObserverTestSnapshotReader(
+                    rooms = listOf(100L),
+                    snapshots =
+                        mapOf(
+                            100L to
+                                listOf(
+                                    snapshotObserverTestSnapshot(chatId = 100L, members = setOf(1L), nicknames = mapOf(1L to "Alice"), profileImages = mapOf(1L to "profile-a")),
+                                    snapshotObserverTestSnapshot(chatId = 100L, members = setOf(1L), nicknames = mapOf(1L to "Alice"), profileImages = mapOf(1L to "profile-b")),
+                                ),
+                        ),
+                )
+            val checkpointJournal =
+                BatchedCheckpointJournal(
+                    store = SnapshotObserverTestCheckpointStore(initial = mapOf("chat_logs" to 10L)),
+                    flushIntervalMs = Long.MAX_VALUE,
+                    clock = { testScheduler.currentTime },
+                )
+            val bus = SseEventBus(bufferSize = 16)
+            val routingGateway = SnapshotObserverTestRoutingGateway()
+            val eventStore = RecordingRoomEventStore()
+            val coordinatorScope = CoroutineScope(SupervisorJob() + dispatcher)
+            val coordinator =
+                SnapshotCoordinator(
+                    scope = coordinatorScope,
+                    roomSnapshotReader = snapshotReader,
+                    diffEngine = RoomSnapshotManager(),
+                    emitter = SnapshotEventEmitter(bus, routingGateway, eventStore = eventStore),
+                )
+            val observer =
+                SnapshotObserver(
+                    snapshotCoordinator = coordinator,
+                    checkpointJournal = checkpointJournal,
+                    intervalMs = 50L,
+                    fullReconcileIntervalMs = Long.MAX_VALUE,
+                    idleRoomSweepIntervalMs = 50L,
+                    idleRoomSweepBatchSize = 1,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            coordinator.send(party.qwer.iris.snapshot.SnapshotCommand.SeedCache)
+            runCurrent()
+            try {
+                observer.start()
+                advanceTimeBy(60L)
+                runCurrent()
+                observer.stopSuspend()
+
+                assertTrue(
+                    eventStore.insertedEvents.any { it.eventType == "profile_change" },
+                    "profile-only changes should be emitted by idle room sweep",
+                )
+                val profileEvent =
+                    eventStore.insertedEvents.first { it.eventType == "profile_change" }
+                assertTrue(profileEvent.payload.contains("\"oldProfileImageUrl\":\"profile-a\""))
+                assertTrue(profileEvent.payload.contains("\"newProfileImageUrl\":\"profile-b\""))
+            } finally {
+                bus.close()
+                coordinatorScope.cancel()
+            }
+        }
+
+    @Test
+    fun `idle room sweep rotates rooms in bounded batches`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val diffEngine = SnapshotObserverTestDiffEngine()
+            val snapshotReader =
+                SnapshotObserverTestSnapshotReader(
+                    rooms = listOf(100L, 200L, 300L),
+                    snapshots =
+                        mapOf(
+                            100L to
+                                listOf(
+                                    snapshotObserverTestSnapshot(chatId = 100L, members = setOf(1L)),
+                                    snapshotObserverTestSnapshot(chatId = 100L, members = setOf(1L, 10_001L)),
+                                ),
+                            200L to
+                                listOf(
+                                    snapshotObserverTestSnapshot(chatId = 200L, members = setOf(2L)),
+                                    snapshotObserverTestSnapshot(chatId = 200L, members = setOf(2L, 20_001L)),
+                                ),
+                            300L to
+                                listOf(
+                                    snapshotObserverTestSnapshot(chatId = 300L, members = setOf(3L)),
+                                    snapshotObserverTestSnapshot(chatId = 300L, members = setOf(3L, 30_001L)),
+                                ),
+                        ),
+                )
+            val checkpointJournal =
+                BatchedCheckpointJournal(
+                    store = SnapshotObserverTestCheckpointStore(initial = mapOf("chat_logs" to 10L)),
+                    flushIntervalMs = Long.MAX_VALUE,
+                    clock = { testScheduler.currentTime },
+                )
+            val bus = SseEventBus(bufferSize = 16)
+            val coordinatorScope = CoroutineScope(SupervisorJob() + dispatcher)
+            val coordinator =
+                SnapshotCoordinator(
+                    scope = coordinatorScope,
+                    roomSnapshotReader = snapshotReader,
+                    diffEngine = diffEngine,
+                    emitter = SnapshotEventEmitter(bus, SnapshotObserverTestRoutingGateway()),
+                )
+            val observer =
+                SnapshotObserver(
+                    snapshotCoordinator = coordinator,
+                    checkpointJournal = checkpointJournal,
+                    intervalMs = 50L,
+                    fullReconcileIntervalMs = Long.MAX_VALUE,
+                    idleRoomSweepIntervalMs = 50L,
+                    idleRoomSweepBatchSize = 1,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            coordinator.send(party.qwer.iris.snapshot.SnapshotCommand.SeedCache)
+            runCurrent()
+            try {
+                observer.start()
+                advanceTimeBy(60L)
+                runCurrent()
+                advanceTimeBy(60L)
+                runCurrent()
+                advanceTimeBy(60L)
+                runCurrent()
+                observer.stopSuspend()
+
+                assertEquals(listOf(100L, 200L, 300L), diffEngine.diffedChatIds.toList())
+            } finally {
+                bus.close()
+                coordinatorScope.cancel()
+            }
+        }
+
+    @Test
+    fun `idle room sweep still advances while backlog is non zero`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val diffEngine = SnapshotObserverTestDiffEngine()
+            val rooms = (100L..163L).toList()
+            val snapshots =
+                rooms.associateWith { chatId ->
+                    listOf(
+                        snapshotObserverTestSnapshot(chatId = chatId, members = setOf(chatId)),
+                        snapshotObserverTestSnapshot(chatId = chatId, members = setOf(chatId, chatId + 10_000L)),
+                    )
+                } + mapOf(
+                    1L to
+                        listOf(
+                            snapshotObserverTestSnapshot(chatId = 1L, members = setOf(1L)),
+                            snapshotObserverTestSnapshot(chatId = 1L, members = setOf(1L, 10_001L)),
+                        ),
+                )
+            val snapshotReader =
+                SnapshotObserverTestSnapshotReader(
+                    rooms = listOf(1L) + rooms,
+                    snapshots = snapshots,
+                )
+            val checkpointJournal =
+                BatchedCheckpointJournal(
+                    store = SnapshotObserverTestCheckpointStore(initial = mapOf("chat_logs" to 10L)),
+                    flushIntervalMs = Long.MAX_VALUE,
+                    clock = { testScheduler.currentTime },
+                )
+            val bus = SseEventBus(bufferSize = 16)
+            val coordinatorScope = CoroutineScope(SupervisorJob() + dispatcher)
+            val coordinator =
+                SnapshotCoordinator(
+                    scope = coordinatorScope,
+                    roomSnapshotReader = snapshotReader,
+                    diffEngine = diffEngine,
+                    emitter = SnapshotEventEmitter(bus, SnapshotObserverTestRoutingGateway()),
+                )
+            val observer =
+                SnapshotObserver(
+                    snapshotCoordinator = coordinator,
+                    checkpointJournal = checkpointJournal,
+                    intervalMs = 50L,
+                    fullReconcileIntervalMs = Long.MAX_VALUE,
+                    idleRoomSweepIntervalMs = 50L,
+                    idleRoomSweepBatchSize = 1,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            coordinator.send(party.qwer.iris.snapshot.SnapshotCommand.SeedCache)
+            rooms.forEach { chatId ->
+                coordinator.send(party.qwer.iris.snapshot.SnapshotCommand.MarkDirty(ChatId(chatId)))
+            }
+            runCurrent()
+            try {
+                observer.start()
+                advanceTimeBy(60L)
+                runCurrent()
+                observer.stopSuspend()
+
+                assertEquals(1, coordinator.dirtyRoomCount())
+            } finally {
+                bus.close()
+                coordinatorScope.cancel()
+            }
+        }
+
+    @Test
+    fun `idle room sweep still runs while dirty backlog exists`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val snapshotReader =
+                SnapshotObserverTestSnapshotReader(
+                    rooms = listOf(100L, 200L),
+                    snapshots =
+                        mapOf(
+                            100L to
+                                listOf(
+                                    snapshotObserverTestSnapshot(chatId = 100L, members = setOf(1L)),
+                                    snapshotObserverTestSnapshot(chatId = 100L, members = setOf(1L)),
+                                ),
+                            200L to
+                                listOf(
+                                    snapshotObserverTestSnapshot(chatId = 200L, members = setOf(2L), nicknames = mapOf(2L to "Alice"), profileImages = mapOf(2L to "profile-a")),
+                                    snapshotObserverTestSnapshot(chatId = 200L, members = setOf(2L), nicknames = mapOf(2L to "Alice"), profileImages = mapOf(2L to "profile-b")),
+                                ),
+                        ),
+                )
+            val checkpointJournal =
+                BatchedCheckpointJournal(
+                    store = SnapshotObserverTestCheckpointStore(initial = mapOf("chat_logs" to 10L)),
+                    flushIntervalMs = Long.MAX_VALUE,
+                    clock = { testScheduler.currentTime },
+                )
+            val bus = SseEventBus(bufferSize = 16)
+            val eventStore = RecordingRoomEventStore()
+            val coordinatorScope = CoroutineScope(SupervisorJob() + dispatcher)
+            val coordinator =
+                SnapshotCoordinator(
+                    scope = coordinatorScope,
+                    roomSnapshotReader = snapshotReader,
+                    diffEngine = RoomSnapshotManager(),
+                    emitter = SnapshotEventEmitter(bus, SnapshotObserverTestRoutingGateway(), eventStore = eventStore),
+                )
+            val observer =
+                SnapshotObserver(
+                    snapshotCoordinator = coordinator,
+                    checkpointJournal = checkpointJournal,
+                    intervalMs = 50L,
+                    maxRoomsPerTick = 1,
+                    fullReconcileIntervalMs = Long.MAX_VALUE,
+                    idleRoomSweepIntervalMs = 50L,
+                    idleRoomSweepBatchSize = 1,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            coordinator.send(party.qwer.iris.snapshot.SnapshotCommand.SeedCache)
+            coordinator.send(party.qwer.iris.snapshot.SnapshotCommand.MarkDirty(ChatId(100L)))
+            runCurrent()
+            try {
+                observer.start()
+                advanceTimeBy(60L)
+                runCurrent()
+                advanceTimeBy(60L)
+                runCurrent()
+                observer.stopSuspend()
+
+                assertTrue(
+                    eventStore.insertedEvents.any { it.eventType == "profile_change" },
+                    "idle sweep should not starve just because unrelated dirty rooms exist",
+                )
+            } finally {
+                bus.close()
+                coordinatorScope.cancel()
+            }
+        }
 }
 
 private fun snapshotObserverTestSnapshot(
     chatId: Long,
     members: Set<Long>,
     nicknames: Map<Long, String> = emptyMap(),
+    profileImages: Map<Long, String> = emptyMap(),
 ): RoomSnapshotData =
     RoomSnapshotData(
         chatId = ChatId(chatId),
@@ -297,7 +698,7 @@ private fun snapshotObserverTestSnapshot(
         blindedIds = emptySet(),
         nicknames = nicknames.map { (k, v) -> UserId(k) to v }.toMap(),
         roles = members.associate { UserId(it) to 2 },
-        profileImages = emptyMap(),
+        profileImages = profileImages.map { (k, v) -> UserId(k) to v }.toMap(),
     )
 
 private class SnapshotObserverTestDiffEngine : RoomDiffEngine {
@@ -353,7 +754,16 @@ private class SnapshotObserverTestCheckpointStore(
 }
 
 private class RecordingRoomEventStore : RoomEventStore {
+    data class InsertedEvent(
+        val chatId: Long,
+        val eventType: String,
+        val userId: Long,
+        val payload: String,
+        val createdAtMs: Long,
+    )
+
     val pruneCalls = CopyOnWriteArrayList<Long>()
+    val insertedEvents = CopyOnWriteArrayList<InsertedEvent>()
 
     override fun insert(
         chatId: Long,
@@ -361,7 +771,10 @@ private class RecordingRoomEventStore : RoomEventStore {
         userId: Long,
         payload: String,
         createdAtMs: Long,
-    ): Long = 0L
+    ): Long {
+        insertedEvents += InsertedEvent(chatId, eventType, userId, payload, createdAtMs)
+        return insertedEvents.size.toLong()
+    }
 
     override fun listByChatId(
         chatId: Long,

@@ -16,6 +16,10 @@ internal sealed interface SnapshotCommand {
         val budget: Int,
     ) : SnapshotCommand
 
+    data class SweepRooms(
+        val budget: Int,
+    ) : SnapshotCommand
+
     data class GetDebugSnapshot(
         val replyTo: CompletableDeferred<SnapshotCoordinatorDebugSnapshot>,
     ) : SnapshotCommand

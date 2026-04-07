@@ -21,6 +21,8 @@ internal class SnapshotObserver(
     private val intervalMs: Long = 5_000L,
     private val maxRoomsPerTick: Int = 32,
     private val fullReconcileIntervalMs: Long = 60_000L,
+    private val idleRoomSweepIntervalMs: Long = intervalMs,
+    private val idleRoomSweepBatchSize: Int = maxRoomsPerTick,
     private val missingTombstoneTtlMs: Long? = null,
     private val roomEventStore: RoomEventStore? = null,
     private val eventRetentionMs: Long? = null,
@@ -39,11 +41,15 @@ internal class SnapshotObserver(
     @Volatile
     private var nextEventPruneAtMs: Long = 0L
 
+    @Volatile
+    private var nextIdleRoomSweepAtMs: Long = 0L
+
     @Synchronized
     fun start() {
         if (job?.isActive == true) return
         nextFullReconcileAtMs = clock() + fullReconcileIntervalMs
         nextEventPruneAtMs = clock() + eventPruneIntervalMs
+        nextIdleRoomSweepAtMs = clock() + idleRoomSweepIntervalMs
         job =
             coroutineScope.launch {
                 while (isActive) {
@@ -51,6 +57,14 @@ internal class SnapshotObserver(
                         if (clock() >= nextFullReconcileAtMs) {
                             snapshotCoordinator.send(SnapshotCommand.FullReconcile)
                             nextFullReconcileAtMs = clock() + fullReconcileIntervalMs
+                        }
+                        if (
+                            idleRoomSweepIntervalMs > 0L &&
+                            idleRoomSweepBatchSize > 0 &&
+                            clock() >= nextIdleRoomSweepAtMs
+                        ) {
+                            snapshotCoordinator.send(SnapshotCommand.SweepRooms(idleRoomSweepBatchSize))
+                            nextIdleRoomSweepAtMs = clock() + idleRoomSweepIntervalMs
                         }
                         val backlog = snapshotCoordinator.debugSnapshotSuspend().dirtyRoomCount
                         val drainBudget =
@@ -78,7 +92,8 @@ internal class SnapshotObserver(
             }
         IrisLogger.info(
             "[SnapshotObserver] started (intervalMs=$intervalMs, maxRoomsPerTick=$maxRoomsPerTick, " +
-                "fullReconcileIntervalMs=$fullReconcileIntervalMs)",
+                "fullReconcileIntervalMs=$fullReconcileIntervalMs, idleRoomSweepIntervalMs=$idleRoomSweepIntervalMs, " +
+                "idleRoomSweepBatchSize=$idleRoomSweepBatchSize)",
         )
     }
 
