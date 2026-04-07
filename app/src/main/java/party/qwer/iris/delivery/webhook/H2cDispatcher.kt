@@ -119,6 +119,7 @@ class H2cDispatcher internal constructor(
         val parsedCommand = CommandParser.parse(command.text)
         val targetRoute =
             resolveWebhookRoute(parsedCommand, config)
+                ?: resolveEventRoute(command.messageType)
                 ?: resolveImageRoute(command.messageType, config)
                 ?: return RoutingResult.SKIPPED
         val webhookUrl = config.webhookEndpointFor(targetRoute).takeIf { it.isNotBlank() }
@@ -361,7 +362,7 @@ class H2cDispatcher internal constructor(
         webhookUrl: String,
         route: String,
     ): QueuedDelivery {
-        val messageId = "kakao-log-${command.sourceLogId}-$route"
+        val messageId = buildRoutingMessageId(command, route)
         return QueuedDelivery(
             url = webhookUrl,
             messageId = messageId,

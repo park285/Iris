@@ -9,6 +9,14 @@ internal fun resolveWebhookRoute(commandText: String): String? = resolveWebhookR
 
 internal fun resolveWebhookRoute(parsedCommand: ParsedCommand): String? = resolveWebhookRoute(parsedCommand, null)
 
+private const val chatbotgoRoute = "chatbotgo"
+
+private val chatbotgoEventTypes =
+    setOf(
+        "nickname_change",
+        "profile_change",
+    )
+
 internal fun resolveWebhookRoute(
     parsedCommand: ParsedCommand,
     config: party.qwer.iris.ConfigProvider?,
@@ -30,6 +38,17 @@ internal fun resolveWebhookRoute(
         .firstOrNull { (_, prefixes) ->
             prefixes.any { command -> matchesCommandPrefix(text, command) }
         }?.key ?: DEFAULT_WEBHOOK_ROUTE
+}
+
+internal fun resolveEventRoute(messageType: String?): String? {
+    val normalizedType = messageType?.trim().orEmpty()
+    if (normalizedType.isEmpty()) return null
+
+    if (normalizedType !in chatbotgoEventTypes) {
+        return null
+    }
+
+    return chatbotgoRoute
 }
 
 internal fun resolveImageRoute(messageType: String?): String? = resolveImageRoute(messageType, null)

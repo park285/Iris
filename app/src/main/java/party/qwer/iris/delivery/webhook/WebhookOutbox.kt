@@ -268,15 +268,17 @@ internal fun resolveWebhookDelivery(
             .parse(command.text)
     val targetRoute =
         resolveWebhookRoute(parsedCommand, config)
+            ?: resolveEventRoute(command.messageType)
             ?: resolveImageRoute(command.messageType, config)
             ?: return null
     val webhookUrl = config.webhookEndpointFor(targetRoute).takeIf { it.isNotBlank() } ?: return null
-    val messageId = "kakao-log-${command.sourceLogId}-$targetRoute"
+    val normalizedCommand = command.copy(text = parsedCommand.normalizedText)
+    val messageId = buildRoutingMessageId(normalizedCommand, targetRoute)
     return ResolvedWebhookDelivery(
-        roomId = command.room.toLongOrNull() ?: -1L,
+        roomId = normalizedCommand.room.toLongOrNull() ?: -1L,
         route = targetRoute,
         messageId = messageId,
-        payloadJson = buildWebhookPayload(command.copy(text = parsedCommand.normalizedText), targetRoute, messageId),
+        payloadJson = buildWebhookPayload(normalizedCommand, targetRoute, messageId),
     )
 }
 

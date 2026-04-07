@@ -2,8 +2,10 @@ package party.qwer.iris.delivery.webhook
 
 import party.qwer.iris.CommandParser
 import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
+import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 
@@ -32,6 +34,63 @@ class H2cDispatcherRouteSupportTest {
     @Test
     fun `seeded config routes configured image types`() {
         assertEquals("chatbotgo", resolveImageRoute("2", seededRouteConfig))
+    }
+
+    @Test
+    fun `member identity events route to chatbotgo`() {
+        assertEquals("chatbotgo", resolveEventRoute("nickname_change"))
+        assertEquals("chatbotgo", resolveEventRoute("profile_change"))
+    }
+
+    @Test
+    fun `outbox delivery resolves member identity events to chatbotgo`() {
+        val resolved =
+            resolveWebhookDelivery(
+                command =
+                    RoutingCommand(
+                        text = """{"type":"nickname_change"}""",
+                        room = "18219201472247343",
+                        sender = "iris-system",
+                        userId = "0",
+                        sourceLogId = -1L,
+                        messageType = "nickname_change",
+                    ),
+                config = seededRouteConfig.copy(webhookEndpoint = "http://127.0.0.1:31001/webhook/iris"),
+            )
+
+        assertEquals("chatbotgo", resolved?.route)
+    }
+
+    @Test
+    fun `system event message id changes when nickname payload changes`() {
+        val first =
+            buildRoutingMessageId(
+                RoutingCommand(
+                    text = """{"type":"nickname_change"}""",
+                    room = "18219201472247343",
+                    sender = "iris-system",
+                    userId = "0",
+                    sourceLogId = -1L,
+                    messageType = "nickname_change",
+                    eventPayload = JsonPrimitive("""{"oldNickname":"카푸치노","newNickname":"졸려어"}"""),
+                ),
+                "chatbotgo",
+            )
+        val second =
+            buildRoutingMessageId(
+                RoutingCommand(
+                    text = """{"type":"nickname_change"}""",
+                    room = "18219201472247343",
+                    sender = "iris-system",
+                    userId = "0",
+                    sourceLogId = -1L,
+                    messageType = "nickname_change",
+                    eventPayload = JsonPrimitive("""{"oldNickname":"졸려어","newNickname":"카푸치노"}"""),
+                ),
+                "chatbotgo",
+            )
+
+        assertNotEquals(first, second)
     }
 
     @Test
@@ -70,6 +129,14 @@ class H2cDispatcherRouteSupportTest {
     }
 
     @Test
+    fun `returns null for unrelated event types`() {
+        assertNull(resolveEventRoute(null))
+        assertNull(resolveEventRoute(""))
+        assertNull(resolveEventRoute("member_event"))
+        assertNull(resolveEventRoute("role_change"))
+    }
+
+    @Test
     fun `creates isolated dispatcher state per route`() {
         val registry = RouteDispatchRegistry { route -> TestState(route) }
 
@@ -89,6 +156,7 @@ class H2cDispatcherRouteSupportTest {
     private data class TestConfigProvider(
         val commandRoutes: Map<String, List<String>> = emptyMap(),
         val imageRoutes: Map<String, List<String>> = emptyMap(),
+        val webhookEndpoint: String = "",
     ) : party.qwer.iris.ConfigProvider {
         override val botId: Long = 0L
         override val botName: String = ""
@@ -100,7 +168,7 @@ class H2cDispatcherRouteSupportTest {
         override val messageSendRate: Long = 0L
         override val messageSendJitterMax: Long = 0L
 
-        override fun webhookEndpointFor(route: String): String = ""
+        override fun webhookEndpointFor(route: String): String = webhookEndpoint
 
         override fun commandRoutePrefixes(): Map<String, List<String>> = commandRoutes
 
