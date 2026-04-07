@@ -7,6 +7,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import party.qwer.iris.BotIdentityProvider
@@ -26,6 +27,8 @@ import party.qwer.iris.persistence.CheckpointJournal
 import party.qwer.iris.resolveObservedThreadMetadata
 import party.qwer.iris.shouldSkipOrigin
 import party.qwer.iris.stableLogHash
+import party.qwer.iris.persistence.MemberIdentityStateStore
+import party.qwer.iris.snapshot.SnapshotEventEmitter
 import java.io.Closeable
 import kotlin.math.absoluteValue
 
@@ -34,16 +37,26 @@ internal class CommandIngressService(
     private val config: BotIdentityProvider,
     private val checkpointJournal: CheckpointJournal,
     private val memberRepo: MemberRepository? = null,
+    memberIdentityStateStore: MemberIdentityStateStore? = null,
+    roomEventStore: party.qwer.iris.persistence.RoomEventStore? = null,
+    nicknameEventEmitter: SnapshotEventEmitter? = null,
     private val routingGateway: RoutingGateway,
     private val learnFromTimestampCorrelation: ((chatId: Long, userId: Long, messageCreatedAtMs: Long) -> Unit)? = null,
     dispatchDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val partitioningPolicy: IngressPartitioningPolicy = IngressPartitioningPolicy(),
     private val onMarkDirty: (chatId: Long) -> Unit,
 ) : Closeable {
+    private data class NicknameRecheckKey(
+        val chatId: Long,
+        val userId: Long,
+    )
+
     private val dispatchScope = CoroutineScope(SupervisorJob() + dispatchDispatcher)
     private val dispatchSignals = List(partitioningPolicy.partitionCount) { Channel<Unit>(Channel.CONFLATED) }
     private val dispatchLoopJobs: List<Job>
     private val backlog = IngressBacklog(partitioningPolicy, ::partitionIndexForChat)
+    private val nicknameRecheckJobs = mutableMapOf<NicknameRecheckKey, Job>()
+    private val roomRecheckJobs = mutableMapOf<Long, Job>()
 
     @Volatile
     private var lastCommittedLogId: Long = 0L
@@ -57,6 +70,12 @@ internal class CommandIngressService(
     private val recentCommandFingerprints = lruMap<CommandFingerprint, Long>(MAX_COMMAND_FINGERPRINTS)
     private val senderNameResolver = SenderNameResolver(db = db, memberRepo = memberRepo)
     private val roomMetadataResolver = RoomMetadataResolver(db = db)
+    private val nicknameTracker =
+        if (memberIdentityStateStore != null && nicknameEventEmitter != null) {
+            IngressNicknameTracker(memberIdentityStateStore, roomEventStore, nicknameEventEmitter)
+        } else {
+            null
+        }
 
     init {
         dispatchLoopJobs =
@@ -118,6 +137,14 @@ internal class CommandIngressService(
         )
 
     override fun close() {
+        synchronized(nicknameRecheckJobs) {
+            nicknameRecheckJobs.values.forEach(Job::cancel)
+            nicknameRecheckJobs.clear()
+        }
+        synchronized(roomRecheckJobs) {
+            roomRecheckJobs.values.forEach(Job::cancel)
+            roomRecheckJobs.clear()
+        }
         dispatchSignals.forEach { signal ->
             signal.close()
         }
@@ -200,6 +227,7 @@ internal class CommandIngressService(
     }
 
     private fun processLogEntry(logEntry: KakaoDB.ChatLogEntry): DispatchOutcome {
+        observeNicknameChange(logEntry)
         val metadata = parseMetadata(logEntry) ?: return DispatchOutcome.COMPLETED
         val decryptedMessage = decryptMessage(logEntry.message, metadata.enc, logEntry.userId)
         val parsedCommand = CommandParser.parse(decryptedMessage)
@@ -219,6 +247,102 @@ internal class CommandIngressService(
         }
 
         return routeCommand(logEntry, parsedCommand, metadata.enc)
+    }
+
+    private fun observeNicknameChange(logEntry: KakaoDB.ChatLogEntry) {
+        if (nicknameTracker == null || isOwnBotMessage(logEntry.userId, config.botId)) {
+            return
+        }
+
+        observeNicknameChangeFresh(
+            chatId = logEntry.chatId,
+            userId = logEntry.userId,
+            timestamp = logEntry.createdAt?.toLongOrNull() ?: System.currentTimeMillis() / 1000,
+        )
+        scheduleNicknameRechecks(logEntry.chatId, logEntry.userId)
+        scheduleRoomRechecks(logEntry.chatId)
+    }
+
+    private fun observeNicknameChangeFresh(
+        chatId: Long,
+        userId: Long,
+        timestamp: Long,
+    ) {
+        if (nicknameTracker == null) {
+            return
+        }
+
+        val roomMetadata = roomMetadataResolver.resolve(chatId)
+        val currentNickname =
+            senderNameResolver.resolveFresh(
+                chatId = chatId,
+                userId = userId,
+                linkId = roomMetadata.linkId.toLongOrNull(),
+            )
+
+        nicknameTracker.observe(
+            chatId = chatId,
+            userId = userId,
+            linkId = roomMetadata.linkId.toLongOrNull(),
+            currentNickname = currentNickname,
+            timestamp = timestamp,
+        )
+    }
+
+    private fun scheduleNicknameRechecks(
+        chatId: Long,
+        userId: Long,
+    ) {
+        val key = NicknameRecheckKey(chatId = chatId, userId = userId)
+        synchronized(nicknameRecheckJobs) {
+            nicknameRecheckJobs.remove(key)?.cancel()
+            nicknameRecheckJobs[key] =
+                dispatchScope.launch {
+                    try {
+                        var elapsedMs = 0L
+                        for (targetDelayMs in NICKNAME_RECHECK_DELAYS_MS) {
+                            delay((targetDelayMs - elapsedMs).coerceAtLeast(0L))
+                            elapsedMs = targetDelayMs
+                            observeNicknameChangeFresh(
+                                chatId = chatId,
+                                userId = userId,
+                                timestamp = System.currentTimeMillis() / 1000,
+                            )
+                        }
+                    } finally {
+                        synchronized(nicknameRecheckJobs) {
+                            val current = nicknameRecheckJobs[key]
+                            if (current == coroutineContext[Job]) {
+                                nicknameRecheckJobs.remove(key)
+                            }
+                        }
+                    }
+                }
+        }
+    }
+
+    private fun scheduleRoomRechecks(chatId: Long) {
+        synchronized(roomRecheckJobs) {
+            roomRecheckJobs.remove(chatId)?.cancel()
+            roomRecheckJobs[chatId] =
+                dispatchScope.launch {
+                    try {
+                        var elapsedMs = 0L
+                        for (targetDelayMs in NICKNAME_RECHECK_DELAYS_MS) {
+                            delay((targetDelayMs - elapsedMs).coerceAtLeast(0L))
+                            elapsedMs = targetDelayMs
+                            onMarkDirty(chatId)
+                        }
+                    } finally {
+                        synchronized(roomRecheckJobs) {
+                            val current = roomRecheckJobs[chatId]
+                            if (current == coroutineContext[Job]) {
+                                roomRecheckJobs.remove(chatId)
+                            }
+                        }
+                    }
+                }
+        }
     }
 
     private fun parseMetadata(logEntry: KakaoDB.ChatLogEntry): ParsedLogMetadata? =
@@ -389,6 +513,7 @@ internal class CommandIngressService(
         private const val MAX_COMMAND_FINGERPRINTS = 256
         private const val IMAGE_MESSAGE_TYPE = "2"
         private const val CHECKPOINT_STREAM_CHAT_LOGS = "chat_logs"
+        private val NICKNAME_RECHECK_DELAYS_MS = listOf(250L, 1_000L, 3_000L, 10_000L, 30_000L, 60_000L)
     }
 
     internal data class CommandFingerprint(

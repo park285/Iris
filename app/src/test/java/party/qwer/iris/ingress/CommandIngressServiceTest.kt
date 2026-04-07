@@ -4,6 +4,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import party.qwer.iris.ChatLogRepository
@@ -12,9 +13,17 @@ import party.qwer.iris.KakaoDB
 import party.qwer.iris.delivery.webhook.RoutingCommand
 import party.qwer.iris.delivery.webhook.RoutingGateway
 import party.qwer.iris.delivery.webhook.RoutingResult
+import party.qwer.iris.SseEventBus
+import party.qwer.iris.persistence.InMemoryMemberIdentityStateStore
+import party.qwer.iris.persistence.RoomEventStore
+import party.qwer.iris.snapshot.SnapshotEventEmitter
 import party.qwer.iris.persistence.BatchedCheckpointJournal
 import party.qwer.iris.persistence.CheckpointJournal
+import party.qwer.iris.model.RoomEventRecord
+import party.qwer.iris.storage.ChatId
+import party.qwer.iris.storage.UserId
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
@@ -176,6 +185,214 @@ class CommandIngressServiceTest {
         assertEquals(listOf("chat_logs" to 11L), journal.advanceCalls)
         ingress.close()
     }
+
+    @Test
+    fun `non command message can emit nickname change from ingress`() =
+        runTest {
+            val eventStore = RecordingIngressRoomEventStore()
+            val stateStore = InMemoryMemberIdentityStateStore().apply {
+                save(ChatId(100L), mapOf(UserId(200L) to "New Name"))
+            }
+            eventStore.insert(
+                chatId = 100L,
+                eventType = "nickname_change",
+                userId = 200L,
+                payload = """{"chatId":100,"userId":200,"oldNickname":"Old Name","newNickname":"Old Name","timestamp":1}""",
+                createdAtMs = 1L,
+            )
+            val db =
+                FakeChatLogRepository(
+                    latestLogId = 10L,
+                    polledLogs = listOf(webhookChatLogEntry(id = 11L, chatId = 100L, message = "hello", userId = 200L)),
+                    roomMetadata = KakaoDB.RoomMetadata(type = "OM", linkId = "300"),
+                    senderNames = mapOf(200L to "New Name"),
+                )
+            val ingress =
+                CommandIngressService(
+                    db = db,
+                    config = config,
+                    checkpointJournal = FakeCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
+                    memberIdentityStateStore = stateStore,
+                    roomEventStore = eventStore,
+                    nicknameEventEmitter = SnapshotEventEmitter(SseEventBus(bufferSize = 8), FakeRoutingGateway(), eventStore),
+                    routingGateway = FakeRoutingGateway(),
+                    dispatchDispatcher = Dispatchers.Unconfined,
+                    onMarkDirty = {},
+                )
+
+            ingress.checkChange()
+            ingress.checkChange()
+
+            val event = eventStore.insertedEvents.last { it.eventType == "nickname_change" }
+            assertTrue(event.payload.contains("\"oldNickname\":\"Old Name\""))
+            assertTrue(event.payload.contains("\"newNickname\":\"New Name\""))
+            ingress.close()
+        }
+
+    @Test
+    fun `invalid metadata still observes nickname change from ingress`() =
+        runTest {
+            val eventStore = RecordingIngressRoomEventStore()
+            val stateStore = InMemoryMemberIdentityStateStore().apply {
+                save(ChatId(100L), mapOf(UserId(200L) to "Old Name"))
+            }
+            val db =
+                FakeChatLogRepository(
+                    latestLogId = 10L,
+                    polledLogs =
+                        listOf(
+                            KakaoDB.ChatLogEntry(
+                                id = 11L,
+                                chatId = 100L,
+                                userId = 200L,
+                                message = "hello",
+                                metadata = "{broken",
+                                createdAt = "1711111111",
+                            ),
+                        ),
+                    roomMetadata = KakaoDB.RoomMetadata(type = "OM", linkId = "300"),
+                    senderNames = mapOf(200L to "New Name"),
+                )
+            val ingress =
+                CommandIngressService(
+                    db = db,
+                    config = config,
+                    checkpointJournal = FakeCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
+                    memberIdentityStateStore = stateStore,
+                    roomEventStore = eventStore,
+                    nicknameEventEmitter = SnapshotEventEmitter(SseEventBus(bufferSize = 8), FakeRoutingGateway(), eventStore),
+                    routingGateway = FakeRoutingGateway(),
+                    dispatchDispatcher = Dispatchers.Unconfined,
+                    onMarkDirty = {},
+                )
+
+            ingress.checkChange()
+            ingress.checkChange()
+
+            val event = eventStore.insertedEvents.single { it.eventType == "nickname_change" }
+            assertTrue(event.payload.contains("\"oldNickname\":\"Old Name\""))
+            assertTrue(event.payload.contains("\"newNickname\":\"New Name\""))
+            ingress.close()
+        }
+
+    @Test
+    fun `ingress nickname tracker prefers stored baseline over stale alerted nickname`() =
+        runTest {
+            val eventStore = RecordingIngressRoomEventStore()
+            val stateStore = InMemoryMemberIdentityStateStore().apply {
+                save(ChatId(100L), mapOf(UserId(200L) to "Old Name"))
+            }
+            eventStore.insert(
+                chatId = 100L,
+                eventType = "nickname_change",
+                userId = 200L,
+                payload = """{"chatId":100,"userId":200,"oldNickname":"Old Name","newNickname":"Stale Alert","timestamp":1}""",
+                createdAtMs = 1L,
+            )
+            val db =
+                FakeChatLogRepository(
+                    latestLogId = 10L,
+                    polledLogs = listOf(webhookChatLogEntry(id = 11L, chatId = 100L, message = "hello", userId = 200L)),
+                    roomMetadata = KakaoDB.RoomMetadata(type = "OM", linkId = "300"),
+                    senderNames = mapOf(200L to "New Name"),
+                )
+            val ingress =
+                CommandIngressService(
+                    db = db,
+                    config = config,
+                    checkpointJournal = FakeCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
+                    memberIdentityStateStore = stateStore,
+                    roomEventStore = eventStore,
+                    nicknameEventEmitter = SnapshotEventEmitter(SseEventBus(bufferSize = 8), FakeRoutingGateway(), eventStore),
+                    routingGateway = FakeRoutingGateway(),
+                    dispatchDispatcher = Dispatchers.Unconfined,
+                    onMarkDirty = {},
+                )
+
+            ingress.checkChange()
+            ingress.checkChange()
+
+            val event = eventStore.insertedEvents.last { it.eventType == "nickname_change" }
+            assertTrue(event.payload.contains("\"oldNickname\":\"Old Name\""))
+            assertTrue(event.payload.contains("\"newNickname\":\"New Name\""))
+            ingress.close()
+        }
+
+    @Test
+    fun `ingress retries nickname recheck so delayed table updates are caught without extra command`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val eventStore = RecordingIngressRoomEventStore()
+            val stateStore = InMemoryMemberIdentityStateStore().apply {
+                save(ChatId(100L), mapOf(UserId(200L) to "Old Name"))
+            }
+            var resolveCalls = 0
+            val db =
+                FakeChatLogRepository(
+                    latestLogId = 10L,
+                    polledLogs = listOf(webhookChatLogEntry(id = 11L, chatId = 100L, message = "hello", userId = 200L)),
+                    roomMetadata = KakaoDB.RoomMetadata(type = "OM", linkId = "300"),
+                    senderNameProvider = {
+                        resolveCalls += 1
+                        if (resolveCalls == 1) "Old Name" else "New Name"
+                    },
+                )
+            val ingress =
+                CommandIngressService(
+                    db = db,
+                    config = config,
+                    checkpointJournal = FakeCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
+                    memberIdentityStateStore = stateStore,
+                    roomEventStore = eventStore,
+                    nicknameEventEmitter = SnapshotEventEmitter(SseEventBus(bufferSize = 8), FakeRoutingGateway(), eventStore),
+                    routingGateway = FakeRoutingGateway(),
+                    dispatchDispatcher = dispatcher,
+                    onMarkDirty = {},
+                )
+
+            ingress.checkChange()
+            ingress.checkChange()
+            advanceTimeBy(3_100L)
+            runCurrent()
+
+            val event = eventStore.insertedEvents.single { it.eventType == "nickname_change" }
+            assertTrue(event.payload.contains("\"oldNickname\":\"Old Name\""))
+            assertTrue(event.payload.contains("\"newNickname\":\"New Name\""))
+            ingress.close()
+        }
+
+    @Test
+    fun `ingress schedules delayed room rechecks after a log entry`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val markDirtyCalls = mutableListOf<Long>()
+            val ingress =
+                CommandIngressService(
+                    db =
+                        FakeChatLogRepository(
+                            latestLogId = 10L,
+                            polledLogs = listOf(webhookChatLogEntry(id = 11L, chatId = 100L, message = "hello", userId = 200L)),
+                            roomMetadata = KakaoDB.RoomMetadata(type = "OM", linkId = "300"),
+                            senderNames = mapOf(200L to "Name"),
+                        ),
+                    config = config,
+                    checkpointJournal = FakeCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
+                    memberIdentityStateStore = InMemoryMemberIdentityStateStore(),
+                    roomEventStore = RecordingIngressRoomEventStore(),
+                    nicknameEventEmitter = SnapshotEventEmitter(SseEventBus(bufferSize = 8), FakeRoutingGateway(), RecordingIngressRoomEventStore()),
+                    routingGateway = FakeRoutingGateway(),
+                    dispatchDispatcher = dispatcher,
+                    onMarkDirty = { chatId -> markDirtyCalls.add(chatId) },
+                )
+
+            ingress.checkChange()
+            ingress.checkChange()
+            advanceTimeBy(3_100L)
+            runCurrent()
+
+            assertTrue(markDirtyCalls.count { it == 100L } >= 4)
+            ingress.close()
+        }
 
     @Test
     fun `checkChange does not flush checkpoints from ingress hot path`() {
@@ -534,6 +751,8 @@ private class FakeChatLogRepository(
     var latestLogId: Long = 1L,
     var polledLogs: List<KakaoDB.ChatLogEntry> = emptyList(),
     var roomMetadata: KakaoDB.RoomMetadata = KakaoDB.RoomMetadata(),
+    var senderNames: Map<Long, String> = emptyMap(),
+    var senderNameProvider: ((Long) -> String)? = null,
 ) : ChatLogRepository {
     var lastPolledAfterLogId: Long? = null
     var pollCalls: Int = 0
@@ -547,11 +766,47 @@ private class FakeChatLogRepository(
         return polledLogs.filter { it.id > afterLogId }.take(limit)
     }
 
-    override fun resolveSenderName(userId: Long): String = userId.toString()
+    override fun resolveSenderName(userId: Long): String =
+        senderNameProvider?.invoke(userId) ?: senderNames[userId] ?: userId.toString()
 
     override fun resolveRoomMetadata(chatId: Long): KakaoDB.RoomMetadata = roomMetadata
 
     override fun latestLogId(): Long = latestLogId
+}
+
+private class RecordingIngressRoomEventStore : RoomEventStore {
+    data class InsertedEvent(
+        val chatId: Long,
+        val eventType: String,
+        val userId: Long,
+        val payload: String,
+        val createdAtMs: Long,
+    )
+
+    val insertedEvents = CopyOnWriteArrayList<InsertedEvent>()
+
+    override fun insert(chatId: Long, eventType: String, userId: Long, payload: String, createdAtMs: Long): Long {
+        insertedEvents += InsertedEvent(chatId, eventType, userId, payload, createdAtMs)
+        return insertedEvents.size.toLong()
+    }
+
+    override fun listByChatId(chatId: Long, limit: Int, afterId: Long): List<RoomEventRecord> =
+        insertedEvents
+            .mapIndexed { index, event ->
+                RoomEventRecord(
+                    id = index + 1L,
+                    chatId = event.chatId,
+                    eventType = event.eventType,
+                    userId = event.userId,
+                    payload = event.payload,
+                    createdAt = event.createdAtMs,
+                )
+            }.filter { it.chatId == chatId && it.id > afterId }
+            .take(limit)
+
+    override fun maxId(): Long = 0
+
+    override fun pruneOlderThan(cutoffMs: Long): Int = 0
 }
 
 private class FakeCheckpointStore(

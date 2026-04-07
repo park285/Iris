@@ -19,13 +19,18 @@ internal class SenderNameResolver(
             cache = senderNameCache,
             key = SenderNameCacheKey(chatId = chatId, userId = userId),
             fallback = userId.toString(),
-        ) { key ->
-            memberRepo?.resolveDisplayName(
-                userId = key.userId,
-                chatId = key.chatId,
-                linkId = linkId,
-            ) ?: db.resolveSenderName(key.userId)
-        }
+        ) { key -> resolveFresh(key.chatId, key.userId, linkId) }
+
+    fun resolveFresh(
+        chatId: Long,
+        userId: Long,
+        linkId: Long?,
+    ): String =
+        memberRepo?.resolveDisplayName(
+            userId = userId,
+            chatId = chatId,
+            linkId = linkId,
+        ) ?: db.resolveSenderName(userId)
 
     private fun <K, V : Any> resolveWithCache(
         cache: LinkedHashMap<K, V>,
