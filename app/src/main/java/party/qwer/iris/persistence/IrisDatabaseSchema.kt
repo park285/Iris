@@ -5,6 +5,7 @@ object IrisDatabaseSchema {
     const val WEBHOOK_OUTBOX_TABLE = "webhook_outbox"
     const val CHECKPOINT_TABLE = "checkpoints"
     const val SNAPSHOT_STATE_TABLE = "snapshot_states"
+    const val MEMBER_IDENTITY_STATE_TABLE = "member_identity_states"
     const val SSE_EVENTS_TABLE = "sse_events"
     const val ROOM_EVENTS_TABLE = "room_events"
     private const val SQLITE_JOURNAL_MODE_WAL = "PRAGMA journal_mode=WAL"
@@ -50,6 +51,15 @@ object IrisDatabaseSchema {
             chat_id INTEGER PRIMARY KEY,
             state TEXT NOT NULL,
             snapshot_json TEXT,
+            updated_at INTEGER NOT NULL
+        )
+        """.trimIndent()
+
+    private val CREATE_MEMBER_IDENTITY_STATE =
+        """
+        CREATE TABLE IF NOT EXISTS $MEMBER_IDENTITY_STATE_TABLE (
+            chat_id INTEGER PRIMARY KEY,
+            nicknames_json TEXT NOT NULL,
             updated_at INTEGER NOT NULL
         )
         """.trimIndent()
@@ -114,6 +124,10 @@ object IrisDatabaseSchema {
         driver.execute(CREATE_SNAPSHOT_STATE)
     }
 
+    fun createMemberIdentityStateTable(driver: SqliteDriver) {
+        driver.execute(CREATE_MEMBER_IDENTITY_STATE)
+    }
+
     fun createSseEventsTable(driver: SqliteDriver) {
         driver.execute(CREATE_SSE_EVENTS)
     }
@@ -158,6 +172,7 @@ object IrisDatabaseSchema {
         createWebhookOutboxTable(driver)
         createCheckpointTable(driver)
         createSnapshotStateTable(driver)
+        createMemberIdentityStateTable(driver)
         createSseEventsTable(driver)
         createRoomEventsTable(driver)
     }
