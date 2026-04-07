@@ -1,7 +1,6 @@
 package party.qwer.iris
 
 import party.qwer.iris.model.MemberEvent
-import party.qwer.iris.model.NicknameChangeEvent
 import party.qwer.iris.model.ProfileChangeEvent
 import party.qwer.iris.model.RoleChangeEvent
 import party.qwer.iris.storage.ChatId
@@ -66,15 +65,12 @@ class RoomSnapshotManagerTest {
     }
 
     @Test
-    fun `detects nickname change`() {
+    fun `does not detect nickname change because dedicated observer owns it`() {
         val manager = RoomSnapshotManager()
         val prev = snap(memberIds = setOf(1L), nicknames = mapOf(1L to "이전닉"))
         val curr = snap(memberIds = setOf(1L), nicknames = mapOf(1L to "변경닉"))
         val events = manager.diff(prev, curr)
-        assertEquals(1, events.size)
-        val event = events[0] as NicknameChangeEvent
-        assertEquals("이전닉", event.oldNickname)
-        assertEquals("변경닉", event.newNickname)
+        assertTrue(events.isEmpty())
     }
 
     @Test
@@ -92,13 +88,16 @@ class RoomSnapshotManagerTest {
     @Test
     fun `detects profile image transition from null to value`() {
         val manager = RoomSnapshotManager()
-        val prev = snap(memberIds = setOf(1L), profileImages = emptyMap())
-        val curr = snap(memberIds = setOf(1L), profileImages = mapOf(1L to "https://example.com/p.png"))
+        val prev = snap(memberIds = setOf(1L), nicknames = mapOf(1L to "Alice"), profileImages = emptyMap())
+        val curr = snap(memberIds = setOf(1L), nicknames = mapOf(1L to "Alice"), profileImages = mapOf(1L to "https://example.com/p.png"))
 
         val events = manager.diff(prev, curr)
 
         assertEquals(1, events.size)
-        assertIs<ProfileChangeEvent>(events[0])
+        val event = assertIs<ProfileChangeEvent>(events[0])
+        assertEquals("Alice", event.nickname)
+        assertEquals(null, event.oldProfileImageUrl)
+        assertEquals("https://example.com/p.png", event.newProfileImageUrl)
     }
 
     @Test

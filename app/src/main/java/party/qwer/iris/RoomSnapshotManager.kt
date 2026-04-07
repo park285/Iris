@@ -1,7 +1,6 @@
 package party.qwer.iris
 
 import party.qwer.iris.model.MemberEvent
-import party.qwer.iris.model.NicknameChangeEvent
 import party.qwer.iris.model.ProfileChangeEvent
 import party.qwer.iris.model.RoleChangeEvent
 import party.qwer.iris.model.RoomEvent
@@ -47,24 +46,9 @@ open class RoomSnapshotManager : RoomDiffEngine {
             )
         }
 
-        // 닉네임 변경 (현재 재실 중인 멤버만 대상)
+        // 닉네임 변경은 MemberIdentityObserver가 단일 소스로 감지한다.
         val commonMembers = prev.memberIds.intersect(curr.memberIds)
         for (uid in commonMembers) {
-            val oldNick = prev.nicknames[uid]
-            val newNick = curr.nicknames[uid]
-            if (oldNick != null && newNick != null && oldNick != newNick) {
-                events.add(
-                    NicknameChangeEvent(
-                        chatId = curr.chatId.value,
-                        linkId = curr.linkId?.value,
-                        userId = uid.value,
-                        oldNickname = oldNick,
-                        newNickname = newNick,
-                        timestamp = now,
-                    ),
-                )
-            }
-
             val oldRole = prev.roles[uid]
             val newRole = curr.roles[uid]
             if (oldRole != null && newRole != null && oldRole != newRole) {
@@ -89,6 +73,9 @@ open class RoomSnapshotManager : RoomDiffEngine {
                         linkId = curr.linkId?.value,
                         userId = uid.value,
                         timestamp = now,
+                        nickname = curr.nicknames[uid] ?: prev.nicknames[uid],
+                        oldProfileImageUrl = oldImg,
+                        newProfileImageUrl = newImg,
                     ),
                 )
             }
