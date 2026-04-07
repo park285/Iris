@@ -4,7 +4,6 @@ import party.qwer.iris.model.ImageBridgeHealthResult
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -18,7 +17,7 @@ class RuntimeOptionsTest {
         assertEquals(2, options.httpWorkerThreads)
         assertEquals(5_000L, options.bridgeHealthRefreshMs)
         assertEquals(60_000L, options.snapshotFullReconcileIntervalMs)
-        assertNull(options.roomEventRetentionMs)
+        assertEquals(7L * 24 * 60 * 60 * 1000, options.roomEventRetentionMs)
         assertEquals(3_600_000L, options.imageDeletionIntervalMs)
         assertEquals(86_400_000L, options.imageRetentionMs)
     }
@@ -51,10 +50,11 @@ class RuntimeOptionsTest {
 
     @Test
     fun `room event retention ignores empty zero and invalid overrides`() {
-        assertNull(RuntimeOptions.fromEnv(mapOf("IRIS_ROOM_EVENT_RETENTION_MS" to "")).roomEventRetentionMs)
-        assertNull(RuntimeOptions.fromEnv(mapOf("IRIS_ROOM_EVENT_RETENTION_MS" to "0")).roomEventRetentionMs)
-        assertNull(RuntimeOptions.fromEnv(mapOf("IRIS_ROOM_EVENT_RETENTION_MS" to "-1")).roomEventRetentionMs)
-        assertNull(RuntimeOptions.fromEnv(mapOf("IRIS_ROOM_EVENT_RETENTION_MS" to "abc")).roomEventRetentionMs)
+        val defaultRetention = 7L * 24 * 60 * 60 * 1000
+        assertEquals(defaultRetention, RuntimeOptions.fromEnv(mapOf("IRIS_ROOM_EVENT_RETENTION_MS" to "")).roomEventRetentionMs)
+        assertEquals(defaultRetention, RuntimeOptions.fromEnv(mapOf("IRIS_ROOM_EVENT_RETENTION_MS" to "0")).roomEventRetentionMs)
+        assertEquals(defaultRetention, RuntimeOptions.fromEnv(mapOf("IRIS_ROOM_EVENT_RETENTION_MS" to "-1")).roomEventRetentionMs)
+        assertEquals(defaultRetention, RuntimeOptions.fromEnv(mapOf("IRIS_ROOM_EVENT_RETENTION_MS" to "abc")).roomEventRetentionMs)
     }
 
     @Test

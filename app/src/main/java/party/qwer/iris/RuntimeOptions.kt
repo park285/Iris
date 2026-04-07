@@ -16,6 +16,7 @@ internal data class RuntimeOptions(
         private const val DEFAULT_HTTP_WORKER_THREADS = 2
         private const val DEFAULT_BRIDGE_HEALTH_REFRESH_MS = 5_000L
         private const val DEFAULT_SNAPSHOT_FULL_RECONCILE_INTERVAL_MS = 60_000L
+        private const val DEFAULT_ROOM_EVENT_RETENTION_MS = 7L * 24 * 60 * 60 * 1000
 
         fun fromEnv(env: Map<String, String> = System.getenv()): RuntimeOptions =
             RuntimeOptions(
@@ -37,8 +38,9 @@ internal data class RuntimeOptions(
                         env["IRIS_SNAPSHOT_MISSING_TOMBSTONE_TTL_MS"],
                     ),
                 roomEventRetentionMs =
-                    optionalPositiveDurationMillis(
+                    positiveDurationMillisOrDefault(
                         env["IRIS_ROOM_EVENT_RETENTION_MS"],
+                        DEFAULT_ROOM_EVENT_RETENTION_MS,
                     ),
                 imageDeletionIntervalMs =
                     positiveDurationMillisOrDefault(
