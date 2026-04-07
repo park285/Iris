@@ -22,5 +22,6 @@ internal fun buildWebhookPayload(
         if (!command.threadId.isNullOrBlank()) put("threadId", command.threadId)
         command.threadScope?.let { put("threadScope", it) }
         if (!command.messageType.isNullOrBlank()) put("type", command.messageType)
+        command.eventPayload?.let { put("eventPayload", it) }
         if (!command.attachment.isNullOrBlank()) put("attachment", command.attachment)
     }.toString()

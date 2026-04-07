@@ -1,8 +1,10 @@
 package party.qwer.iris.delivery.webhook
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -39,6 +41,7 @@ class WebhookPayloadBuilderTest {
         assertFalse(obj.containsKey("threadId"))
         assertFalse(obj.containsKey("threadScope"))
         assertFalse(obj.containsKey("type"))
+        assertFalse(obj.containsKey("eventPayload"))
         assertFalse(obj.containsKey("attachment"))
     }
 
@@ -56,7 +59,15 @@ class WebhookPayloadBuilderTest {
                 roomLinkId = "link-456",
                 threadId = "thread-789",
                 threadScope = 2,
-                messageType = "1",
+                messageType = "nickname_change",
+                eventPayload =
+                    buildJsonObject {
+                        put("type", "nickname_change")
+                        put("chatId", 18219201472247343L)
+                        put("userId", 1234567890L)
+                        put("oldNickname", "이전닉")
+                        put("newNickname", "변경닉")
+                    },
                 attachment = "{\"url\":\"http://example.com\"}",
             )
         val result = buildWebhookPayload(command, "settlement", "msg-002")
@@ -70,7 +81,9 @@ class WebhookPayloadBuilderTest {
         assertEquals("link-456", obj["roomLinkId"]?.jsonPrimitive?.content)
         assertEquals("thread-789", obj["threadId"]?.jsonPrimitive?.content)
         assertEquals("2", obj["threadScope"]?.jsonPrimitive?.content)
-        assertEquals("1", obj["type"]?.jsonPrimitive?.content)
+        assertEquals("nickname_change", obj["type"]?.jsonPrimitive?.content)
+        assertEquals("nickname_change", obj["eventPayload"]?.jsonObject?.get("type")?.jsonPrimitive?.content)
+        assertEquals("변경닉", obj["eventPayload"]?.jsonObject?.get("newNickname")?.jsonPrimitive?.content)
         assertEquals("{\"url\":\"http://example.com\"}", obj["attachment"]?.jsonPrimitive?.content)
     }
 
@@ -100,6 +113,7 @@ class WebhookPayloadBuilderTest {
         assertFalse(obj.containsKey("threadId"))
         assertFalse(obj.containsKey("threadScope"))
         assertFalse(obj.containsKey("type"))
+        assertFalse(obj.containsKey("eventPayload"))
         assertFalse(obj.containsKey("attachment"))
     }
 
