@@ -1,5 +1,7 @@
 package party.qwer.iris.delivery.webhook
 
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -46,6 +48,27 @@ class RoutingModelsTest {
     }
 
     @Test
+    fun `routing command preserves optional structured event payload`() {
+        val eventPayload =
+            buildJsonObject {
+                put("type", "nickname_change")
+                put("userId", 123L)
+            }
+        val command =
+            RoutingCommand(
+                text = """{"type":"nickname_change"}""",
+                room = "room-1",
+                sender = "tester",
+                userId = "user-1",
+                sourceLogId = 42L,
+                messageType = "nickname_change",
+                eventPayload = eventPayload,
+            )
+
+        assertEquals(eventPayload, command.eventPayload)
+    }
+
+    @Test
     fun `routing command defaults message type and attachment to null`() {
         val command =
             RoutingCommand(
@@ -58,5 +81,6 @@ class RoutingModelsTest {
 
         assertEquals(null, command.messageType)
         assertEquals(null, command.attachment)
+        assertEquals(null, command.eventPayload)
     }
 }
