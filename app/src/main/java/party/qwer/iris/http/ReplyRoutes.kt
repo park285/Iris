@@ -52,7 +52,7 @@ internal fun Route.installReplyRoutes(
 
             call.request.headers[HttpHeaders.ContentType]?.startsWith(
                 ContentType.Application.Json.toString(),
-                ignoreCase = true
+                ignoreCase = true,
             ) == true -> {
                 if (
                     !withVerifiedProtectedBody(
@@ -64,7 +64,7 @@ internal fun Route.installReplyRoutes(
                             authSupport.finalizeSignature(
                                 call,
                                 precheck,
-                                actualBodySha256Hex
+                                actualBodySha256Hex,
                             )
                         },
                     ) { rawBody ->
@@ -158,8 +158,7 @@ private suspend fun enqueueMultipartReply(
     }
 }
 
-private fun isMultipartFormData(call: ApplicationCall): Boolean =
-    call.request.headers[HttpHeaders.ContentType]?.startsWith("multipart/form-data", ignoreCase = true) == true
+private fun isMultipartFormData(call: ApplicationCall): Boolean = call.request.headers[HttpHeaders.ContentType]?.startsWith("multipart/form-data", ignoreCase = true) == true
 
 internal fun requireMultipartImageType(type: ReplyType) {
     if (type != ReplyType.IMAGE && type != ReplyType.IMAGE_MULTIPLE) {

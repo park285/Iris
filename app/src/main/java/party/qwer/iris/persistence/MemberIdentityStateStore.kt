@@ -47,12 +47,13 @@ internal class SqliteMemberIdentityStateStore(
     private val serializer = MapSerializer(String.serializer(), String.serializer())
 
     override fun loadAll(): Map<ChatId, Map<UserId, String>> =
-        db.query(
-            "SELECT chat_id, nicknames_json FROM ${IrisDatabaseSchema.MEMBER_IDENTITY_STATE_TABLE} ORDER BY chat_id",
-        ) { row ->
-            val chatId = ChatId(row.getLong(0))
-            chatId to decodeNicknames(row.getString(1))
-        }.toMap()
+        db
+            .query(
+                "SELECT chat_id, nicknames_json FROM ${IrisDatabaseSchema.MEMBER_IDENTITY_STATE_TABLE} ORDER BY chat_id",
+            ) { row ->
+                val chatId = ChatId(row.getLong(0))
+                chatId to decodeNicknames(row.getString(1))
+            }.toMap()
 
     override fun save(
         chatId: ChatId,
