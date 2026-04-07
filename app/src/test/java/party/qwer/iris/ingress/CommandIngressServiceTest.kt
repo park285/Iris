@@ -276,6 +276,46 @@ class CommandIngressServiceTest {
         }
 
     @Test
+    fun `nickname lookup failure does not stop ingress dispatch`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            var resolveCalls = 0
+            val routingGateway = FakeRoutingGateway()
+            val ingress =
+                CommandIngressService(
+                    db =
+                        FakeChatLogRepository(
+                            latestLogId = 10L,
+                            polledLogs = listOf(webhookChatLogEntry(id = 11L, chatId = 100L, message = "!ping", userId = 200L)),
+                            roomMetadata = KakaoDB.RoomMetadata(type = "OM", linkId = "300"),
+                            senderNameProvider = {
+                                resolveCalls++
+                                if (resolveCalls == 1) {
+                                    error("lookup failed")
+                                }
+                                "Recovered Name"
+                            },
+                        ),
+                    config = config,
+                    checkpointJournal = FakeCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
+                    memberIdentityStateStore = InMemoryMemberIdentityStateStore(),
+                    roomEventStore = RecordingIngressRoomEventStore(),
+                    nicknameEventEmitter = SnapshotEventEmitter(SseEventBus(bufferSize = 8), FakeRoutingGateway(), RecordingIngressRoomEventStore()),
+                    routingGateway = routingGateway,
+                    dispatchDispatcher = dispatcher,
+                    onMarkDirty = {},
+                )
+
+            ingress.checkChange()
+            ingress.checkChange()
+            runCurrent()
+
+            assertEquals(1, routingGateway.commands.size)
+            assertEquals(11L, ingress.lastObservedLogId())
+            ingress.close()
+        }
+
+    @Test
     fun `ingress nickname tracker prefers stored baseline over stale alerted nickname`() =
         runTest {
             val eventStore = RecordingIngressRoomEventStore()

@@ -268,25 +268,49 @@ internal class CommandIngressService(
         userId: Long,
         timestamp: Long,
     ) {
-        if (nicknameTracker == null) {
+        val tracker = nicknameTracker ?: run {
             return
         }
 
-        val roomMetadata = roomMetadataResolver.resolve(chatId)
+        val roomMetadata =
+            runCatching {
+                roomMetadataResolver.resolve(chatId)
+            }.getOrElse { error ->
+                IrisLogger.warn(
+                    "[CommandIngressService] Failed to resolve room metadata for nickname check " +
+                        "chatId=$chatId, userId=$userId: ${error.message}",
+                )
+                return
+            }
         val currentNickname =
-            senderNameResolver.resolveFresh(
+            runCatching {
+                senderNameResolver.resolveFresh(
+                    chatId = chatId,
+                    userId = userId,
+                    linkId = roomMetadata.linkId.toLongOrNull(),
+                )
+            }.getOrElse { error ->
+                IrisLogger.warn(
+                    "[CommandIngressService] Failed to resolve nickname for chatId=$chatId, " +
+                        "userId=$userId: ${error.message}",
+                )
+                return
+            }
+
+        runCatching {
+            tracker.observe(
                 chatId = chatId,
                 userId = userId,
                 linkId = roomMetadata.linkId.toLongOrNull(),
+                currentNickname = currentNickname,
+                timestamp = timestamp,
             )
-
-        nicknameTracker.observe(
-            chatId = chatId,
-            userId = userId,
-            linkId = roomMetadata.linkId.toLongOrNull(),
-            currentNickname = currentNickname,
-            timestamp = timestamp,
-        )
+        }.onFailure { error ->
+            IrisLogger.warn(
+                "[CommandIngressService] Failed to observe nickname change for chatId=$chatId, " +
+                    "userId=$userId: ${error.message}",
+            )
+        }
     }
 
     private fun scheduleNicknameRechecks(
