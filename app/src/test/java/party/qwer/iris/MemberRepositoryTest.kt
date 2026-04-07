@@ -48,6 +48,40 @@ private fun legacyQuery(block: (String, Array<String?>?, Int) -> List<Map<String
         }
     }
 
+private fun openMemberRow(
+    userId: String,
+    nickname: String,
+    linkMemberType: String = "2",
+    enc: String = "0",
+): Map<String, String?> =
+    mapOf(
+        "user_id" to userId,
+        "nickname" to nickname,
+        "link_member_type" to linkMemberType,
+        "profile_image_url" to null,
+        "full_profile_image_url" to null,
+        "original_profile_image_url" to null,
+        "open_profile_image_url" to null,
+        "open_profile_full_profile_image_url" to null,
+        "open_profile_original_profile_image_url" to null,
+        "linked_profile_nickname" to null,
+        "linked_profile_enc" to null,
+        "enc" to enc,
+    )
+
+private fun openNicknameRow(
+    userId: String,
+    nickname: String,
+    enc: String = "0",
+): Map<String, String?> =
+    mapOf(
+        "user_id" to userId,
+        "nickname" to nickname,
+        "linked_profile_nickname" to null,
+        "linked_profile_enc" to null,
+        "enc" to enc,
+    )
+
 // 빈 결과를 반환하는 ThreadQueries 스텁
 private val stubThreadQueries =
     ThreadQueries(
@@ -182,13 +216,13 @@ class MemberRepositoryTest {
                                     mapOf("user_id" to "2", "type" to "0", "cnt" to "7", "last_active" to "900"),
                                     mapOf("user_id" to "3", "type" to "0", "cnt" to "3", "last_active" to "800"),
                                 )
-                            sqlQuery.contains("FROM db2.open_chat_member") &&
-                                sqlQuery.contains("WHERE link_id = ? AND user_id IN (?, ?, ?)") &&
+                            sqlQuery.contains("FROM db2.open_chat_member om") &&
+                                sqlQuery.contains("WHERE om.link_id = ? AND om.user_id IN (?, ?, ?)") &&
                                 bindArgs?.toList() == listOf("777", "1", "2", "3") ->
                                 listOf(
-                                    mapOf("user_id" to "1", "nickname" to "user-1-link-777", "enc" to "0"),
-                                    mapOf("user_id" to "2", "nickname" to "user-2-link-777", "enc" to "0"),
-                                    mapOf("user_id" to "3", "nickname" to "user-3-link-777", "enc" to "0"),
+                                    openNicknameRow("1", "user-1-link-777"),
+                                    openNicknameRow("2", "user-2-link-777"),
+                                    openNicknameRow("3", "user-3-link-777"),
                                 )
                             else -> emptyList()
                         }
@@ -223,8 +257,9 @@ class MemberRepositoryTest {
                                     mapOf("user_id" to "2", "type" to "0", "cnt" to "7", "last_active" to "900"),
                                     mapOf("user_id" to "3", "type" to "0", "cnt" to "3", "last_active" to "800"),
                                 )
-                            sqlQuery == "SELECT nickname, enc FROM db2.open_chat_member WHERE user_id = ? AND link_id = ? LIMIT 1" ->
-                                listOf(mapOf("nickname" to "user", "enc" to "0"))
+                            sqlQuery.contains("FROM db2.open_chat_member om") &&
+                                sqlQuery.contains("WHERE om.user_id = ? AND om.link_id = ?") ->
+                                listOf(openNicknameRow("0", "user"))
                             else -> emptyList()
                         }
                     },
@@ -253,16 +288,17 @@ class MemberRepositoryTest {
                                     mapOf("user_id" to "1", "type" to "0", "cnt" to "10", "last_active" to "1000"),
                                     mapOf("user_id" to "2", "type" to "0", "cnt" to "7", "last_active" to "900"),
                                 )
-                            sqlQuery.contains("FROM db2.open_chat_member") &&
-                                sqlQuery.contains("WHERE link_id = ? AND user_id IN (?, ?)") &&
+                            sqlQuery.contains("FROM db2.open_chat_member om") &&
+                                sqlQuery.contains("WHERE om.link_id = ? AND om.user_id IN (?, ?)") &&
                                 bindArgs?.toList() == listOf("777", "1", "2") -> {
                                 batchNicknameQueryCount++
                                 listOf(
-                                    mapOf("user_id" to "1", "nickname" to "alice", "enc" to "0"),
-                                    mapOf("user_id" to "2", "nickname" to "bob", "enc" to "0"),
+                                    openNicknameRow("1", "alice"),
+                                    openNicknameRow("2", "bob"),
                                 )
                             }
-                            sqlQuery == "SELECT nickname, enc FROM db2.open_chat_member WHERE user_id = ? AND link_id = ? LIMIT 1" ->
+                            sqlQuery.contains("FROM db2.open_chat_member om") &&
+                                sqlQuery.contains("WHERE om.user_id = ? AND om.link_id = ?") ->
                                 error("roomStats should not resolve nicknames with per-user queries")
                             else -> emptyList()
                         }
@@ -327,30 +363,21 @@ class MemberRepositoryTest {
                             sqlQuery == "SELECT link_id FROM chat_rooms WHERE id = ?" -> listOf(mapOf("link_id" to "777"))
                             sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
                                 listOf(mapOf("link_id" to "777", "type" to "OM", "members" to "[]", "active_members_count" to "2"))
-                            sqlQuery.contains("FROM db2.open_chat_member WHERE link_id = ?") ->
+                            sqlQuery.contains("FROM db2.open_chat_member om") &&
+                                sqlQuery.contains("LEFT JOIN db2.open_profile op") &&
+                                sqlQuery.contains("WHERE om.link_id = ?") ->
                                 listOf(
-                                    mapOf(
-                                        "user_id" to "1",
-                                        "nickname" to "alice",
-                                        "link_member_type" to "1",
-                                        "profile_image_url" to null,
-                                        "enc" to "0",
-                                    ),
-                                    mapOf(
-                                        "user_id" to "2",
-                                        "nickname" to "bob",
-                                        "link_member_type" to "2",
-                                        "profile_image_url" to null,
-                                        "enc" to "0",
-                                    ),
+                                    openMemberRow("1", "alice", linkMemberType = "1"),
+                                    openMemberRow("2", "bob"),
                                 )
                             sqlQuery.contains("SELECT user_id, COUNT(*) as message_count, MAX(created_at) as last_active") ->
                                 listOf(
                                     mapOf("user_id" to "1", "message_count" to "10", "last_active" to "1000"),
                                     mapOf("user_id" to "3", "message_count" to "99", "last_active" to "5000"),
                                 )
-                            sqlQuery == "SELECT nickname, enc FROM db2.open_chat_member WHERE user_id = ? AND link_id = ? LIMIT 1" ->
-                                listOf(mapOf("nickname" to "user-${bindArgs?.get(0)}", "enc" to "0"))
+                            sqlQuery.contains("FROM db2.open_chat_member om") &&
+                                sqlQuery.contains("WHERE om.user_id = ? AND om.link_id = ?") ->
+                                listOf(openNicknameRow(bindArgs?.get(0).orEmpty(), "user-${bindArgs?.get(0)}"))
                             else -> emptyList()
                         }
                     },
@@ -378,22 +405,12 @@ class MemberRepositoryTest {
                         when {
                             sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
                                 listOf(mapOf("link_id" to "777", "type" to "OM", "members" to "[]", "active_members_count" to "2"))
-                            sqlQuery.contains("FROM db2.open_chat_member WHERE link_id = ?") ->
+                            sqlQuery.contains("FROM db2.open_chat_member om") &&
+                                sqlQuery.contains("LEFT JOIN db2.open_profile op") &&
+                                sqlQuery.contains("WHERE om.link_id = ?") ->
                                 listOf(
-                                    mapOf(
-                                        "user_id" to "1",
-                                        "nickname" to "alice",
-                                        "link_member_type" to "1",
-                                        "profile_image_url" to null,
-                                        "enc" to "0",
-                                    ),
-                                    mapOf(
-                                        "user_id" to "2",
-                                        "nickname" to "bob",
-                                        "link_member_type" to "2",
-                                        "profile_image_url" to null,
-                                        "enc" to "0",
-                                    ),
+                                    openMemberRow("1", "alice", linkMemberType = "1"),
+                                    openMemberRow("2", "bob"),
                                 )
                             sqlQuery.contains("FROM chat_logs") &&
                                 sqlQuery.contains("user_id IN (?, ?)") &&
@@ -425,22 +442,12 @@ class MemberRepositoryTest {
                         when {
                             sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
                                 listOf(mapOf("link_id" to "777", "type" to "OM", "members" to "[]", "active_members_count" to "2"))
-                            sqlQuery.contains("FROM db2.open_chat_member WHERE link_id = ?") ->
+                            sqlQuery.contains("FROM db2.open_chat_member om") &&
+                                sqlQuery.contains("LEFT JOIN db2.open_profile op") &&
+                                sqlQuery.contains("WHERE om.link_id = ?") ->
                                 listOf(
-                                    mapOf(
-                                        "user_id" to "1",
-                                        "nickname" to "alice",
-                                        "link_member_type" to "1",
-                                        "profile_image_url" to null,
-                                        "enc" to "0",
-                                    ),
-                                    mapOf(
-                                        "user_id" to "2",
-                                        "nickname" to "bob",
-                                        "link_member_type" to "2",
-                                        "profile_image_url" to null,
-                                        "enc" to "0",
-                                    ),
+                                    openMemberRow("1", "alice", linkMemberType = "1"),
+                                    openMemberRow("2", "bob"),
                                 )
                             sqlQuery.contains("FROM chat_logs") &&
                                 sqlQuery.contains("user_id IN (?, ?)") &&
@@ -968,15 +975,11 @@ class MemberRepositoryTest {
                         when {
                             sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
                                 listOf(mapOf("link_id" to "777", "type" to "OD", "members" to "[]", "active_members_count" to "1"))
-                            sqlQuery.contains("FROM db2.open_chat_member WHERE link_id = ?") ->
+                            sqlQuery.contains("FROM db2.open_chat_member om") &&
+                                sqlQuery.contains("LEFT JOIN db2.open_profile op") &&
+                                sqlQuery.contains("WHERE om.link_id = ?") ->
                                 listOf(
-                                    mapOf(
-                                        "user_id" to "6729110572752592365",
-                                        "nickname" to "박준우",
-                                        "link_member_type" to "2",
-                                        "profile_image_url" to null,
-                                        "enc" to "0",
-                                    ),
+                                    openMemberRow("6729110572752592365", "박준우"),
                                 )
                             sqlQuery.contains("FROM chat_logs") && sqlQuery.contains("GROUP BY user_id") ->
                                 listOf(
@@ -1072,15 +1075,11 @@ class MemberRepositoryTest {
                                         "link_id" to "455150406",
                                     ),
                                 )
-                            sqlQuery.contains("FROM db2.open_chat_member WHERE link_id = ?") ->
+                            sqlQuery.contains("FROM db2.open_chat_member om") &&
+                                sqlQuery.contains("LEFT JOIN db2.open_profile op") &&
+                                sqlQuery.contains("WHERE om.link_id = ?") ->
                                 listOf(
-                                    mapOf(
-                                        "user_id" to "6729110572752592365",
-                                        "nickname" to "박준우",
-                                        "link_member_type" to "2",
-                                        "profile_image_url" to null,
-                                        "enc" to "0",
-                                    ),
+                                    openMemberRow("6729110572752592365", "박준우"),
                                 )
                             else -> emptyList()
                         }
