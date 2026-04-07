@@ -76,13 +76,20 @@ internal class MemberIdentityObserver(
                 return@forEach
             }
 
-            when (val result = roomSnapshotReader.snapshot(roomId)) {
-                is RoomSnapshotReadResult.Present -> {
-                    val currentNicknames = mergedNicknames(result.snapshot)
-                    knownNicknames[roomId] = currentNicknames
-                    stateStore.save(roomId, currentNicknames)
+            runCatching {
+                when (val result = roomSnapshotReader.snapshot(roomId)) {
+                    is RoomSnapshotReadResult.Present -> {
+                        val currentNicknames = mergedNicknames(result.snapshot)
+                        knownNicknames[roomId] = currentNicknames
+                        stateStore.save(roomId, currentNicknames)
+                    }
+                    RoomSnapshotReadResult.Missing -> Unit
                 }
-                RoomSnapshotReadResult.Missing -> Unit
+            }.onFailure { error ->
+                IrisLogger.error(
+                    "[MemberIdentityObserver] prime failed chatId=${roomId.value}: ${error.message}",
+                    error,
+                )
             }
         }
     }
@@ -113,9 +120,16 @@ internal class MemberIdentityObserver(
         }
 
         roomIds.forEach { roomId ->
-            when (val result = roomSnapshotReader.snapshot(roomId)) {
-                is RoomSnapshotReadResult.Present -> handlePresentSnapshot(result.snapshot)
-                RoomSnapshotReadResult.Missing -> Unit
+            runCatching {
+                when (val result = roomSnapshotReader.snapshot(roomId)) {
+                    is RoomSnapshotReadResult.Present -> handlePresentSnapshot(result.snapshot)
+                    RoomSnapshotReadResult.Missing -> Unit
+                }
+            }.onFailure { error ->
+                IrisLogger.error(
+                    "[MemberIdentityObserver] room poll failed chatId=${roomId.value}: ${error.message}",
+                    error,
+                )
             }
         }
     }

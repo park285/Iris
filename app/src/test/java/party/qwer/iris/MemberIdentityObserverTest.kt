@@ -189,6 +189,88 @@ class MemberIdentityObserverTest {
         }
 
     @Test
+    fun `observer startup tolerates one room snapshot failure`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val reader =
+                ScriptedMemberIdentitySnapshotReader(
+                    rooms = listOf(100L, 200L),
+                    snapshots =
+                        mapOf(
+                            100L to listOf(SnapshotStep.Failure(IllegalStateException("boom"))),
+                            200L to
+                                listOf(
+                                    SnapshotStep.Present(snapshot(chatId = 200L, nicknames = mapOf(2L to "Bob"))),
+                                    SnapshotStep.Present(snapshot(chatId = 200L, nicknames = mapOf(2L to "Bobby"))),
+                                ),
+                        ),
+                )
+            val bus = SseEventBus(bufferSize = 16)
+            val eventStore = RecordingMemberIdentityRoomEventStore()
+            val observer =
+                MemberIdentityObserver(
+                    roomSnapshotReader = reader,
+                    emitter = SnapshotEventEmitter(bus, TestRoutingGateway(), eventStore = eventStore),
+                    stateStore = InMemoryMemberIdentityStateStore(),
+                    intervalMs = 50L,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            observer.start()
+            advanceTimeBy(60L)
+            runCurrent()
+            observer.stopSuspend()
+
+            val event = eventStore.insertedEvents.single { it.eventType == "nickname_change" }
+            assertTrue(event.payload.contains("\"oldNickname\":\"Bob\""))
+            assertTrue(event.payload.contains("\"newNickname\":\"Bobby\""))
+        }
+
+    @Test
+    fun `observer poll continues after one room fails`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val reader =
+                ScriptedMemberIdentitySnapshotReader(
+                    rooms = listOf(100L, 200L),
+                    snapshots =
+                        mapOf(
+                            100L to
+                                listOf(
+                                    SnapshotStep.Present(snapshot(chatId = 100L, nicknames = mapOf(1L to "Alice"))),
+                                    SnapshotStep.Failure(IllegalStateException("boom")),
+                                ),
+                            200L to
+                                listOf(
+                                    SnapshotStep.Present(snapshot(chatId = 200L, nicknames = mapOf(2L to "Bob"))),
+                                    SnapshotStep.Present(snapshot(chatId = 200L, nicknames = mapOf(2L to "Bobby"))),
+                                ),
+                        ),
+                )
+            val bus = SseEventBus(bufferSize = 16)
+            val eventStore = RecordingMemberIdentityRoomEventStore()
+            val observer =
+                MemberIdentityObserver(
+                    roomSnapshotReader = reader,
+                    emitter = SnapshotEventEmitter(bus, TestRoutingGateway(), eventStore = eventStore),
+                    stateStore = InMemoryMemberIdentityStateStore(),
+                    intervalMs = 50L,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            observer.start()
+            advanceTimeBy(60L)
+            runCurrent()
+            observer.stopSuspend()
+
+            val event = eventStore.insertedEvents.single { it.eventType == "nickname_change" }
+            assertTrue(event.payload.contains("\"oldNickname\":\"Bob\""))
+            assertTrue(event.payload.contains("\"newNickname\":\"Bobby\""))
+        }
+
+    @Test
     fun `observer replays missed rename from last alerted nickname when current state already advanced`() =
         runTest {
             val dispatcher = StandardTestDispatcher(testScheduler)
@@ -480,6 +562,38 @@ private class StubMemberIdentitySnapshotReader(
         val index = minOf(indexes[chatId.value] ?: 0, roomSnapshots.lastIndex)
         indexes[chatId.value] = index + 1
         return RoomSnapshotReadResult.Present(roomSnapshots[index])
+    }
+}
+
+private sealed interface SnapshotStep {
+    data class Present(
+        val snapshot: RoomSnapshotData,
+    ) : SnapshotStep
+
+    data class Failure(
+        val error: Throwable,
+    ) : SnapshotStep
+
+    data object Missing : SnapshotStep
+}
+
+private class ScriptedMemberIdentitySnapshotReader(
+    private val rooms: List<Long>,
+    private val snapshots: Map<Long, List<SnapshotStep>>,
+) : RoomSnapshotReader {
+    private val indexes = mutableMapOf<Long, Int>()
+
+    override fun listRoomChatIds(): List<ChatId> = rooms.map(::ChatId)
+
+    override fun snapshot(chatId: ChatId): RoomSnapshotReadResult {
+        val roomSnapshots = snapshots.getValue(chatId.value)
+        val index = minOf(indexes[chatId.value] ?: 0, roomSnapshots.lastIndex)
+        indexes[chatId.value] = index + 1
+        return when (val step = roomSnapshots[index]) {
+            is SnapshotStep.Present -> RoomSnapshotReadResult.Present(step.snapshot)
+            is SnapshotStep.Failure -> throw step.error
+            SnapshotStep.Missing -> RoomSnapshotReadResult.Missing
+        }
     }
 }
 
