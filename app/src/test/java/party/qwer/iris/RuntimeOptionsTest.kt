@@ -4,6 +4,7 @@ import party.qwer.iris.model.ImageBridgeHealthResult
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -16,6 +17,8 @@ class RuntimeOptionsTest {
         assertEquals("127.0.0.1", options.bindHost)
         assertEquals(2, options.httpWorkerThreads)
         assertEquals(5_000L, options.bridgeHealthRefreshMs)
+        assertEquals(60_000L, options.snapshotFullReconcileIntervalMs)
+        assertNull(options.roomEventRetentionMs)
         assertEquals(3_600_000L, options.imageDeletionIntervalMs)
         assertEquals(86_400_000L, options.imageRetentionMs)
     }
@@ -29,6 +32,8 @@ class RuntimeOptionsTest {
                     "IRIS_BIND_HOST" to "0.0.0.0",
                     "IRIS_HTTP_WORKER_THREADS" to "6",
                     "IRIS_BRIDGE_HEALTH_REFRESH_MS" to "1500",
+                    "IRIS_SNAPSHOT_FULL_RECONCILE_INTERVAL_MS" to "2500",
+                    "IRIS_ROOM_EVENT_RETENTION_MS" to "4500",
                     "IRIS_IMAGE_DELETE_INTERVAL_MS" to "2500",
                     "IRIS_IMAGE_RETENTION_MS" to "3500",
                 ),
@@ -38,8 +43,38 @@ class RuntimeOptionsTest {
         assertEquals("0.0.0.0", options.bindHost)
         assertEquals(6, options.httpWorkerThreads)
         assertEquals(1_500L, options.bridgeHealthRefreshMs)
+        assertEquals(2_500L, options.snapshotFullReconcileIntervalMs)
+        assertEquals(4_500L, options.roomEventRetentionMs)
         assertEquals(2_500L, options.imageDeletionIntervalMs)
         assertEquals(3_500L, options.imageRetentionMs)
+    }
+
+    @Test
+    fun `room event retention ignores empty zero and invalid overrides`() {
+        assertNull(RuntimeOptions.fromEnv(mapOf("IRIS_ROOM_EVENT_RETENTION_MS" to "")).roomEventRetentionMs)
+        assertNull(RuntimeOptions.fromEnv(mapOf("IRIS_ROOM_EVENT_RETENTION_MS" to "0")).roomEventRetentionMs)
+        assertNull(RuntimeOptions.fromEnv(mapOf("IRIS_ROOM_EVENT_RETENTION_MS" to "-1")).roomEventRetentionMs)
+        assertNull(RuntimeOptions.fromEnv(mapOf("IRIS_ROOM_EVENT_RETENTION_MS" to "abc")).roomEventRetentionMs)
+    }
+
+    @Test
+    fun `snapshot full reconcile interval ignores empty zero and invalid overrides`() {
+        assertEquals(
+            60_000L,
+            RuntimeOptions.fromEnv(mapOf("IRIS_SNAPSHOT_FULL_RECONCILE_INTERVAL_MS" to "")).snapshotFullReconcileIntervalMs,
+        )
+        assertEquals(
+            60_000L,
+            RuntimeOptions.fromEnv(mapOf("IRIS_SNAPSHOT_FULL_RECONCILE_INTERVAL_MS" to "0")).snapshotFullReconcileIntervalMs,
+        )
+        assertEquals(
+            60_000L,
+            RuntimeOptions.fromEnv(mapOf("IRIS_SNAPSHOT_FULL_RECONCILE_INTERVAL_MS" to "-1")).snapshotFullReconcileIntervalMs,
+        )
+        assertEquals(
+            60_000L,
+            RuntimeOptions.fromEnv(mapOf("IRIS_SNAPSHOT_FULL_RECONCILE_INTERVAL_MS" to "abc")).snapshotFullReconcileIntervalMs,
+        )
     }
 
     @Test

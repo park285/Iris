@@ -5,7 +5,9 @@ internal data class RuntimeOptions(
     val bindHost: String,
     val httpWorkerThreads: Int,
     val bridgeHealthRefreshMs: Long,
+    val snapshotFullReconcileIntervalMs: Long,
     val snapshotMissingTombstoneTtlMs: Long?,
+    val roomEventRetentionMs: Long?,
     val imageDeletionIntervalMs: Long,
     val imageRetentionMs: Long,
 ) {
@@ -13,6 +15,7 @@ internal data class RuntimeOptions(
         private const val DEFAULT_BIND_HOST = "127.0.0.1"
         private const val DEFAULT_HTTP_WORKER_THREADS = 2
         private const val DEFAULT_BRIDGE_HEALTH_REFRESH_MS = 5_000L
+        private const val DEFAULT_SNAPSHOT_FULL_RECONCILE_INTERVAL_MS = 60_000L
 
         fun fromEnv(env: Map<String, String> = System.getenv()): RuntimeOptions =
             RuntimeOptions(
@@ -24,9 +27,18 @@ internal data class RuntimeOptions(
                         env["IRIS_BRIDGE_HEALTH_REFRESH_MS"],
                         DEFAULT_BRIDGE_HEALTH_REFRESH_MS,
                     ),
+                snapshotFullReconcileIntervalMs =
+                    positiveDurationMillisOrDefault(
+                        env["IRIS_SNAPSHOT_FULL_RECONCILE_INTERVAL_MS"],
+                        DEFAULT_SNAPSHOT_FULL_RECONCILE_INTERVAL_MS,
+                    ),
                 snapshotMissingTombstoneTtlMs =
                     optionalPositiveDurationMillis(
                         env["IRIS_SNAPSHOT_MISSING_TOMBSTONE_TTL_MS"],
+                    ),
+                roomEventRetentionMs =
+                    optionalPositiveDurationMillis(
+                        env["IRIS_ROOM_EVENT_RETENTION_MS"],
                     ),
                 imageDeletionIntervalMs =
                     positiveDurationMillisOrDefault(
