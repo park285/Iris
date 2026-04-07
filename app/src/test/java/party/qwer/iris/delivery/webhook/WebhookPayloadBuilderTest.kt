@@ -82,8 +82,22 @@ class WebhookPayloadBuilderTest {
         assertEquals("thread-789", obj["threadId"]?.jsonPrimitive?.content)
         assertEquals("2", obj["threadScope"]?.jsonPrimitive?.content)
         assertEquals("nickname_change", obj["type"]?.jsonPrimitive?.content)
-        assertEquals("nickname_change", obj["eventPayload"]?.jsonObject?.get("type")?.jsonPrimitive?.content)
-        assertEquals("변경닉", obj["eventPayload"]?.jsonObject?.get("newNickname")?.jsonPrimitive?.content)
+        assertEquals(
+            "nickname_change",
+            obj["eventPayload"]
+                ?.jsonObject
+                ?.get("type")
+                ?.jsonPrimitive
+                ?.content,
+        )
+        assertEquals(
+            "변경닉",
+            obj["eventPayload"]
+                ?.jsonObject
+                ?.get("newNickname")
+                ?.jsonPrimitive
+                ?.content,
+        )
         assertEquals("{\"url\":\"http://example.com\"}", obj["attachment"]?.jsonPrimitive?.content)
     }
 

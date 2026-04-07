@@ -1,8 +1,8 @@
 package party.qwer.iris.delivery.webhook
 
+import kotlinx.serialization.json.JsonPrimitive
 import party.qwer.iris.CommandParser
 import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
-import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
