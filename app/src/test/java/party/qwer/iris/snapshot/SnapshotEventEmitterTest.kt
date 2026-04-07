@@ -1,5 +1,7 @@
 package party.qwer.iris.snapshot
 
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import party.qwer.iris.SseEventBus
 import party.qwer.iris.delivery.webhook.RoutingCommand
 import party.qwer.iris.delivery.webhook.RoutingGateway
@@ -13,6 +15,8 @@ import party.qwer.iris.persistence.JdbcSqliteHelper
 import party.qwer.iris.persistence.SqliteRoomEventStore
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class SnapshotEventEmitterTest {
@@ -65,6 +69,56 @@ class SnapshotEventEmitterTest {
         assertTrue(replayed[0].second.contains("\"oldNickname\":\"Bob\""))
         assertEquals(1, gateway.commands.size)
         assertEquals("200", gateway.commands[0].room)
+        assertEquals("nickname_change", gateway.commands[0].messageType)
+        val eventPayload = assertNotNull(gateway.commands[0].eventPayload)
+        assertEquals("Bob", eventPayload.jsonObject["oldNickname"]?.jsonPrimitive?.content)
+        assertEquals("Bobby", eventPayload.jsonObject["newNickname"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `emits RoleChangeEvent to gateway with subtype message type`() {
+        val bus = SseEventBus(bufferSize = 10)
+        val gateway = RecordingGateway()
+        val emitter = SnapshotEventEmitter(bus, gateway)
+
+        val event =
+            RoleChangeEvent(
+                chatId = 300L,
+                linkId = 1300L,
+                userId = 3L,
+                oldRole = "member",
+                newRole = "admin",
+                timestamp = 3L,
+            )
+        emitter.emit(listOf(event))
+
+        assertEquals(1, gateway.commands.size)
+        assertEquals("role_change", gateway.commands[0].messageType)
+    }
+
+    @Test
+    fun `emits ProfileChangeEvent to gateway with subtype message type`() {
+        val bus = SseEventBus(bufferSize = 10)
+        val gateway = RecordingGateway()
+        val emitter = SnapshotEventEmitter(bus, gateway)
+
+        val event =
+            ProfileChangeEvent(
+                chatId = 400L,
+                linkId = 1400L,
+                userId = 4L,
+                timestamp = 4L,
+                nickname = "Dana",
+                oldProfileImageUrl = "https://example.com/old.png",
+                newProfileImageUrl = "https://example.com/new.png",
+            )
+        emitter.emit(listOf(event))
+
+        assertEquals(1, gateway.commands.size)
+        assertEquals("profile_change", gateway.commands[0].messageType)
+        val eventPayload = assertNotNull(gateway.commands[0].eventPayload)
+        assertEquals("Dana", eventPayload.jsonObject["nickname"]?.jsonPrimitive?.content)
+        assertEquals("https://example.com/new.png", eventPayload.jsonObject["newProfileImageUrl"]?.jsonPrimitive?.content)
     }
 
     @Test
@@ -212,6 +266,44 @@ class SnapshotEventEmitterTest {
 
         helper.close()
     }
+
+    @Test
+    fun `retry later routing prevents room event persistence`() {
+        val bus = SseEventBus(bufferSize = 10)
+        val helper = JdbcSqliteHelper.inMemory()
+        IrisDatabaseSchema.createRoomEventsTable(helper)
+        val store = SqliteRoomEventStore(helper)
+        val emitter = SnapshotEventEmitter(bus, RetryLaterGateway(), eventStore = store)
+
+        val event = NicknameChangeEvent(chatId = 100L, linkId = 1100L, userId = 2L, oldNickname = "Bob", newNickname = "Bobby", timestamp = 2000L)
+
+        assertFailsWith<IllegalStateException> {
+            emitter.emit(listOf(event))
+        }
+        assertEquals(emptyList(), store.listByChatId(100L, limit = 100))
+        assertEquals(emptyList(), bus.replayFrom(0))
+
+        helper.close()
+    }
+
+    @Test
+    fun `skipped routable nickname event prevents room event persistence`() {
+        val bus = SseEventBus(bufferSize = 10)
+        val helper = JdbcSqliteHelper.inMemory()
+        IrisDatabaseSchema.createRoomEventsTable(helper)
+        val store = SqliteRoomEventStore(helper)
+        val emitter = SnapshotEventEmitter(bus, SkippedGateway(), eventStore = store)
+
+        val event = NicknameChangeEvent(chatId = 100L, linkId = 1100L, userId = 2L, oldNickname = "Bob", newNickname = "Bobby", timestamp = 2000L)
+
+        assertFailsWith<IllegalStateException> {
+            emitter.emit(listOf(event))
+        }
+        assertEquals(emptyList(), store.listByChatId(100L, limit = 100))
+        assertEquals(emptyList(), bus.replayFrom(0))
+
+        helper.close()
+    }
 }
 
 private class RecordingGateway : RoutingGateway {
@@ -221,6 +313,18 @@ private class RecordingGateway : RoutingGateway {
         commands += command
         return RoutingResult.ACCEPTED
     }
+
+    override fun close() {}
+}
+
+private class RetryLaterGateway : RoutingGateway {
+    override fun route(command: RoutingCommand): RoutingResult = RoutingResult.RETRY_LATER
+
+    override fun close() {}
+}
+
+private class SkippedGateway : RoutingGateway {
+    override fun route(command: RoutingCommand): RoutingResult = RoutingResult.SKIPPED
 
     override fun close() {}
 }

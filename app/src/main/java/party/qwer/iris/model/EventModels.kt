@@ -48,4 +48,7 @@ data class ProfileChangeEvent(
     val linkId: Long?,
     val userId: Long,
     val timestamp: Long,
+    val nickname: String? = null,
+    val oldProfileImageUrl: String? = null,
+    val newProfileImageUrl: String? = null,
 ) : RoomEvent
