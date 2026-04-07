@@ -13,7 +13,11 @@ internal class IngressNicknameTracker(
     private val stateStore: MemberIdentityStateStore,
     private val roomEventStore: RoomEventStore?,
     private val emitter: SnapshotEventEmitter,
-    private val serverJson: Json = Json { ignoreUnknownKeys = true; explicitNulls = false },
+    private val serverJson: Json =
+        Json {
+            ignoreUnknownKeys = true
+            explicitNulls = false
+        },
 ) {
     private val knownNicknames = linkedMapOf<ChatId, MutableMap<UserId, String>>()
     private val lastAlertedNicknames = linkedMapOf<ChatId, MutableMap<UserId, String>>()
@@ -87,7 +91,8 @@ internal class IngressNicknameTracker(
         userId: UserId,
     ): String? {
         refreshAlertHistory(chatId)
-        return lastAlertedNicknames.getOrPut(chatId) { linkedMapOf() }[userId]
+        return lastAlertedNicknames
+            .getOrPut(chatId) { linkedMapOf() }[userId]
             ?.trim()
             ?.takeIf { it.isNotBlank() }
     }

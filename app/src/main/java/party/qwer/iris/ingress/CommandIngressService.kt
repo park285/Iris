@@ -24,11 +24,11 @@ import party.qwer.iris.delivery.webhook.RoutingGateway
 import party.qwer.iris.delivery.webhook.RoutingResult
 import party.qwer.iris.isOwnBotMessage
 import party.qwer.iris.persistence.CheckpointJournal
+import party.qwer.iris.persistence.MemberIdentityStateStore
 import party.qwer.iris.resolveObservedThreadMetadata
 import party.qwer.iris.shouldSkipOrigin
-import party.qwer.iris.stableLogHash
-import party.qwer.iris.persistence.MemberIdentityStateStore
 import party.qwer.iris.snapshot.SnapshotEventEmitter
+import party.qwer.iris.stableLogHash
 import java.io.Closeable
 import kotlin.math.absoluteValue
 
@@ -268,9 +268,7 @@ internal class CommandIngressService(
         userId: Long,
         timestamp: Long,
     ) {
-        val tracker = nicknameTracker ?: run {
-            return
-        }
+        val tracker = nicknameTracker ?: return
 
         val roomMetadata =
             runCatching {

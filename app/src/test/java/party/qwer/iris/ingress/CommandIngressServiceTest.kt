@@ -10,16 +10,16 @@ import kotlinx.coroutines.test.runTest
 import party.qwer.iris.ChatLogRepository
 import party.qwer.iris.ConfigProvider
 import party.qwer.iris.KakaoDB
+import party.qwer.iris.SseEventBus
 import party.qwer.iris.delivery.webhook.RoutingCommand
 import party.qwer.iris.delivery.webhook.RoutingGateway
 import party.qwer.iris.delivery.webhook.RoutingResult
-import party.qwer.iris.SseEventBus
+import party.qwer.iris.model.RoomEventRecord
+import party.qwer.iris.persistence.BatchedCheckpointJournal
+import party.qwer.iris.persistence.CheckpointJournal
 import party.qwer.iris.persistence.InMemoryMemberIdentityStateStore
 import party.qwer.iris.persistence.RoomEventStore
 import party.qwer.iris.snapshot.SnapshotEventEmitter
-import party.qwer.iris.persistence.BatchedCheckpointJournal
-import party.qwer.iris.persistence.CheckpointJournal
-import party.qwer.iris.model.RoomEventRecord
 import party.qwer.iris.storage.ChatId
 import party.qwer.iris.storage.UserId
 import java.util.concurrent.ConcurrentHashMap
@@ -190,9 +190,10 @@ class CommandIngressServiceTest {
     fun `non command message can emit nickname change from ingress`() =
         runTest {
             val eventStore = RecordingIngressRoomEventStore()
-            val stateStore = InMemoryMemberIdentityStateStore().apply {
-                save(ChatId(100L), mapOf(UserId(200L) to "New Name"))
-            }
+            val stateStore =
+                InMemoryMemberIdentityStateStore().apply {
+                    save(ChatId(100L), mapOf(UserId(200L) to "New Name"))
+                }
             eventStore.insert(
                 chatId = 100L,
                 eventType = "nickname_change",
@@ -233,9 +234,10 @@ class CommandIngressServiceTest {
     fun `invalid metadata still observes nickname change from ingress`() =
         runTest {
             val eventStore = RecordingIngressRoomEventStore()
-            val stateStore = InMemoryMemberIdentityStateStore().apply {
-                save(ChatId(100L), mapOf(UserId(200L) to "Old Name"))
-            }
+            val stateStore =
+                InMemoryMemberIdentityStateStore().apply {
+                    save(ChatId(100L), mapOf(UserId(200L) to "Old Name"))
+                }
             val db =
                 FakeChatLogRepository(
                     latestLogId = 10L,
@@ -319,9 +321,10 @@ class CommandIngressServiceTest {
     fun `ingress nickname tracker prefers stored baseline over stale alerted nickname`() =
         runTest {
             val eventStore = RecordingIngressRoomEventStore()
-            val stateStore = InMemoryMemberIdentityStateStore().apply {
-                save(ChatId(100L), mapOf(UserId(200L) to "Old Name"))
-            }
+            val stateStore =
+                InMemoryMemberIdentityStateStore().apply {
+                    save(ChatId(100L), mapOf(UserId(200L) to "Old Name"))
+                }
             eventStore.insert(
                 chatId = 100L,
                 eventType = "nickname_change",
@@ -363,9 +366,10 @@ class CommandIngressServiceTest {
         runTest {
             val dispatcher = StandardTestDispatcher(testScheduler)
             val eventStore = RecordingIngressRoomEventStore()
-            val stateStore = InMemoryMemberIdentityStateStore().apply {
-                save(ChatId(100L), mapOf(UserId(200L) to "Old Name"))
-            }
+            val stateStore =
+                InMemoryMemberIdentityStateStore().apply {
+                    save(ChatId(100L), mapOf(UserId(200L) to "Old Name"))
+                }
             var resolveCalls = 0
             val db =
                 FakeChatLogRepository(
@@ -806,8 +810,7 @@ private class FakeChatLogRepository(
         return polledLogs.filter { it.id > afterLogId }.take(limit)
     }
 
-    override fun resolveSenderName(userId: Long): String =
-        senderNameProvider?.invoke(userId) ?: senderNames[userId] ?: userId.toString()
+    override fun resolveSenderName(userId: Long): String = senderNameProvider?.invoke(userId) ?: senderNames[userId] ?: userId.toString()
 
     override fun resolveRoomMetadata(chatId: Long): KakaoDB.RoomMetadata = roomMetadata
 
@@ -825,12 +828,22 @@ private class RecordingIngressRoomEventStore : RoomEventStore {
 
     val insertedEvents = CopyOnWriteArrayList<InsertedEvent>()
 
-    override fun insert(chatId: Long, eventType: String, userId: Long, payload: String, createdAtMs: Long): Long {
+    override fun insert(
+        chatId: Long,
+        eventType: String,
+        userId: Long,
+        payload: String,
+        createdAtMs: Long,
+    ): Long {
         insertedEvents += InsertedEvent(chatId, eventType, userId, payload, createdAtMs)
         return insertedEvents.size.toLong()
     }
 
-    override fun listByChatId(chatId: Long, limit: Int, afterId: Long): List<RoomEventRecord> =
+    override fun listByChatId(
+        chatId: Long,
+        limit: Int,
+        afterId: Long,
+    ): List<RoomEventRecord> =
         insertedEvents
             .mapIndexed { index, event ->
                 RoomEventRecord(
