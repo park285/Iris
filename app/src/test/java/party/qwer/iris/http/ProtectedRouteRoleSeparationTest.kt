@@ -15,6 +15,7 @@ import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
 import party.qwer.iris.ConfigManager
 import party.qwer.iris.ConfigProvider
+import party.qwer.iris.MemberNicknameDiagnostics
 import party.qwer.iris.MemberRepository
 import party.qwer.iris.MessageSender
 import party.qwer.iris.ReplyAdmissionResult
@@ -163,6 +164,7 @@ class ProtectedRouteRoleSeparationTest {
                             )
                         },
                         chatRoomIntrospectProvider = { """{"chatId":$it}""" },
+                        memberNicknameDiagnosticsProvider = { chatId -> MemberNicknameDiagnostics(chatId = chatId) },
                     )
                 }
             }
@@ -191,11 +193,29 @@ class ProtectedRouteRoleSeparationTest {
                         secret = roleSeparatedConfig.inboundSigningSecret,
                     )
                 }
+            val controlMembersResponse =
+                client.get("/diagnostics/chatroom-members/123") {
+                    applySignedHeaders(
+                        path = "/diagnostics/chatroom-members/123",
+                        method = "GET",
+                        secret = roleSeparatedConfig.botControlToken,
+                    )
+                }
+            val inboundMembersResponse =
+                client.get("/diagnostics/chatroom-members/123") {
+                    applySignedHeaders(
+                        path = "/diagnostics/chatroom-members/123",
+                        method = "GET",
+                        secret = roleSeparatedConfig.inboundSigningSecret,
+                    )
+                }
 
             assertEquals(HttpStatusCode.OK, controlResponse.status)
             assertEquals(HttpStatusCode.Unauthorized, inboundResponse.status)
             assertEquals(HttpStatusCode.OK, controlChatroomResponse.status)
             assertEquals(HttpStatusCode.Unauthorized, inboundChatroomResponse.status)
+            assertEquals(HttpStatusCode.OK, controlMembersResponse.status)
+            assertEquals(HttpStatusCode.Unauthorized, inboundMembersResponse.status)
         }
 
     private fun io.ktor.client.request.HttpRequestBuilder.applySignedHeaders(
