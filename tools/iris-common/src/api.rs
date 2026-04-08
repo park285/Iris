@@ -293,6 +293,7 @@ mod tests {
     use tokio::net::TcpListener;
 
     #[tokio::test]
+    #[cfg_attr(miri, ignore)]
     async fn http_base_url_defaults_to_h2c_prior_knowledge() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -315,6 +316,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(miri, ignore)]
     async fn explicit_http1_transport_uses_http1_request_line() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();

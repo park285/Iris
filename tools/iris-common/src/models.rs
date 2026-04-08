@@ -150,6 +150,10 @@ pub struct SseEvent {
     pub old_role: Option<String>,
     #[serde(rename = "newRole", default)]
     pub new_role: Option<String>,
+    #[serde(rename = "oldProfileImageUrl", default)]
+    pub old_profile_image_url: Option<String>,
+    #[serde(rename = "newProfileImageUrl", default)]
+    pub new_profile_image_url: Option<String>,
     #[serde(default)]
     pub estimated: Option<bool>,
     #[serde(default)]
@@ -172,6 +176,26 @@ pub struct HealthResponse {
     pub status: String,
 }
 
+#[derive(Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BridgeDiagnosticsCapability {
+    #[serde(default)]
+    pub supported: bool,
+    #[serde(default)]
+    pub ready: bool,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BridgeDiagnosticsCapabilities {
+    #[serde(default)]
+    pub inspect_chat_room: BridgeDiagnosticsCapability,
+    #[serde(default)]
+    pub snapshot_chat_room_members: BridgeDiagnosticsCapability,
+}
+
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 #[allow(clippy::struct_excessive_bools)]
@@ -190,6 +214,8 @@ pub struct BridgeDiagnosticsResponse {
     pub discovery_install_attempted: bool,
     #[serde(default)]
     pub discovery_hooks: Vec<BridgeDiagnosticsHook>,
+    #[serde(default)]
+    pub capabilities: BridgeDiagnosticsCapabilities,
     #[serde(default)]
     pub error: Option<String>,
 }
@@ -329,7 +355,11 @@ mod tests {
                     "lastSeenEpochMs": 1774617677760,
                     "lastSummary": "uris=1 type=Photo"
                 }
-            ]
+            ],
+            "capabilities": {
+                "inspectChatRoom": {"supported": true, "ready": true},
+                "snapshotChatRoomMembers": {"supported": true, "ready": false, "reason": "chatroom resolver unavailable"}
+            }
         }"#;
 
         let parsed = serde_json::from_str::<BridgeDiagnosticsResponse>(payload);
@@ -337,6 +367,16 @@ mod tests {
         assert!(
             parsed.is_ok(),
             "bridge diagnostics should parse runtime payload: {parsed:?}"
+        );
+        let parsed = parsed.unwrap();
+        assert!(parsed.capabilities.inspect_chat_room.ready);
+        assert_eq!(
+            parsed
+                .capabilities
+                .snapshot_chat_room_members
+                .reason
+                .as_deref(),
+            Some("chatroom resolver unavailable")
         );
     }
 
