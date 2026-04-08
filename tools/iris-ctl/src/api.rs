@@ -14,7 +14,8 @@ impl TuiApi {
     pub fn new(config: &Config) -> Result<Self> {
         let transport = Some(config.server.transport.as_str());
         let inner = IrisApi::new_with_transport(config, transport)?;
-        let sse_client = iris_common::api::build_http_client(config.server.url.as_str(), transport, None)?;
+        let sse_client =
+            iris_common::api::build_http_client(config.server.url.as_str(), transport, None)?;
         Ok(Self { inner, sse_client })
     }
 

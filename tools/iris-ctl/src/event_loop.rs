@@ -52,7 +52,7 @@ pub(crate) fn handle_terminal_stream_event(
 
 pub(crate) fn handle_sse_event(app: &mut app::App, sse_closed: &mut bool, sse: Option<SseEvent>) {
     if let Some(event) = sse {
-        app.handle_app_event(app::AppEvent::Server(event));
+        app.handle_app_event(app::AppEvent::Server(Box::new(event)));
     } else {
         *sse_closed = true;
         app.status = "Server event stream closed".to_string();

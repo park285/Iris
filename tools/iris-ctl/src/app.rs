@@ -11,7 +11,7 @@ pub use crate::views::reply_modal::ReplyResult;
 
 pub enum AppEvent {
     Terminal(Event),
-    Server(SseEvent),
+    Server(Box<SseEvent>),
     EventHistoryLoaded(i64, Vec<RoomEventRecord>),
 }
 
@@ -88,7 +88,9 @@ impl App {
     fn maybe_queue_event_history_load(&mut self) {
         let target_chat_id = crate::refresh::event_history_target_chat_id(&self.rooms_view);
         if matches!(self.active_tab, TabId::Events)
-            && self.events_view.should_auto_load_history_for(target_chat_id)
+            && self
+                .events_view
+                .should_auto_load_history_for(target_chat_id)
             && self.has_event_history_target()
         {
             self.pending_event_history_load = true;
@@ -262,8 +264,15 @@ impl App {
                 false
             }
             AppEvent::EventHistoryLoaded(chat_id, records) => {
-                self.events_view.push_history(chat_id, &records);
-                self.status = format!("Loaded {} event history records", records.len());
+                let result = self.events_view.push_history(chat_id, &records);
+                self.status = if result.fallback == 0 {
+                    format!("Loaded {} event history records", result.loaded)
+                } else {
+                    format!(
+                        "Loaded {} event history records ({} parsed, {} fallback)",
+                        result.loaded, result.parsed, result.fallback
+                    )
+                };
                 false
             }
         }
@@ -333,7 +342,7 @@ mod tests {
         );
         assert!(matches!(app.active_tab, TabId::Members));
 
-        assert!(!app.handle_app_event(AppEvent::Server(SseEvent {
+        assert!(!app.handle_app_event(AppEvent::Server(Box::new(SseEvent {
             event_type: "member_event".to_string(),
             event: Some("join".to_string()),
             chat_id: Some(1),
@@ -343,9 +352,11 @@ mod tests {
             new_nickname: None,
             old_role: None,
             new_role: None,
+            old_profile_image_url: None,
+            new_profile_image_url: None,
             estimated: None,
             timestamp: Some(0),
-        })));
+        }))));
         assert_eq!(app.events_view.event_count(), 1);
     }
 
@@ -405,10 +416,9 @@ mod tests {
     fn event_history_loaded_updates_view_and_status() {
         let mut app = App::new();
 
-        assert!(
-            !app.handle_app_event(AppEvent::EventHistoryLoaded(
-                1,
-                vec![RoomEventRecord {
+        assert!(!app.handle_app_event(AppEvent::EventHistoryLoaded(
+            1,
+            vec![RoomEventRecord {
                 id: 1,
                 chat_id: 1,
                 event_type: "member_event".to_string(),
@@ -416,10 +426,66 @@ mod tests {
                 payload: r#"{"type":"member_event","event":"join","nickname":"alice"}"#.to_string(),
                 created_at: 1_000,
             }],
-            ))
-        );
+        )));
 
         assert_eq!(app.events_view.event_count(), 1);
         assert_eq!(app.status, "Loaded 1 event history records");
+    }
+
+    #[test]
+    fn event_history_loaded_reports_fallback_rows() {
+        let mut app = App::new();
+
+        assert!(!app.handle_app_event(AppEvent::EventHistoryLoaded(
+            1,
+            vec![RoomEventRecord {
+                id: 1,
+                chat_id: 1,
+                event_type: "member_event".to_string(),
+                user_id: 7,
+                payload: r#"{"type":"member_event""#.to_string(),
+                created_at: 1_000,
+            }],
+        )));
+
+        assert_eq!(app.events_view.event_count(), 1);
+        assert_eq!(
+            app.status,
+            "Loaded 1 event history records (0 parsed, 1 fallback)"
+        );
+    }
+
+    #[test]
+    fn event_history_loaded_reports_mixed_parse_counts() {
+        let mut app = App::new();
+
+        assert!(!app.handle_app_event(AppEvent::EventHistoryLoaded(
+            1,
+            vec![
+                RoomEventRecord {
+                    id: 1,
+                    chat_id: 1,
+                    event_type: "member_event".to_string(),
+                    user_id: 7,
+                    payload:
+                        r#"{"type":"member_event","event":"join","nickname":"alice"}"#.to_string(),
+                    created_at: 1_000,
+                },
+                RoomEventRecord {
+                    id: 2,
+                    chat_id: 1,
+                    event_type: "member_event".to_string(),
+                    user_id: 8,
+                    payload: r#"{"type":"member_event""#.to_string(),
+                    created_at: 2_000,
+                },
+            ],
+        )));
+
+        assert_eq!(app.events_view.event_count(), 2);
+        assert_eq!(
+            app.status,
+            "Loaded 2 event history records (1 parsed, 1 fallback)"
+        );
     }
 }

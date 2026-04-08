@@ -78,30 +78,29 @@ impl IrisConnection for Config {
     }
 }
 
+fn config_path() -> PathBuf {
+    if let Some(config_dir) = dirs::config_dir() {
+        config_dir.join("iris-ctl").join("config.toml")
+    } else {
+        PathBuf::from("config.toml")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn server_transport_defaults_to_h2c() {
-        let config: Config =
-            toml::from_str(
-                r#"
+        let config: Config = toml::from_str(
+            r#"
                 [server]
                 url = "http://127.0.0.1:3000"
                 token = "secret"
                 "#,
-            )
-            .expect("config should parse");
+        )
+        .expect("config should parse");
 
         assert_eq!(config.server.transport, "h2c");
-    }
-}
-
-fn config_path() -> PathBuf {
-    if let Some(config_dir) = dirs::config_dir() {
-        config_dir.join("iris-ctl").join("config.toml")
-    } else {
-        PathBuf::from("config.toml")
     }
 }
