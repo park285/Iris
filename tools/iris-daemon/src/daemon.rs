@@ -246,7 +246,7 @@ mod tests {
     }
 
     #[test]
-    fn bridge_capability_failure_is_treated_as_readiness_failure() {
+    fn bridge_failure_is_treated_as_readiness_failure() {
         let mut sm = StateMachine::new(2, 2, 3);
         let ready = HealthReport {
             liveness: ProbeResult::Ok,
@@ -258,11 +258,11 @@ mod tests {
         let degraded = HealthReport {
             liveness: ProbeResult::Ok,
             readiness: ProbeResult::Ok,
-            bridge: ProbeResult::Fail("chatroom resolver unavailable".to_string()),
+            bridge: ProbeResult::Fail("bridge not running".to_string()),
         };
         assert!(next_transition(&mut sm, &degraded).is_none());
         let t = next_transition(&mut sm, &degraded)
-            .expect("should degrade from bridge capability failure");
+            .expect("should degrade from bridge failure");
         assert_eq!(t.to, State::Degraded);
         assert!(t.reason.contains("readiness"));
     }

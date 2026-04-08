@@ -65,7 +65,7 @@ async fn probe_readiness(api: &IrisApi) -> ProbeResult {
 
 async fn probe_bridge(api: &IrisApi) -> ProbeResult {
     match api.bridge_diagnostics().await {
-        Ok(response) => match bridge_capability_failure(&response) {
+        Ok(response) => match bridge_runtime_failure(&response) {
             Some(reason) => ProbeResult::Fail(reason),
             None => ProbeResult::Ok,
         },
@@ -73,19 +73,24 @@ async fn probe_bridge(api: &IrisApi) -> ProbeResult {
     }
 }
 
-fn bridge_capability_failure(
+fn bridge_runtime_failure(
     response: &iris_common::models::BridgeDiagnosticsResponse,
 ) -> Option<String> {
-    let capability = &response.capabilities.snapshot_chat_room_members;
-    if capability.ready {
-        return None;
+    if !response.reachable {
+        return Some(
+            response
+                .error
+                .clone()
+                .unwrap_or_else(|| "bridge unreachable".to_string()),
+        );
     }
-    Some(
-        capability
-            .reason
-            .clone()
-            .unwrap_or_else(|| "snapshot chatroom members capability not ready".to_string()),
-    )
+    if !response.running {
+        return Some("bridge not running".to_string());
+    }
+    if !response.spec_ready {
+        return Some("bridge spec not ready".to_string());
+    }
+    None
 }
 
 #[cfg(test)]
@@ -135,7 +140,7 @@ mod tests {
     }
 
     #[test]
-    fn bridge_capability_failure_uses_snapshot_capability_reason() {
+    fn bridge_runtime_failure_ignores_snapshot_capability_state() {
         let response = BridgeDiagnosticsResponse {
             reachable: true,
             running: true,
@@ -161,9 +166,6 @@ mod tests {
             error: None,
         };
 
-        assert_eq!(
-            bridge_capability_failure(&response),
-            Some("chatroom resolver unavailable".to_string())
-        );
+        assert_eq!(bridge_runtime_failure(&response), None);
     }
 }
