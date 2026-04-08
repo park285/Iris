@@ -28,6 +28,8 @@ internal object ImageBridgeServer {
     private val restartCount = AtomicInteger(0)
     private val lastCrashMessage = AtomicReference<String?>(null)
     private val specStatus = AtomicReference<BridgeSpecStatus?>(null)
+    private val registryAvailable = AtomicBoolean(false)
+    private val lastRegistryError = AtomicReference<String?>(null)
     private val peerIdentityValidator = BridgePeerIdentityValidator()
 
     @Volatile
@@ -47,7 +49,11 @@ internal object ImageBridgeServer {
         }
         restartCount.set(0)
         lastCrashMessage.set(null)
+        registryAvailable.set(registry != null)
+        lastRegistryError.set(registryError)
         val imageSender = registry?.let { KakaoImageSender(it) }
+        val chatRoomResolver = registry?.let { ChatRoomResolver(it) }
+        val chatRoomMemberExtractor = ChatRoomMemberExtractor()
         val verifier =
             BridgeHookSpecVerifier(
                 registry = registry,
@@ -67,6 +73,16 @@ internal object ImageBridgeServer {
                     sender.send(request)
                 },
                 healthProvider = ::healthSnapshot,
+                chatRoomInspector = { roomId ->
+                    val resolver = chatRoomResolver ?: error("chatroom resolver unavailable: ${registryError ?: "unknown error"}")
+                    val room = resolver.resolve(roomId) ?: error("chatroom not found: $roomId")
+                    ChatRoomIntrospector.scanJson(room, maxDepth = 2)
+                },
+                chatRoomMemberSnapshotProvider = { roomId, expectedMemberHints, preferredPlan ->
+                    val resolver = chatRoomResolver ?: error("chatroom resolver unavailable: ${registryError ?: "unknown error"}")
+                    val room = resolver.resolve(roomId) ?: error("chatroom not found: $roomId")
+                    chatRoomMemberExtractor.snapshot(roomId, room, expectedMemberHints, preferredPlan)
+                },
             )
         clientExecutor = newClientExecutor()
         Thread(
@@ -193,6 +209,7 @@ internal object ImageBridgeServer {
             running = running.get(),
             specStatus = specStatus.get() ?: BridgeSpecStatus(ready = false, checkedAtEpochMs = 0L, checks = emptyList()),
             discoverySnapshot = BridgeDiscovery.snapshot(),
+            capabilities = currentBridgeCapabilities(registryAvailable.get(), lastRegistryError.get(), specStatus.get()?.ready == true),
             restartCount = restartCount.get(),
             lastCrashMessage = lastCrashMessage.get(),
         )
@@ -208,10 +225,7 @@ internal object ImageBridgeServer {
         }
     }
 
-    internal fun nextBridgeRestartDelayMs(failureCount: Int): Long {
-        val exponent = (failureCount - 1).coerceAtLeast(0).coerceAtMost(5)
-        return (INITIAL_RESTART_DELAY_MS shl exponent).coerceAtMost(MAX_RESTART_DELAY_MS)
-    }
+    internal fun nextBridgeRestartDelayMs(failureCount: Int): Long = (INITIAL_RESTART_DELAY_MS shl (failureCount - 1).coerceAtLeast(0).coerceAtMost(5)).coerceAtMost(MAX_RESTART_DELAY_MS)
 
     internal fun newClientExecutorForTest(): ThreadPoolExecutor = newClientExecutor()
 

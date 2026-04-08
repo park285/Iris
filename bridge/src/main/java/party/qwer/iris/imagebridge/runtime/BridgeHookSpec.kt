@@ -19,8 +19,20 @@ internal data class ImageBridgeHealthSnapshot(
     val running: Boolean,
     val specStatus: BridgeSpecStatus,
     val discoverySnapshot: BridgeDiscoverySnapshot,
+    val capabilities: ImageBridgeCapabilitiesSnapshot = ImageBridgeCapabilitiesSnapshot(),
     val restartCount: Int,
     val lastCrashMessage: String?,
+)
+
+internal data class ImageBridgeCapabilitySnapshot(
+    val supported: Boolean = false,
+    val ready: Boolean = false,
+    val reason: String? = null,
+)
+
+internal data class ImageBridgeCapabilitiesSnapshot(
+    val inspectChatRoom: ImageBridgeCapabilitySnapshot = ImageBridgeCapabilitySnapshot(),
+    val snapshotChatRoomMembers: ImageBridgeCapabilitySnapshot = ImageBridgeCapabilitySnapshot(),
 )
 
 internal class BridgeHookSpecVerifier(
@@ -136,6 +148,27 @@ internal fun ImageBridgeHealthSnapshot.toJson(): JSONObject =
                 )
             },
         )
+        put(
+            "capabilities",
+            JSONObject().apply {
+                put(
+                    "inspectChatRoom",
+                    JSONObject().apply {
+                        put("supported", capabilities.inspectChatRoom.supported)
+                        put("ready", capabilities.inspectChatRoom.ready)
+                        capabilities.inspectChatRoom.reason?.let { put("reason", it) }
+                    },
+                )
+                put(
+                    "snapshotChatRoomMembers",
+                    JSONObject().apply {
+                        put("supported", capabilities.snapshotChatRoomMembers.supported)
+                        put("ready", capabilities.snapshotChatRoomMembers.ready)
+                        capabilities.snapshotChatRoomMembers.reason?.let { put("reason", it) }
+                    },
+                )
+            },
+        )
     }
 
 internal fun ImageBridgeHealthSnapshot.toProtocolResponse(): party.qwer.iris.ImageBridgeProtocol.ImageBridgeResponse =
@@ -168,5 +201,20 @@ internal fun ImageBridgeHealthSnapshot.toProtocolResponse(): party.qwer.iris.Ima
                             lastSummary = hook.lastSummary,
                         )
                     },
+            ),
+        capabilities =
+            party.qwer.iris.ImageBridgeProtocol.ImageBridgeCapabilities(
+                inspectChatRoom =
+                    party.qwer.iris.ImageBridgeProtocol.ImageBridgeCapability(
+                        supported = capabilities.inspectChatRoom.supported,
+                        ready = capabilities.inspectChatRoom.ready,
+                        reason = capabilities.inspectChatRoom.reason,
+                    ),
+                snapshotChatRoomMembers =
+                    party.qwer.iris.ImageBridgeProtocol.ImageBridgeCapability(
+                        supported = capabilities.snapshotChatRoomMembers.supported,
+                        ready = capabilities.snapshotChatRoomMembers.ready,
+                        reason = capabilities.snapshotChatRoomMembers.reason,
+                    ),
             ),
     )
