@@ -1,11 +1,12 @@
 package party.qwer.iris.persistence
 
 object IrisDatabaseSchema {
-    const val CURRENT_SCHEMA_VERSION = 1
+    const val CURRENT_SCHEMA_VERSION = 2
     const val WEBHOOK_OUTBOX_TABLE = "webhook_outbox"
     const val CHECKPOINT_TABLE = "checkpoints"
     const val SNAPSHOT_STATE_TABLE = "snapshot_states"
     const val MEMBER_IDENTITY_STATE_TABLE = "member_identity_states"
+    const val LIVE_ROOM_MEMBER_PLAN_TABLE = "live_room_member_plans"
     const val SSE_EVENTS_TABLE = "sse_events"
     const val ROOM_EVENTS_TABLE = "room_events"
     private const val SQLITE_JOURNAL_MODE_WAL = "PRAGMA journal_mode=WAL"
@@ -64,6 +65,16 @@ object IrisDatabaseSchema {
         )
         """.trimIndent()
 
+    private val CREATE_LIVE_ROOM_MEMBER_PLAN =
+        """
+        CREATE TABLE IF NOT EXISTS $LIVE_ROOM_MEMBER_PLAN_TABLE (
+            chat_id INTEGER PRIMARY KEY,
+            plan_json TEXT NOT NULL,
+            members_json TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
+        )
+        """.trimIndent()
+
     private val CREATE_SSE_EVENTS =
         """
         CREATE TABLE IF NOT EXISTS $SSE_EVENTS_TABLE (
@@ -101,8 +112,12 @@ object IrisDatabaseSchema {
     private val MIGRATIONS =
         listOf(
             MigrationStep(fromVersion = 0, toVersion = 1) {
-                ensureCurrentSchema(this)
+                ensureVersion1Schema(this)
                 execute("PRAGMA user_version = 1")
+            },
+            MigrationStep(fromVersion = 1, toVersion = 2) {
+                createLiveRoomMemberPlanTable(this)
+                execute("PRAGMA user_version = 2")
             },
         )
 
@@ -126,6 +141,10 @@ object IrisDatabaseSchema {
 
     fun createMemberIdentityStateTable(driver: SqliteDriver) {
         driver.execute(CREATE_MEMBER_IDENTITY_STATE)
+    }
+
+    fun createLiveRoomMemberPlanTable(driver: SqliteDriver) {
+        driver.execute(CREATE_LIVE_ROOM_MEMBER_PLAN)
     }
 
     fun createSseEventsTable(driver: SqliteDriver) {
@@ -169,6 +188,11 @@ object IrisDatabaseSchema {
     }
 
     private fun ensureCurrentSchema(driver: SqliteDriver) {
+        ensureVersion1Schema(driver)
+        createLiveRoomMemberPlanTable(driver)
+    }
+
+    private fun ensureVersion1Schema(driver: SqliteDriver) {
         createWebhookOutboxTable(driver)
         createCheckpointTable(driver)
         createSnapshotStateTable(driver)

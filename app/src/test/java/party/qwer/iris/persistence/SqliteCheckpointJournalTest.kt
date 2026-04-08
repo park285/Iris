@@ -28,6 +28,8 @@ class SqliteCheckpointJournalTest {
                 "CREATE TABLE IF NOT EXISTS ${IrisDatabaseSchema.SSE_EVENTS_TABLE} (\n    id INTEGER PRIMARY KEY AUTOINCREMENT,\n    event_type TEXT NOT NULL,\n    payload TEXT NOT NULL,\n    created_at INTEGER NOT NULL\n)",
                 "CREATE TABLE IF NOT EXISTS ${IrisDatabaseSchema.ROOM_EVENTS_TABLE} (\n    id INTEGER PRIMARY KEY AUTOINCREMENT,\n    chat_id INTEGER NOT NULL,\n    event_type TEXT NOT NULL,\n    user_id INTEGER NOT NULL,\n    payload TEXT NOT NULL,\n    created_at INTEGER NOT NULL\n)",
                 "CREATE INDEX IF NOT EXISTS idx_room_events_chat_id\nON ${IrisDatabaseSchema.ROOM_EVENTS_TABLE} (chat_id, id)",
+                "PRAGMA user_version = 1",
+                "CREATE TABLE IF NOT EXISTS ${IrisDatabaseSchema.LIVE_ROOM_MEMBER_PLAN_TABLE} (\n    chat_id INTEGER PRIMARY KEY,\n    plan_json TEXT NOT NULL,\n    members_json TEXT NOT NULL,\n    updated_at INTEGER NOT NULL\n)",
                 "PRAGMA user_version = ${IrisDatabaseSchema.CURRENT_SCHEMA_VERSION}",
             ),
             helper.executedSql,
