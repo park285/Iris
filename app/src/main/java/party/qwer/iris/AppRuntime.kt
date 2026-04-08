@@ -190,7 +190,6 @@ internal class AppRuntime(
                     memberIdentityStateStore = memberIdentityStateStore,
                     liveRoomMemberPlanStore = persistenceRuntime.liveRoomMemberPlanStore,
                     roomEventStore = persistenceRuntime.roomEventStore,
-                    liveMemberSnapshotProvider = BridgeLiveRoomMemberSnapshotProvider(bridgeClient),
                     snapshotFullReconcileIntervalMs = runtimeOptions.snapshotFullReconcileIntervalMs,
                     missingTombstoneTtlMs = runtimeOptions.snapshotMissingTombstoneTtlMs,
                     roomEventRetentionMs = runtimeOptions.roomEventRetentionMs,

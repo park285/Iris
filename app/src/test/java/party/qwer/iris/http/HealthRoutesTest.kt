@@ -82,7 +82,7 @@ class HealthRoutesTest {
     }
 
     @Test
-    fun `ready fails when snapshot chatroom members capability is missing`() {
+    fun `ready ignores snapshot chatroom members capability when hooks are ready`() {
         val reason =
             readinessFailureReason(
                 bridgeHealth =
@@ -97,25 +97,6 @@ class HealthRoutesTest {
                                         ready = false,
                                         reason = "chatroom resolver unavailable",
                                     ),
-                            ),
-                    ),
-                configReadiness = RuntimeConfigReadiness.allConfigured(),
-            )
-
-        assertEquals("bridge not ready: chatroom resolver unavailable", reason)
-    }
-
-    @Test
-    fun `ready succeeds when snapshot chatroom members capability is ready`() {
-        val reason =
-            readinessFailureReason(
-                bridgeHealth =
-                    healthResult(
-                        requiredHookStates = REQUIRED_HOOK_NAMES.associateWith { true },
-                        capabilities =
-                            ImageBridgeCapabilities(
-                                inspectChatRoom = ImageBridgeCapability(supported = true, ready = true),
-                                snapshotChatRoomMembers = ImageBridgeCapability(supported = true, ready = true),
                             ),
                     ),
                 configReadiness = RuntimeConfigReadiness.allConfigured(),

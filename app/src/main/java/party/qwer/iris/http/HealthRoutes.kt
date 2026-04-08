@@ -73,13 +73,11 @@ internal fun isBridgeReady(health: ImageBridgeHealthResult): Boolean {
         REQUIRED_DISCOVERY_HOOKS.all { hookName ->
             hooksByName[hookName]?.installed == true
         }
-    val snapshotCapabilityReady = health.capabilities.snapshotChatRoomMembers.ready
     return health.reachable &&
         health.running &&
         health.specReady &&
         health.discoveryInstallAttempted &&
-        requiredHooksReady &&
-        snapshotCapabilityReady
+        requiredHooksReady
 }
 
 internal fun readinessFailureReason(
@@ -96,8 +94,7 @@ internal fun readinessFailureReason(
         }
     }
     if (bridgeHealth != null && !isBridgeReady(bridgeHealth)) {
-        val capabilityReason = bridgeHealth.capabilities.snapshotChatRoomMembers.reason
-        return capabilityReason?.let { "bridge not ready: $it" } ?: "bridge not ready"
+        return "bridge not ready"
     }
     return null
 }
