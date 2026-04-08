@@ -9,8 +9,11 @@ import party.qwer.iris.delivery.webhook.RoutingCommand
 import party.qwer.iris.delivery.webhook.RoutingGateway
 import party.qwer.iris.delivery.webhook.RoutingResult
 import party.qwer.iris.model.RoomEventRecord
+import party.qwer.iris.persistence.InMemoryLiveRoomMemberPlanStore
 import party.qwer.iris.persistence.InMemoryMemberIdentityStateStore
 import party.qwer.iris.persistence.RoomEventStore
+import party.qwer.iris.persistence.StoredLiveRoomMemberIdentity
+import party.qwer.iris.persistence.StoredLiveRoomMemberPlan
 import party.qwer.iris.snapshot.RoomSnapshotReadResult
 import party.qwer.iris.snapshot.RoomSnapshotReader
 import party.qwer.iris.snapshot.SnapshotEventEmitter
@@ -47,7 +50,7 @@ class MemberIdentityObserverTest {
                     roomSnapshotReader = reader,
                     emitter = SnapshotEventEmitter(bus, TestRoutingGateway(), eventStore = eventStore),
                     stateStore = InMemoryMemberIdentityStateStore(),
-                    intervalMs = 50L,
+                    intervalMs = 100L,
                     clock = { testScheduler.currentTime },
                     dispatcher = dispatcher,
                 )
@@ -87,7 +90,7 @@ class MemberIdentityObserverTest {
                     roomSnapshotReader = reader,
                     emitter = SnapshotEventEmitter(bus, TestRoutingGateway(), eventStore = eventStore),
                     stateStore = InMemoryMemberIdentityStateStore(),
-                    intervalMs = 50L,
+                    intervalMs = 100L,
                     clock = { testScheduler.currentTime },
                     dispatcher = dispatcher,
                 )
@@ -126,7 +129,7 @@ class MemberIdentityObserverTest {
                     roomSnapshotReader = reader,
                     emitter = SnapshotEventEmitter(bus, TestRoutingGateway(), eventStore = eventStore),
                     stateStore = InMemoryMemberIdentityStateStore(),
-                    intervalMs = 50L,
+                    intervalMs = 100L,
                     clock = { testScheduler.currentTime },
                     dispatcher = dispatcher,
                 )
@@ -528,6 +531,583 @@ class MemberIdentityObserverTest {
             val event = eventStore.insertedEvents.single { it.eventType == "nickname_change" }
             assertTrue(event.payload.contains("\"oldNickname\":\"Alice\""))
             assertTrue(event.payload.contains("\"newNickname\":\"Alice Updated\""))
+        }
+
+    @Test
+    fun `observer prefers live bridge snapshot over stale db nickname state`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val reader =
+                StubMemberIdentitySnapshotReader(
+                    rooms = listOf(100L),
+                    snapshots = mapOf(100L to listOf(snapshot(chatId = 100L, nicknames = mapOf(1L to "Alice")))),
+                )
+            var liveCallCount = 0
+            val bus = SseEventBus(bufferSize = 16)
+            val eventStore = RecordingMemberIdentityRoomEventStore()
+            val observer =
+                MemberIdentityObserver(
+                    roomSnapshotReader = reader,
+                    emitter = SnapshotEventEmitter(bus, TestRoutingGateway(), eventStore = eventStore),
+                    stateStore = InMemoryMemberIdentityStateStore(),
+                    roomEventStore = eventStore,
+                    liveMemberSnapshotProvider =
+                        LiveRoomMemberSnapshotProvider { chatId, _, _ ->
+                            liveCallCount += 1
+                            LiveRoomMemberSnapshot(
+                                chatId = chatId,
+                                scannedAtEpochMs = testScheduler.currentTime,
+                                members =
+                                    mapOf(
+                                        UserId(1L) to
+                                            LiveRoomMember(
+                                                userId = UserId(1L),
+                                                nickname = if (liveCallCount == 1) "Alice" else "Alice Updated",
+                                            ),
+                                    ),
+                                confidence = LiveSnapshotConfidence.HIGH,
+                            )
+                        },
+                    intervalMs = 50L,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            observer.start()
+            advanceTimeBy(60L)
+            runCurrent()
+            advanceTimeBy(60L)
+            runCurrent()
+            observer.stopSuspend()
+
+            val event = eventStore.insertedEvents.single { it.eventType == "nickname_change" }
+            assertTrue(event.payload.contains("\"oldNickname\":\"Alice\""))
+            assertTrue(event.payload.contains("\"newNickname\":\"Alice Updated\""))
+        }
+
+    @Test
+    fun `observer startup priming does not query live bridge snapshot`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val reader =
+                StubMemberIdentitySnapshotReader(
+                    rooms = listOf(100L),
+                    snapshots = mapOf(100L to listOf(snapshot(chatId = 100L, nicknames = mapOf(1L to "Alice")))),
+                )
+            var liveCallCount = 0
+            val observer =
+                MemberIdentityObserver(
+                    roomSnapshotReader = reader,
+                    emitter = SnapshotEventEmitter(SseEventBus(bufferSize = 8), TestRoutingGateway(), eventStore = null),
+                    stateStore = InMemoryMemberIdentityStateStore(),
+                    liveMemberSnapshotProvider =
+                        LiveRoomMemberSnapshotProvider { chatId, _, _ ->
+                            liveCallCount += 1
+                            LiveRoomMemberSnapshot(
+                                chatId = chatId,
+                                scannedAtEpochMs = testScheduler.currentTime,
+                                members = mapOf(UserId(1L) to LiveRoomMember(userId = UserId(1L), nickname = "Alice")),
+                                confidence = LiveSnapshotConfidence.HIGH,
+                            )
+                        },
+                    intervalMs = 50L,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            observer.start()
+
+            assertEquals(0, liveCallCount)
+
+            observer.stopSuspend()
+        }
+
+    @Test
+    fun `observer falls back to db snapshot when live bridge snapshot fails`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val reader =
+                StubMemberIdentitySnapshotReader(
+                    rooms = listOf(100L),
+                    snapshots =
+                        mapOf(
+                            100L to
+                                listOf(
+                                    snapshot(chatId = 100L, nicknames = mapOf(1L to "Alice")),
+                                    snapshot(chatId = 100L, nicknames = mapOf(1L to "Alice Updated")),
+                                ),
+                        ),
+                )
+            val bus = SseEventBus(bufferSize = 16)
+            val eventStore = RecordingMemberIdentityRoomEventStore()
+            val observer =
+                MemberIdentityObserver(
+                    roomSnapshotReader = reader,
+                    emitter = SnapshotEventEmitter(bus, TestRoutingGateway(), eventStore = eventStore),
+                    stateStore = InMemoryMemberIdentityStateStore(),
+                    roomEventStore = eventStore,
+                    liveMemberSnapshotProvider = LiveRoomMemberSnapshotProvider { _, _, _ -> error("bridge down") },
+                    intervalMs = 50L,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            observer.start()
+            advanceTimeBy(60L)
+            runCurrent()
+            advanceTimeBy(60L)
+            runCurrent()
+            observer.stopSuspend()
+
+            val event = eventStore.insertedEvents.single { it.eventType == "nickname_change" }
+            assertTrue(event.payload.contains("\"oldNickname\":\"Alice\""))
+            assertTrue(event.payload.contains("\"newNickname\":\"Alice Updated\""))
+        }
+
+    @Test
+    fun `observer uses stored member baseline when db snapshot is empty but live bridge has nickname`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val reader =
+                StubMemberIdentitySnapshotReader(
+                    rooms = listOf(100L),
+                    snapshots = mapOf(100L to listOf(snapshot(chatId = 100L, nicknames = emptyMap(), memberIds = emptySet()))),
+                )
+            val bus = SseEventBus(bufferSize = 16)
+            val eventStore = RecordingMemberIdentityRoomEventStore()
+            val stateStore =
+                InMemoryMemberIdentityStateStore().apply {
+                    save(ChatId(100L), mapOf(UserId(1L) to "Alice"))
+                }
+            val observer =
+                MemberIdentityObserver(
+                    roomSnapshotReader = reader,
+                    emitter = SnapshotEventEmitter(bus, TestRoutingGateway(), eventStore = eventStore),
+                    stateStore = stateStore,
+                    roomEventStore = eventStore,
+                    liveMemberSnapshotProvider =
+                        LiveRoomMemberSnapshotProvider { chatId, expectedMembers, _ ->
+                            assertEquals(setOf(UserId(1L)), expectedMembers.map { it.userId }.toSet())
+                            assertEquals("Alice", expectedMembers.single().nickname)
+                            LiveRoomMemberSnapshot(
+                                chatId = chatId,
+                                scannedAtEpochMs = testScheduler.currentTime,
+                                members =
+                                    mapOf(
+                                        UserId(1L) to LiveRoomMember(userId = UserId(1L), nickname = "Alice Updated"),
+                                    ),
+                                confidence = LiveSnapshotConfidence.HIGH,
+                            )
+                        },
+                    intervalMs = 50L,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            observer.start()
+            advanceTimeBy(60L)
+            runCurrent()
+            observer.stopSuspend()
+
+            val event = eventStore.insertedEvents.single { it.eventType == "nickname_change" }
+            assertTrue(event.payload.contains("\"oldNickname\":\"Alice\""))
+            assertTrue(event.payload.contains("\"newNickname\":\"Alice Updated\""))
+        }
+
+    @Test
+    fun `observer suppresses reverse rename when live snapshot temporarily disappears`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val reader =
+                StubMemberIdentitySnapshotReader(
+                    rooms = listOf(100L),
+                    snapshots =
+                        mapOf(
+                            100L to
+                                listOf(
+                                    snapshot(chatId = 100L, nicknames = mapOf(1L to "Alice")),
+                                    snapshot(chatId = 100L, nicknames = mapOf(1L to "Alice")),
+                                ),
+                        ),
+                )
+            var liveCallCount = 0
+            val bus = SseEventBus(bufferSize = 16)
+            val eventStore = RecordingMemberIdentityRoomEventStore()
+            val observer =
+                MemberIdentityObserver(
+                    roomSnapshotReader = reader,
+                    emitter = SnapshotEventEmitter(bus, TestRoutingGateway(), eventStore = eventStore),
+                    stateStore =
+                        InMemoryMemberIdentityStateStore().apply {
+                            save(ChatId(100L), mapOf(UserId(1L) to "Alice"))
+                        },
+                    roomEventStore = eventStore,
+                    liveMemberSnapshotProvider =
+                        LiveRoomMemberSnapshotProvider { chatId, _, _ ->
+                            liveCallCount += 1
+                            when (liveCallCount) {
+                                1 ->
+                                    LiveRoomMemberSnapshot(
+                                        chatId = chatId,
+                                        scannedAtEpochMs = testScheduler.currentTime,
+                                        members =
+                                            mapOf(
+                                                UserId(1L) to LiveRoomMember(userId = UserId(1L), nickname = "Alice Updated"),
+                                            ),
+                                        confidence = LiveSnapshotConfidence.HIGH,
+                                    )
+
+                                else -> null
+                            }
+                        },
+                    intervalMs = 100L,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            observer.start()
+            advanceTimeBy(60L)
+            runCurrent()
+            advanceTimeBy(60L)
+            runCurrent()
+            observer.stopSuspend()
+
+            val nicknameEvents = eventStore.insertedEvents.filter { it.eventType == "nickname_change" }
+            assertEquals(1, nicknameEvents.size, nicknameEvents.joinToString(separator = " | ") { it.payload })
+            assertTrue(nicknameEvents.single().payload.contains("\"newNickname\":\"Alice Updated\""))
+        }
+
+    @Test
+    fun `observer ignores persisted internal artifact nicknames on startup`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val reader =
+                StubMemberIdentitySnapshotReader(
+                    rooms = listOf(100L),
+                    snapshots = mapOf(100L to listOf(snapshot(chatId = 100L, nicknames = mapOf(1L to "박준우")))),
+                )
+            val bus = SseEventBus(bufferSize = 16)
+            val eventStore = RecordingMemberIdentityRoomEventStore()
+            val observer =
+                MemberIdentityObserver(
+                    roomSnapshotReader = reader,
+                    emitter = SnapshotEventEmitter(bus, TestRoutingGateway(), eventStore = eventStore),
+                    stateStore =
+                        InMemoryMemberIdentityStateStore().apply {
+                            save(ChatId(100L), mapOf(UserId(1L) to "openLinkChatMemberIdBackup"))
+                        },
+                    roomEventStore = eventStore,
+                    intervalMs = 50L,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            observer.start()
+            advanceTimeBy(60L)
+            runCurrent()
+            observer.stopSuspend()
+
+            assertEquals(0, eventStore.insertedEvents.count { it.eventType == "nickname_change" })
+        }
+
+    @Test
+    fun `observer does not emit low confidence live notice candidate without corroboration`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val reader =
+                StubMemberIdentitySnapshotReader(
+                    rooms = listOf(100L),
+                    snapshots = mapOf(100L to listOf(snapshot(chatId = 100L, nicknames = mapOf(1L to "Alice")))),
+                )
+            val eventStore = RecordingMemberIdentityRoomEventStore()
+            val observer =
+                MemberIdentityObserver(
+                    roomSnapshotReader = reader,
+                    emitter = SnapshotEventEmitter(SseEventBus(bufferSize = 16), TestRoutingGateway(), eventStore = eventStore),
+                    stateStore =
+                        InMemoryMemberIdentityStateStore().apply {
+                            save(ChatId(100L), mapOf(UserId(1L) to "Alice"))
+                        },
+                    roomEventStore = eventStore,
+                    liveMemberSnapshotProvider =
+                        LiveRoomMemberSnapshotProvider { chatId, _, _ ->
+                            LiveRoomMemberSnapshot(
+                                chatId = chatId,
+                                scannedAtEpochMs = testScheduler.currentTime,
+                                members = mapOf(UserId(1L) to LiveRoomMember(userId = UserId(1L), nickname = "Notice")),
+                                confidence = LiveSnapshotConfidence.LOW,
+                            )
+                        },
+                    intervalMs = 50L,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            observer.start()
+            advanceTimeBy(60L)
+            runCurrent()
+            observer.stopSuspend()
+
+            assertEquals(0, eventStore.insertedEvents.count { it.eventType == "nickname_change" })
+        }
+
+    @Test
+    fun `observer confirms low confidence live candidate when db later matches`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val reader =
+                StubMemberIdentitySnapshotReader(
+                    rooms = listOf(100L),
+                    snapshots =
+                        mapOf(
+                            100L to
+                                listOf(
+                                    snapshot(chatId = 100L, nicknames = mapOf(1L to "Alice")),
+                                    snapshot(chatId = 100L, nicknames = mapOf(1L to "Alice Updated")),
+                                ),
+                        ),
+                )
+            var liveCallCount = 0
+            val eventStore = RecordingMemberIdentityRoomEventStore()
+            val observer =
+                MemberIdentityObserver(
+                    roomSnapshotReader = reader,
+                    emitter = SnapshotEventEmitter(SseEventBus(bufferSize = 16), TestRoutingGateway(), eventStore = eventStore),
+                    stateStore =
+                        InMemoryMemberIdentityStateStore().apply {
+                            save(ChatId(100L), mapOf(UserId(1L) to "Alice"))
+                        },
+                    roomEventStore = eventStore,
+                    liveMemberSnapshotProvider =
+                        LiveRoomMemberSnapshotProvider { chatId, _, _ ->
+                            liveCallCount += 1
+                            when (liveCallCount) {
+                                1 ->
+                                    LiveRoomMemberSnapshot(
+                                        chatId = chatId,
+                                        scannedAtEpochMs = testScheduler.currentTime,
+                                        members = mapOf(UserId(1L) to LiveRoomMember(userId = UserId(1L), nickname = "Alice Updated")),
+                                        confidence = LiveSnapshotConfidence.LOW,
+                                    )
+
+                                else -> null
+                            }
+                        },
+                    intervalMs = 50L,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            observer.start()
+            advanceTimeBy(60L)
+            runCurrent()
+            advanceTimeBy(60L)
+            runCurrent()
+            observer.stopSuspend()
+
+            val event = eventStore.insertedEvents.single { it.eventType == "nickname_change" }
+            assertTrue(event.payload.contains("\"oldNickname\":\"Alice\""))
+            assertTrue(event.payload.contains("\"newNickname\":\"Alice Updated\""))
+        }
+
+    @Test
+    fun `observer persists corroborated low confidence plan so next rename can confirm immediately`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val reader =
+                StubMemberIdentitySnapshotReader(
+                    rooms = listOf(100L),
+                    snapshots =
+                        mapOf(
+                            100L to
+                                listOf(
+                                    snapshot(chatId = 100L, nicknames = mapOf(1L to "Alice")),
+                                    snapshot(chatId = 100L, nicknames = mapOf(1L to "Alice")),
+                                ),
+                        ),
+                )
+            val selectedPlan =
+                LiveRoomMemberExtractionPlan(
+                    containerPath = "$.members",
+                    sourceClassName = "FakeMember",
+                    userIdPath = "id",
+                    nicknamePath = "profile.nickname",
+                    fingerprint = "$.members|FakeMember|id|profile.nickname",
+                )
+            val planStore = InMemoryLiveRoomMemberPlanStore()
+            val capturedPlans = mutableListOf<LiveRoomMemberExtractionPlan?>()
+            var liveCallCount = 0
+            val eventStore = RecordingMemberIdentityRoomEventStore()
+            val observer =
+                MemberIdentityObserver(
+                    roomSnapshotReader = reader,
+                    emitter = SnapshotEventEmitter(SseEventBus(bufferSize = 16), TestRoutingGateway(), eventStore = eventStore),
+                    stateStore =
+                        InMemoryMemberIdentityStateStore().apply {
+                            save(ChatId(100L), mapOf(UserId(1L) to "Alice"))
+                        },
+                    liveRoomMemberPlanStore = planStore,
+                    roomEventStore = eventStore,
+                    liveMemberSnapshotProvider =
+                        LiveRoomMemberSnapshotProvider { chatId, _, preferredPlan ->
+                            capturedPlans += preferredPlan
+                            liveCallCount += 1
+                            when (liveCallCount) {
+                                1 ->
+                                    LiveRoomMemberSnapshot(
+                                        chatId = chatId,
+                                        scannedAtEpochMs = testScheduler.currentTime,
+                                        members =
+                                            mapOf(
+                                                UserId(1L) to LiveRoomMember(userId = UserId(1L), nickname = "Alice"),
+                                            ),
+                                        selectedPlan = selectedPlan,
+                                        confidence = LiveSnapshotConfidence.LOW,
+                                    )
+
+                                2 ->
+                                    LiveRoomMemberSnapshot(
+                                        chatId = chatId,
+                                        scannedAtEpochMs = testScheduler.currentTime,
+                                        members =
+                                            mapOf(
+                                                UserId(1L) to LiveRoomMember(userId = UserId(1L), nickname = "Alice Updated"),
+                                            ),
+                                        selectedPlan = selectedPlan,
+                                        confidence =
+                                            if (preferredPlan == selectedPlan) {
+                                                LiveSnapshotConfidence.HIGH
+                                            } else {
+                                                LiveSnapshotConfidence.LOW
+                                            },
+                                        usedPreferredPlan = preferredPlan == selectedPlan,
+                                    )
+
+                                else -> null
+                            }
+                        },
+                    intervalMs = 100L,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            observer.start()
+            advanceTimeBy(60L)
+            runCurrent()
+            advanceTimeBy(60L)
+            runCurrent()
+            observer.stopSuspend()
+
+            assertEquals(listOf(null, selectedPlan), capturedPlans)
+            assertEquals(selectedPlan, planStore.loadAll().getValue(ChatId(100L)).plan)
+
+            val event = eventStore.insertedEvents.single { it.eventType == "nickname_change" }
+            assertTrue(event.payload.contains("\"oldNickname\":\"Alice\""))
+            assertTrue(event.payload.contains("\"newNickname\":\"Alice Updated\""))
+        }
+
+    @Test
+    fun `observer persists preferred plan after medium confidence live snapshot`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val reader =
+                StubMemberIdentitySnapshotReader(
+                    rooms = listOf(100L),
+                    snapshots = mapOf(100L to listOf(snapshot(chatId = 100L, nicknames = mapOf(1L to "Alice")))),
+                )
+            val planStore = InMemoryLiveRoomMemberPlanStore()
+            val selectedPlan =
+                LiveRoomMemberExtractionPlan(
+                    containerPath = "$.members",
+                    sourceClassName = "FakeMember",
+                    userIdPath = "id",
+                    nicknamePath = "profile.nickname",
+                    fingerprint = "$.members|FakeMember|id|profile.nickname",
+                )
+            val observer =
+                MemberIdentityObserver(
+                    roomSnapshotReader = reader,
+                    emitter = SnapshotEventEmitter(SseEventBus(bufferSize = 16), TestRoutingGateway(), eventStore = null),
+                    stateStore =
+                        InMemoryMemberIdentityStateStore().apply {
+                            save(ChatId(100L), mapOf(UserId(1L) to "Alice"))
+                        },
+                    liveRoomMemberPlanStore = planStore,
+                    liveMemberSnapshotProvider =
+                        LiveRoomMemberSnapshotProvider { chatId, _, _ ->
+                            LiveRoomMemberSnapshot(
+                                chatId = chatId,
+                                scannedAtEpochMs = testScheduler.currentTime,
+                                members = mapOf(UserId(1L) to LiveRoomMember(userId = UserId(1L), nickname = "Alice")),
+                                selectedPlan = selectedPlan,
+                                confidence = LiveSnapshotConfidence.MEDIUM,
+                                usedPreferredPlan = false,
+                            )
+                        },
+                    intervalMs = 50L,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            observer.start()
+            advanceTimeBy(60L)
+            runCurrent()
+            observer.stopSuspend()
+
+            assertEquals(selectedPlan, planStore.loadAll().getValue(ChatId(100L)).plan)
+        }
+
+    @Test
+    fun `observer loads preferred plan on startup and passes it to live bridge provider`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val reader =
+                StubMemberIdentitySnapshotReader(
+                    rooms = listOf(100L),
+                    snapshots = mapOf(100L to listOf(snapshot(chatId = 100L, nicknames = mapOf(1L to "Alice")))),
+                )
+            val storedPlan =
+                StoredLiveRoomMemberPlan(
+                    plan =
+                        LiveRoomMemberExtractionPlan(
+                            containerPath = "$.members",
+                            sourceClassName = "FakeMember",
+                            userIdPath = "id",
+                            nicknamePath = "profile.nickname",
+                            fingerprint = "$.members|FakeMember|id|profile.nickname",
+                        ),
+                    lastKnownMembers = listOf(StoredLiveRoomMemberIdentity(userId = 1L, nickname = "Alice")),
+                )
+            val planStore =
+                InMemoryLiveRoomMemberPlanStore().apply {
+                    save(ChatId(100L), storedPlan)
+                }
+            var capturedPlan: LiveRoomMemberExtractionPlan? = null
+            val observer =
+                MemberIdentityObserver(
+                    roomSnapshotReader = reader,
+                    emitter = SnapshotEventEmitter(SseEventBus(bufferSize = 16), TestRoutingGateway(), eventStore = null),
+                    stateStore =
+                        InMemoryMemberIdentityStateStore().apply {
+                            save(ChatId(100L), mapOf(UserId(1L) to "Alice"))
+                        },
+                    liveRoomMemberPlanStore = planStore,
+                    liveMemberSnapshotProvider =
+                        LiveRoomMemberSnapshotProvider { _, _, preferredPlan ->
+                            capturedPlan = preferredPlan
+                            null
+                        },
+                    intervalMs = 50L,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            observer.start()
+            advanceTimeBy(60L)
+            runCurrent()
+            observer.stopSuspend()
+
+            assertEquals(storedPlan.plan, capturedPlan)
         }
 
     private fun snapshot(
