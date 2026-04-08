@@ -911,6 +911,218 @@ class MemberIdentityObserverTest {
         }
 
     @Test
+    fun `observer does not persist low confidence plan from partial member coverage`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val reader =
+                StubMemberIdentitySnapshotReader(
+                    rooms = listOf(100L),
+                    snapshots =
+                        mapOf(
+                            100L to
+                                listOf(
+                                    snapshot(chatId = 100L, nicknames = mapOf(1L to "Alice", 2L to "Bob")),
+                                    snapshot(chatId = 100L, nicknames = mapOf(1L to "Alice", 2L to "Bob")),
+                                ),
+                        ),
+                )
+            val selectedPlan =
+                LiveRoomMemberExtractionPlan(
+                    containerPath = "$.members",
+                    sourceClassName = "FakeMember",
+                    userIdPath = "id",
+                    nicknamePath = "profile.nickname",
+                    fingerprint = "$.members|FakeMember|id|profile.nickname",
+                )
+            val planStore = InMemoryLiveRoomMemberPlanStore()
+            val capturedPlans = mutableListOf<LiveRoomMemberExtractionPlan?>()
+            val observer =
+                MemberIdentityObserver(
+                    roomSnapshotReader = reader,
+                    emitter = SnapshotEventEmitter(SseEventBus(bufferSize = 16), TestRoutingGateway(), eventStore = null),
+                    stateStore =
+                        InMemoryMemberIdentityStateStore().apply {
+                            save(ChatId(100L), mapOf(UserId(1L) to "Alice", UserId(2L) to "Bob"))
+                        },
+                    liveRoomMemberPlanStore = planStore,
+                    liveMemberSnapshotProvider =
+                        LiveRoomMemberSnapshotProvider { chatId, _, preferredPlan ->
+                            capturedPlans += preferredPlan
+                            LiveRoomMemberSnapshot(
+                                chatId = chatId,
+                                scannedAtEpochMs = testScheduler.currentTime,
+                                members =
+                                    mapOf(
+                                        UserId(1L) to LiveRoomMember(userId = UserId(1L), nickname = "Alice"),
+                                    ),
+                                selectedPlan = selectedPlan,
+                                confidence = LiveSnapshotConfidence.LOW,
+                            )
+                        },
+                    intervalMs = 100L,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            observer.start()
+            advanceTimeBy(60L)
+            runCurrent()
+            advanceTimeBy(60L)
+            runCurrent()
+            observer.stopSuspend()
+
+            assertEquals(listOf<LiveRoomMemberExtractionPlan?>(null, null), capturedPlans)
+            assertTrue(planStore.loadAll().isEmpty())
+        }
+
+    @Test
+    fun `observer does not persist low confidence plan when db snapshot omits confirmed members`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val reader =
+                StubMemberIdentitySnapshotReader(
+                    rooms = listOf(100L),
+                    snapshots =
+                        mapOf(
+                            100L to
+                                listOf(
+                                    snapshot(chatId = 100L, nicknames = mapOf(1L to "Alice"), memberIds = setOf(1L)),
+                                    snapshot(chatId = 100L, nicknames = mapOf(1L to "Alice"), memberIds = setOf(1L)),
+                                ),
+                        ),
+                )
+            val selectedPlan =
+                LiveRoomMemberExtractionPlan(
+                    containerPath = "$.members",
+                    sourceClassName = "FakeMember",
+                    userIdPath = "id",
+                    nicknamePath = "profile.nickname",
+                    fingerprint = "$.members|FakeMember|id|profile.nickname",
+                )
+            val planStore = InMemoryLiveRoomMemberPlanStore()
+            val capturedPlans = mutableListOf<LiveRoomMemberExtractionPlan?>()
+            val observer =
+                MemberIdentityObserver(
+                    roomSnapshotReader = reader,
+                    emitter = SnapshotEventEmitter(SseEventBus(bufferSize = 16), TestRoutingGateway(), eventStore = null),
+                    stateStore =
+                        InMemoryMemberIdentityStateStore().apply {
+                            save(ChatId(100L), mapOf(UserId(1L) to "Alice", UserId(2L) to "Bob"))
+                        },
+                    liveRoomMemberPlanStore = planStore,
+                    liveMemberSnapshotProvider =
+                        LiveRoomMemberSnapshotProvider { chatId, _, preferredPlan ->
+                            capturedPlans += preferredPlan
+                            LiveRoomMemberSnapshot(
+                                chatId = chatId,
+                                scannedAtEpochMs = testScheduler.currentTime,
+                                members =
+                                    mapOf(
+                                        UserId(1L) to LiveRoomMember(userId = UserId(1L), nickname = "Alice"),
+                                    ),
+                                selectedPlan = selectedPlan,
+                                confidence = LiveSnapshotConfidence.LOW,
+                            )
+                        },
+                    intervalMs = 100L,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            observer.start()
+            advanceTimeBy(60L)
+            runCurrent()
+            advanceTimeBy(60L)
+            runCurrent()
+            observer.stopSuspend()
+
+            assertEquals(listOf<LiveRoomMemberExtractionPlan?>(null, null), capturedPlans)
+            assertTrue(planStore.loadAll().isEmpty())
+        }
+
+    @Test
+    fun `observer persists low confidence plan when omitted confirmed member already left`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val reader =
+                StubMemberIdentitySnapshotReader(
+                    rooms = listOf(100L),
+                    snapshots =
+                        mapOf(
+                            100L to
+                                listOf(
+                                    snapshot(chatId = 100L, nicknames = mapOf(1L to "Alice"), memberIds = setOf(1L)),
+                                    snapshot(chatId = 100L, nicknames = mapOf(1L to "Alice"), memberIds = setOf(1L)),
+                                ),
+                        ),
+                )
+            val selectedPlan =
+                LiveRoomMemberExtractionPlan(
+                    containerPath = "$.members",
+                    sourceClassName = "FakeMember",
+                    userIdPath = "id",
+                    nicknamePath = "profile.nickname",
+                    fingerprint = "$.members|FakeMember|id|profile.nickname",
+                )
+            val planStore = InMemoryLiveRoomMemberPlanStore()
+            val eventStore =
+                RecordingMemberIdentityRoomEventStore().apply {
+                    insert(
+                        chatId = 100L,
+                        eventType = "member_event",
+                        userId = 2L,
+                        payload = """{"type":"member_event","event":"leave","chatId":100,"userId":2,"nickname":"Bob","estimated":true,"timestamp":1}""",
+                        createdAtMs = 1L,
+                    )
+                }
+            val capturedPlans = mutableListOf<LiveRoomMemberExtractionPlan?>()
+            val observer =
+                MemberIdentityObserver(
+                    roomSnapshotReader = reader,
+                    emitter = SnapshotEventEmitter(SseEventBus(bufferSize = 16), TestRoutingGateway(), eventStore = eventStore),
+                    stateStore =
+                        InMemoryMemberIdentityStateStore().apply {
+                            save(ChatId(100L), mapOf(UserId(1L) to "Alice", UserId(2L) to "Bob"))
+                        },
+                    liveRoomMemberPlanStore = planStore,
+                    roomEventStore = eventStore,
+                    liveMemberSnapshotProvider =
+                        LiveRoomMemberSnapshotProvider { chatId, _, preferredPlan ->
+                            capturedPlans += preferredPlan
+                            LiveRoomMemberSnapshot(
+                                chatId = chatId,
+                                scannedAtEpochMs = testScheduler.currentTime,
+                                members =
+                                    mapOf(
+                                        UserId(1L) to LiveRoomMember(userId = UserId(1L), nickname = "Alice"),
+                                    ),
+                                selectedPlan = selectedPlan,
+                                confidence =
+                                    if (preferredPlan == selectedPlan) {
+                                        LiveSnapshotConfidence.HIGH
+                                    } else {
+                                        LiveSnapshotConfidence.LOW
+                                    },
+                                usedPreferredPlan = preferredPlan == selectedPlan,
+                            )
+                        },
+                    intervalMs = 100L,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            observer.start()
+            advanceTimeBy(60L)
+            runCurrent()
+            advanceTimeBy(60L)
+            runCurrent()
+            observer.stopSuspend()
+
+            assertEquals(listOf(null, selectedPlan), capturedPlans)
+            assertEquals(selectedPlan, planStore.loadAll().getValue(ChatId(100L)).plan)
+        }
+
+    @Test
     fun `observer persists corroborated low confidence plan so next rename can confirm immediately`() =
         runTest {
             val dispatcher = StandardTestDispatcher(testScheduler)

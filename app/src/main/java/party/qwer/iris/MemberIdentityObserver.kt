@@ -15,6 +15,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
+import party.qwer.iris.model.MemberEvent
 import party.qwer.iris.model.NicknameChangeEvent
 import party.qwer.iris.persistence.InMemoryLiveRoomMemberPlanStore
 import party.qwer.iris.persistence.LiveRoomMemberPlanStore
@@ -76,6 +77,8 @@ internal class MemberIdentityObserver(
     private val lastLiveSnapshots = linkedMapOf<ChatId, LiveRoomMemberSnapshot>()
     private val lastAlertedNicknames = linkedMapOf<ChatId, MutableMap<UserId, String>>()
     private val lastLoadedEventIdByChat = linkedMapOf<ChatId, Long>()
+    private val departedUsers = linkedMapOf<ChatId, MutableSet<UserId>>()
+    private val lastLoadedMemberEventIdByChat = linkedMapOf<ChatId, Long>()
     private val lowConfidencePlanStreak = linkedMapOf<ChatId, LowConfidencePlanTracker>()
     private val decisionEngine = MemberNicknameDecisionEngine()
     private val serverJson =
@@ -99,6 +102,8 @@ internal class MemberIdentityObserver(
         lastLiveSnapshots.clear()
         lastAlertedNicknames.clear()
         lastLoadedEventIdByChat.clear()
+        departedUsers.clear()
+        lastLoadedMemberEventIdByChat.clear()
         lowConfidencePlanStreak.clear()
 
         confirmedNicknames.putAll(
@@ -390,7 +395,7 @@ internal class MemberIdentityObserver(
             }
         }
 
-        rememberPreferredPlan(snapshot.chatId, resolvedSnapshot.liveSnapshot)
+        rememberPreferredPlan(snapshot, resolvedSnapshot.liveSnapshot)
         stateStore.save(snapshot.chatId, chatConfirmed)
     }
 
@@ -445,46 +450,63 @@ internal class MemberIdentityObserver(
     }
 
     private fun rememberPreferredPlan(
-        chatId: ChatId,
+        snapshot: RoomSnapshotData,
         liveSnapshot: LiveRoomMemberSnapshot?,
     ) {
-        val snapshot = liveSnapshot ?: return
-        val plan = snapshot.selectedPlan ?: return
-        if (snapshot.members.isEmpty()) {
+        val liveSnapshot = liveSnapshot ?: return
+        liveSnapshot.selectedPlan ?: return
+        if (liveSnapshot.members.isEmpty()) {
             return
         }
 
-        if (snapshot.confidence == LiveSnapshotConfidence.LOW) {
-            if (shouldPersistCorroboratedLowConfidencePlan(chatId, snapshot)) {
-                savePlan(chatId, snapshot)
-                lowConfidencePlanStreak.remove(chatId)
+        if (liveSnapshot.confidence == LiveSnapshotConfidence.LOW) {
+            if (shouldPersistCorroboratedLowConfidencePlan(snapshot, liveSnapshot)) {
+                savePlan(snapshot.chatId, liveSnapshot)
+                lowConfidencePlanStreak.remove(snapshot.chatId)
                 return
             }
 
             // LOW confidence 플랜이 동일 fingerprint로 반복 선택되면 preferred로 승격
-            promoteIfConsistentLowConfidence(chatId, snapshot)
+            promoteIfConsistentLowConfidence(snapshot.chatId, liveSnapshot)
             return
         }
 
-        savePlan(chatId, snapshot)
+        savePlan(snapshot.chatId, liveSnapshot)
     }
 
     private fun shouldPersistCorroboratedLowConfidencePlan(
-        chatId: ChatId,
-        snapshot: LiveRoomMemberSnapshot,
+        snapshot: RoomSnapshotData,
+        liveSnapshot: LiveRoomMemberSnapshot,
     ): Boolean {
-        val confirmed = confirmedNicknames[chatId].orEmpty()
+        refreshDepartureHistory(snapshot.chatId)
+        val confirmed = confirmedNicknames[snapshot.chatId].orEmpty()
         if (confirmed.isEmpty()) {
             return false
         }
 
-        val observedMembers = snapshot.members.values
+        val observedMembers = liveSnapshot.members.values
         if (observedMembers.isEmpty()) {
             return false
         }
 
-        return observedMembers.all { member ->
-            normalizeObservedNickname(confirmed[member.userId]) == normalizeObservedNickname(member.nickname)
+        val targetUserIds =
+            linkedSetOf<UserId>().apply {
+                addAll(snapshot.memberIds)
+                addAll(snapshot.nicknames.keys)
+                addAll(
+                    confirmed.keys.filter { userId ->
+                        userId !in departedUsers[snapshot.chatId].orEmpty()
+                    },
+                )
+            }
+        if (targetUserIds.isEmpty()) {
+            return false
+        }
+
+        val observedByUserId = observedMembers.associateBy { member -> member.userId }
+        return targetUserIds.all { userId ->
+            val observed = observedByUserId[userId] ?: return false
+            normalizeObservedNickname(confirmed[userId]) == normalizeObservedNickname(observed.nickname)
         }
     }
 
@@ -573,6 +595,39 @@ internal class MemberIdentityObserver(
             afterId = records.last().id
         }
         lastLoadedEventIdByChat[chatId] = afterId
+    }
+
+    private fun refreshDepartureHistory(chatId: ChatId) {
+        val store = roomEventStore ?: return
+        val departures = departedUsers.getOrPut(chatId) { linkedSetOf() }
+        var afterId = lastLoadedMemberEventIdByChat[chatId] ?: 0L
+        while (true) {
+            val records = store.listByChatId(chatId.value, limit = NICKNAME_HISTORY_SCAN_LIMIT, afterId = afterId)
+            if (records.isEmpty()) {
+                break
+            }
+
+            records.forEach { record ->
+                if (record.eventType != "member_event") {
+                    return@forEach
+                }
+
+                val event =
+                    runCatching {
+                        serverJson.decodeFromString(MemberEvent.serializer(), record.payload)
+                    }.getOrNull() ?: return@forEach
+
+                when (event.event) {
+                    "leave", "kick" -> departures += UserId(event.userId)
+                    "join" -> departures.remove(UserId(event.userId))
+                }
+            }
+            afterId = records.last().id
+        }
+        lastLoadedMemberEventIdByChat[chatId] = afterId
+        if (departures.isEmpty()) {
+            departedUsers.remove(chatId)
+        }
     }
 
     private fun sanitizeObservedNicknames(nicknames: Map<UserId, String>): Map<UserId, String> =
