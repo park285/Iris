@@ -490,7 +490,6 @@ internal class KakaoClassRegistry(
         }
 
         private fun hasSelfReturningAccessor(clazz: Class<*>): Boolean {
-            // 자기 자신을 반환하는 static 메서드 확인 (직접 싱글턴 접근자)
             val hasStaticSelfAccessor =
                 clazz.methods.any { method ->
                     Modifier.isStatic(method.modifiers) &&
@@ -498,8 +497,6 @@ internal class KakaoClassRegistry(
                         method.returnType == clazz
                 }
             if (hasStaticSelfAccessor) return true
-            // Companion 스타일 접근자 확인: 선언된 타입에
-            // 인자 없이 외부 클래스를 반환하는 메서드가 있는 static 필드
             return clazz.declaredFields.any { field ->
                 Modifier.isStatic(field.modifiers) &&
                     field.type != clazz &&
