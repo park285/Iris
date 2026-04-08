@@ -46,6 +46,37 @@ class ImageBridgeProtocolTest {
                 specReady = false,
                 checkedAtEpochMs = 1234L,
                 restartCount = 2,
+                inspectionJson = "{\"chatId\":42}",
+                memberSnapshot =
+                    ImageBridgeProtocol.ChatRoomMembersSnapshot(
+                        roomId = 42L,
+                        sourcePath = "$.members",
+                        sourceClassName = "FakeMember",
+                        scannedAtEpochMs = 999L,
+                        members = listOf(ImageBridgeProtocol.ChatRoomMemberSnapshot(userId = 7L, nickname = "alice")),
+                        selectedPlan =
+                            ImageBridgeProtocol.ChatRoomMemberExtractionPlan(
+                                containerPath = "$.members",
+                                sourceClassName = "FakeMember",
+                                userIdPath = "id",
+                                nicknamePath = "profile.nickname",
+                                fingerprint = "$.members|FakeMember|id|profile.nickname",
+                            ),
+                        confidence = ImageBridgeProtocol.ChatRoomSnapshotConfidence.MEDIUM,
+                        confidenceScore = 321,
+                        usedPreferredPlan = true,
+                        candidateGap = 111,
+                    ),
+                capabilities =
+                    ImageBridgeProtocol.ImageBridgeCapabilities(
+                        inspectChatRoom = ImageBridgeProtocol.ImageBridgeCapability(supported = true, ready = true),
+                        snapshotChatRoomMembers =
+                            ImageBridgeProtocol.ImageBridgeCapability(
+                                supported = true,
+                                ready = false,
+                                reason = "chatroom resolver unavailable",
+                            ),
+                    ),
             )
         val buffer = ByteArrayOutputStream()
 
@@ -57,6 +88,21 @@ class ImageBridgeProtocolTest {
         assertFalse(restored.specReady == true)
         assertEquals(1234L, restored.checkedAtEpochMs)
         assertEquals(2, restored.restartCount)
+        assertEquals("{\"chatId\":42}", restored.inspectionJson)
+        assertEquals(42L, restored.memberSnapshot?.roomId)
+        assertEquals(
+            "alice",
+            restored.memberSnapshot
+                ?.members
+                ?.single()
+                ?.nickname,
+        )
+        assertEquals(ImageBridgeProtocol.ChatRoomSnapshotConfidence.MEDIUM, restored.memberSnapshot?.confidence)
+        assertEquals(321, restored.memberSnapshot?.confidenceScore)
+        assertTrue(restored.memberSnapshot?.usedPreferredPlan == true)
+        assertEquals(111, restored.memberSnapshot?.candidateGap)
+        assertEquals("profile.nickname", restored.memberSnapshot?.selectedPlan?.nicknamePath)
+        assertEquals("chatroom resolver unavailable", restored.capabilities?.snapshotChatRoomMembers?.reason)
     }
 
     @Test
@@ -103,6 +149,47 @@ class ImageBridgeProtocolTest {
 
         assertEquals(ImageBridgeProtocol.ACTION_HEALTH, request.action)
         assertEquals(ImageBridgeProtocol.PROTOCOL_VERSION, request.protocolVersion)
+        assertEquals("bridge-token", request.token)
+    }
+
+    @Test
+    fun `buildInspectChatRoomRequest includes room id and token`() {
+        val request = ImageBridgeProtocol.buildInspectChatRoomRequest(roomId = 77L, token = "bridge-token")
+
+        assertEquals(ImageBridgeProtocol.ACTION_INSPECT_CHATROOM, request.action)
+        assertEquals(ImageBridgeProtocol.PROTOCOL_VERSION, request.protocolVersion)
+        assertEquals(77L, request.roomId)
+        assertEquals("bridge-token", request.token)
+    }
+
+    @Test
+    fun `buildSnapshotChatRoomMembersRequest includes expected ids`() {
+        val preferredPlan =
+            ImageBridgeProtocol.ChatRoomMemberExtractionPlan(
+                containerPath = "$.members",
+                sourceClassName = "FakeMember",
+                userIdPath = "id",
+                nicknamePath = "profile.nickname",
+                fingerprint = "$.members|FakeMember|id|profile.nickname",
+            )
+        val request =
+            ImageBridgeProtocol.buildSnapshotChatRoomMembersRequest(
+                roomId = 77L,
+                memberIds = listOf(2L, 1L),
+                memberHints =
+                    listOf(
+                        ImageBridgeProtocol.ChatRoomMemberHint(userId = 2L, nickname = "Bob"),
+                        ImageBridgeProtocol.ChatRoomMemberHint(userId = 1L, nickname = "Alice"),
+                    ),
+                preferredMemberPlan = preferredPlan,
+                token = "bridge-token",
+            )
+
+        assertEquals(ImageBridgeProtocol.ACTION_SNAPSHOT_CHATROOM_MEMBERS, request.action)
+        assertEquals(77L, request.roomId)
+        assertEquals(listOf(2L, 1L), request.memberIds)
+        assertEquals("Bob", request.memberHints.first().nickname)
+        assertEquals(preferredPlan, request.preferredMemberPlan)
         assertEquals("bridge-token", request.token)
     }
 

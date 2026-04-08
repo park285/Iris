@@ -14,6 +14,8 @@ object ImageBridgeProtocol {
     const val SOCKET_NAME = "iris-image-bridge"
     const val ACTION_SEND_IMAGE = "send_image"
     const val ACTION_HEALTH = "health"
+    const val ACTION_INSPECT_CHATROOM = "inspect_chatroom"
+    const val ACTION_SNAPSHOT_CHATROOM_MEMBERS = "snapshot_chatroom_members"
     const val STATUS_SENT = "sent"
     const val STATUS_FAILED = "failed"
     const val STATUS_OK = "ok"
@@ -36,6 +38,47 @@ object ImageBridgeProtocol {
         val threadScope: Int? = null,
         val requestId: String? = null,
         val token: String? = null,
+        val memberIds: List<Long> = emptyList(),
+        val memberHints: List<ChatRoomMemberHint> = emptyList(),
+        val preferredMemberPlan: ChatRoomMemberExtractionPlan? = null,
+    )
+
+    @Serializable
+    data class ChatRoomMemberHint(
+        val userId: Long,
+        val nickname: String? = null,
+    )
+
+    @Serializable
+    enum class ChatRoomSnapshotConfidence {
+        HIGH,
+        MEDIUM,
+        LOW,
+    }
+
+    @Serializable
+    data class ImageBridgeCapability(
+        val supported: Boolean = false,
+        val ready: Boolean = false,
+        val reason: String? = null,
+    )
+
+    @Serializable
+    data class ImageBridgeCapabilities(
+        val inspectChatRoom: ImageBridgeCapability = ImageBridgeCapability(),
+        val snapshotChatRoomMembers: ImageBridgeCapability = ImageBridgeCapability(),
+    )
+
+    @Serializable
+    data class ChatRoomMemberExtractionPlan(
+        val containerPath: String,
+        val sourceClassName: String? = null,
+        val userIdPath: String,
+        val nicknamePath: String,
+        val rolePath: String? = null,
+        val profileImagePath: String? = null,
+        val fingerprint: String,
+        val version: Int = 1,
     )
 
     @Serializable
@@ -62,6 +105,28 @@ object ImageBridgeProtocol {
     )
 
     @Serializable
+    data class ChatRoomMemberSnapshot(
+        val userId: Long,
+        val nickname: String,
+        val roleCode: Int? = null,
+        val profileImageUrl: String? = null,
+    )
+
+    @Serializable
+    data class ChatRoomMembersSnapshot(
+        val roomId: Long,
+        val sourcePath: String? = null,
+        val sourceClassName: String? = null,
+        val scannedAtEpochMs: Long,
+        val members: List<ChatRoomMemberSnapshot> = emptyList(),
+        val selectedPlan: ChatRoomMemberExtractionPlan? = null,
+        val confidence: ChatRoomSnapshotConfidence = ChatRoomSnapshotConfidence.LOW,
+        val confidenceScore: Int = 0,
+        val usedPreferredPlan: Boolean = false,
+        val candidateGap: Int? = null,
+    )
+
+    @Serializable
     data class ImageBridgeResponse(
         val status: String,
         val error: String? = null,
@@ -72,6 +137,9 @@ object ImageBridgeProtocol {
         val lastCrashMessage: String? = null,
         val checks: List<ImageBridgeCheck> = emptyList(),
         val discovery: ImageBridgeDiscovery? = null,
+        val inspectionJson: String? = null,
+        val memberSnapshot: ChatRoomMembersSnapshot? = null,
+        val capabilities: ImageBridgeCapabilities? = null,
     )
 
     fun writeFrame(
@@ -112,6 +180,34 @@ object ImageBridgeProtocol {
             action = ACTION_HEALTH,
             protocolVersion = PROTOCOL_VERSION,
             token = token,
+        )
+
+    fun buildInspectChatRoomRequest(
+        roomId: Long,
+        token: String? = null,
+    ): ImageBridgeRequest =
+        ImageBridgeRequest(
+            action = ACTION_INSPECT_CHATROOM,
+            protocolVersion = PROTOCOL_VERSION,
+            roomId = roomId,
+            token = token,
+        )
+
+    fun buildSnapshotChatRoomMembersRequest(
+        roomId: Long,
+        memberIds: List<Long> = emptyList(),
+        memberHints: List<ChatRoomMemberHint> = emptyList(),
+        preferredMemberPlan: ChatRoomMemberExtractionPlan? = null,
+        token: String? = null,
+    ): ImageBridgeRequest =
+        ImageBridgeRequest(
+            action = ACTION_SNAPSHOT_CHATROOM_MEMBERS,
+            protocolVersion = PROTOCOL_VERSION,
+            roomId = roomId,
+            token = token,
+            memberIds = memberIds,
+            memberHints = memberHints,
+            preferredMemberPlan = preferredMemberPlan,
         )
 
     fun buildSuccessResponse(): ImageBridgeResponse = ImageBridgeResponse(status = STATUS_SENT)
