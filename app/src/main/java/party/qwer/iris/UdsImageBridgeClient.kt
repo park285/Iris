@@ -3,9 +3,13 @@ package party.qwer.iris
 import android.net.LocalSocket
 import android.net.LocalSocketAddress
 import party.qwer.iris.ImageBridgeProtocol
+import party.qwer.iris.model.ImageBridgeCapabilities
+import party.qwer.iris.model.ImageBridgeCapability
 import party.qwer.iris.model.ImageBridgeDiscoveryHook
 import party.qwer.iris.model.ImageBridgeHealthCheck
 import party.qwer.iris.model.ImageBridgeHealthResult
+import party.qwer.iris.storage.ChatId
+import party.qwer.iris.storage.UserId
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -150,6 +154,51 @@ internal class UdsImageBridgeClient(
             )
         }
 
+    fun inspectChatRoom(roomId: Long): String =
+        try {
+            parseInspectResponse(
+                exchange(
+                    ImageBridgeProtocol.buildInspectChatRoomRequest(
+                        roomId = roomId,
+                        token = bridgeToken,
+                    ),
+                ),
+            )
+        } catch (e: IOException) {
+            error("bridge connection failed: ${e.message}")
+        } catch (e: RuntimeException) {
+            error("bridge protocol failed: ${e.message}")
+        }
+
+    fun snapshotChatRoomMembers(
+        roomId: Long,
+        expectedMembers: Collection<LiveRoomMemberHint> = emptyList(),
+        preferredPlan: LiveRoomMemberExtractionPlan? = null,
+    ): LiveRoomMemberSnapshot =
+        try {
+            parseMemberSnapshotResponse(
+                exchange(
+                    ImageBridgeProtocol.buildSnapshotChatRoomMembersRequest(
+                        roomId = roomId,
+                        memberIds = expectedMembers.map { it.userId.value }.distinct().sorted(),
+                        memberHints =
+                            expectedMembers.map { hint ->
+                                ImageBridgeProtocol.ChatRoomMemberHint(
+                                    userId = hint.userId.value,
+                                    nickname = hint.nickname?.trim()?.takeIf { it.isNotBlank() },
+                                )
+                            },
+                        preferredMemberPlan = preferredPlan?.toProtocolPlan(),
+                        token = bridgeToken,
+                    ),
+                ),
+            )
+        } catch (e: IOException) {
+            error("bridge connection failed: ${e.message}")
+        } catch (e: RuntimeException) {
+            error("bridge protocol failed: ${e.message}")
+        }
+
     private fun exchange(request: ImageBridgeProtocol.ImageBridgeRequest): ImageBridgeProtocol.ImageBridgeResponse {
         val socket = socketFactory()
         try {
@@ -222,6 +271,60 @@ internal class UdsImageBridgeClient(
                             lastSummary = item.lastSummary,
                         )
                     }.orEmpty(),
+            capabilities =
+                response.capabilities?.let { capabilities ->
+                    ImageBridgeCapabilities(
+                        inspectChatRoom =
+                            ImageBridgeCapability(
+                                supported = capabilities.inspectChatRoom.supported,
+                                ready = capabilities.inspectChatRoom.ready,
+                                reason = capabilities.inspectChatRoom.reason,
+                            ),
+                        snapshotChatRoomMembers =
+                            ImageBridgeCapability(
+                                supported = capabilities.snapshotChatRoomMembers.supported,
+                                ready = capabilities.snapshotChatRoomMembers.ready,
+                                reason = capabilities.snapshotChatRoomMembers.reason,
+                            ),
+                    )
+                } ?: ImageBridgeCapabilities(),
+        )
+    }
+
+    private fun parseInspectResponse(response: ImageBridgeProtocol.ImageBridgeResponse): String {
+        require(response.status == ImageBridgeProtocol.STATUS_OK) {
+            response.error ?: "unknown bridge inspection error"
+        }
+        return response.inspectionJson ?: error("bridge inspection payload missing")
+    }
+
+    private fun parseMemberSnapshotResponse(response: ImageBridgeProtocol.ImageBridgeResponse): LiveRoomMemberSnapshot {
+        require(response.status == ImageBridgeProtocol.STATUS_OK) {
+            response.error ?: "unknown bridge member snapshot error"
+        }
+        val payload = response.memberSnapshot ?: error("bridge member snapshot payload missing")
+        return LiveRoomMemberSnapshot(
+            chatId = ChatId(payload.roomId),
+            sourcePath = payload.sourcePath,
+            sourceClassName = payload.sourceClassName,
+            scannedAtEpochMs = payload.scannedAtEpochMs,
+            members =
+                payload.members
+                    .associate { item ->
+                        val userId = UserId(item.userId)
+                        userId to
+                            LiveRoomMember(
+                                userId = userId,
+                                nickname = item.nickname,
+                                roleCode = item.roleCode,
+                                profileImageUrl = item.profileImageUrl,
+                            )
+                    },
+            selectedPlan = payload.selectedPlan?.toLivePlan(),
+            confidence = payload.confidence.toLiveConfidence(),
+            confidenceScore = payload.confidenceScore,
+            usedPreferredPlan = payload.usedPreferredPlan,
+            candidateGap = payload.candidateGap,
         )
     }
 

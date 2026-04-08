@@ -1,5 +1,6 @@
 package party.qwer.iris
 
+import party.qwer.iris.storage.UserId
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -159,6 +160,16 @@ class UdsImageBridgeClientTest {
                                 ),
                             ),
                     ),
+                capabilities =
+                    ImageBridgeProtocol.ImageBridgeCapabilities(
+                        inspectChatRoom = ImageBridgeProtocol.ImageBridgeCapability(supported = true, ready = true),
+                        snapshotChatRoomMembers =
+                            ImageBridgeProtocol.ImageBridgeCapability(
+                                supported = true,
+                                ready = false,
+                                reason = "chatroom resolver unavailable",
+                            ),
+                    ),
                 checks =
                     listOf(
                         ImageBridgeProtocol.ImageBridgeCheck(
@@ -198,6 +209,166 @@ class UdsImageBridgeClientTest {
         assertEquals(1, result.discoveryHooks.size)
         assertEquals("bh.c#p", result.discoveryHooks.first().name)
         assertEquals("uris=2", result.discoveryHooks.first().lastSummary)
+        assertTrue(result.capabilities.inspectChatRoom.ready)
+        assertEquals("chatroom resolver unavailable", result.capabilities.snapshotChatRoomMembers.reason)
+    }
+
+    @Test
+    fun `inspects chatroom through bridge protocol`() {
+        val responseBuffer = ByteArrayOutputStream()
+        ImageBridgeProtocol.writeFrame(
+            responseBuffer,
+            ImageBridgeProtocol.ImageBridgeResponse(
+                status = ImageBridgeProtocol.STATUS_OK,
+                inspectionJson = "{\"chatId\":55}",
+            ),
+        )
+        val fakeSocket = FakeBridgeSocket(input = ByteArrayInputStream(responseBuffer.toByteArray()))
+        val client =
+            UdsImageBridgeClient(
+                bridgeToken = "bridge-token",
+                socketFactory = { fakeSocket },
+            )
+
+        val result = client.inspectChatRoom(55L)
+
+        assertEquals("{\"chatId\":55}", result)
+        val request = ImageBridgeProtocol.readRequestFrame(ByteArrayInputStream(fakeSocket.outputStream.toByteArray()))
+        assertEquals(ImageBridgeProtocol.ACTION_INSPECT_CHATROOM, request.action)
+        assertEquals(55L, request.roomId)
+        assertEquals("bridge-token", request.token)
+    }
+
+    @Test
+    fun `inspect chatroom fails when bridge omits payload`() {
+        val responseBuffer = ByteArrayOutputStream()
+        ImageBridgeProtocol.writeFrame(
+            responseBuffer,
+            ImageBridgeProtocol.ImageBridgeResponse(
+                status = ImageBridgeProtocol.STATUS_OK,
+            ),
+        )
+        val client =
+            UdsImageBridgeClient(
+                socketFactory = {
+                    FakeBridgeSocket(
+                        input = ByteArrayInputStream(responseBuffer.toByteArray()),
+                    )
+                },
+            )
+
+        val error = runCatching { client.inspectChatRoom(1L) }.exceptionOrNull()
+
+        assertTrue(error is IllegalStateException)
+        assertTrue(error.message?.contains("bridge inspection payload missing") == true)
+    }
+
+    @Test
+    fun `snapshots live chatroom members through bridge protocol`() {
+        val responseBuffer = ByteArrayOutputStream()
+        ImageBridgeProtocol.writeFrame(
+            responseBuffer,
+            ImageBridgeProtocol.ImageBridgeResponse(
+                status = ImageBridgeProtocol.STATUS_OK,
+                memberSnapshot =
+                    ImageBridgeProtocol.ChatRoomMembersSnapshot(
+                        roomId = 55L,
+                        sourcePath = "$.members",
+                        sourceClassName = "FakeMember",
+                        scannedAtEpochMs = 1234L,
+                        members =
+                            listOf(
+                                ImageBridgeProtocol.ChatRoomMemberSnapshot(
+                                    userId = 7L,
+                                    nickname = "Alice Updated",
+                                    roleCode = 4,
+                                    profileImageUrl = "https://example.com/a.png",
+                                ),
+                            ),
+                        selectedPlan =
+                            ImageBridgeProtocol.ChatRoomMemberExtractionPlan(
+                                containerPath = "$.members",
+                                sourceClassName = "FakeMember",
+                                userIdPath = "id",
+                                nicknamePath = "profile.nickname",
+                                fingerprint = "$.members|FakeMember|id|profile.nickname",
+                            ),
+                        confidence = ImageBridgeProtocol.ChatRoomSnapshotConfidence.MEDIUM,
+                        confidenceScore = 420,
+                        usedPreferredPlan = true,
+                        candidateGap = 180,
+                    ),
+            ),
+        )
+        val fakeSocket = FakeBridgeSocket(input = ByteArrayInputStream(responseBuffer.toByteArray()))
+        val client =
+            UdsImageBridgeClient(
+                bridgeToken = "bridge-token",
+                socketFactory = { fakeSocket },
+            )
+
+        val result =
+            client.snapshotChatRoomMembers(
+                roomId = 55L,
+                expectedMembers =
+                    listOf(
+                        LiveRoomMemberHint(userId = UserId(7L), nickname = "Alice"),
+                        LiveRoomMemberHint(userId = UserId(9L), nickname = "Bob"),
+                    ),
+                preferredPlan =
+                    LiveRoomMemberExtractionPlan(
+                        containerPath = "$.members",
+                        sourceClassName = "FakeMember",
+                        userIdPath = "id",
+                        nicknamePath = "profile.nickname",
+                        fingerprint = "$.members|FakeMember|id|profile.nickname",
+                    ),
+            )
+
+        assertEquals(55L, result.chatId.value)
+        assertEquals("$.members", result.sourcePath)
+        assertEquals(1234L, result.scannedAtEpochMs)
+        val member = result.members.getValue(UserId(7L))
+        assertEquals(
+            "Alice Updated",
+            member.nickname,
+        )
+        assertEquals(LiveSnapshotConfidence.MEDIUM, result.confidence)
+        assertEquals(420, result.confidenceScore)
+        assertTrue(result.usedPreferredPlan)
+        assertEquals(180, result.candidateGap)
+        assertEquals("profile.nickname", result.selectedPlan?.nicknamePath)
+        val request = ImageBridgeProtocol.readRequestFrame(ByteArrayInputStream(fakeSocket.outputStream.toByteArray()))
+        assertEquals(ImageBridgeProtocol.ACTION_SNAPSHOT_CHATROOM_MEMBERS, request.action)
+        assertEquals(55L, request.roomId)
+        assertEquals(listOf(7L, 9L), request.memberIds)
+        assertEquals("Alice", request.memberHints.first { it.userId == 7L }.nickname)
+        assertEquals("profile.nickname", request.preferredMemberPlan?.nicknamePath)
+        assertEquals("bridge-token", request.token)
+    }
+
+    @Test
+    fun `snapshot chatroom members fails when bridge omits payload`() {
+        val responseBuffer = ByteArrayOutputStream()
+        ImageBridgeProtocol.writeFrame(
+            responseBuffer,
+            ImageBridgeProtocol.ImageBridgeResponse(
+                status = ImageBridgeProtocol.STATUS_OK,
+            ),
+        )
+        val client =
+            UdsImageBridgeClient(
+                socketFactory = {
+                    FakeBridgeSocket(
+                        input = ByteArrayInputStream(responseBuffer.toByteArray()),
+                    )
+                },
+            )
+
+        val error = runCatching { client.snapshotChatRoomMembers(1L) }.exceptionOrNull()
+
+        assertTrue(error is IllegalStateException)
+        assertTrue(error.message?.contains("bridge member snapshot payload missing") == true)
     }
 }
 
