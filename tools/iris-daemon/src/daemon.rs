@@ -101,8 +101,8 @@ fn log_probe_failures(report: &health::HealthReport, sm: &StateMachine) {
             );
         }
     }
-    if report.bridge != health::ProbeResult::Ok {
-        tracing::warn!("bridge probe 실패");
+    if let health::ProbeResult::Fail(reason) = &report.bridge {
+        tracing::warn!(reason = %reason, "bridge probe 실패");
     }
 }
 
@@ -117,7 +117,9 @@ fn next_transition(sm: &mut StateMachine, report: &health::HealthReport) -> Opti
 fn probe_state(report: &health::HealthReport) -> ProbeState {
     if !report.is_alive() {
         ProbeState::LivenessFailed
-    } else if report.readiness != health::ProbeResult::Ok {
+    } else if report.bridge != health::ProbeResult::Ok
+        || report.readiness != health::ProbeResult::Ok
+    {
         ProbeState::ReadinessFailed
     } else {
         ProbeState::Healthy
@@ -239,6 +241,28 @@ mod tests {
         };
         assert!(next_transition(&mut sm, &degraded).is_none());
         let t = next_transition(&mut sm, &degraded).expect("should degrade");
+        assert_eq!(t.to, State::Degraded);
+        assert!(t.reason.contains("readiness"));
+    }
+
+    #[test]
+    fn bridge_capability_failure_is_treated_as_readiness_failure() {
+        let mut sm = StateMachine::new(2, 2, 3);
+        let ready = HealthReport {
+            liveness: ProbeResult::Ok,
+            readiness: ProbeResult::Ok,
+            bridge: ProbeResult::Ok,
+        };
+        assert!(next_transition(&mut sm, &ready).is_some());
+
+        let degraded = HealthReport {
+            liveness: ProbeResult::Ok,
+            readiness: ProbeResult::Ok,
+            bridge: ProbeResult::Fail("chatroom resolver unavailable".to_string()),
+        };
+        assert!(next_transition(&mut sm, &degraded).is_none());
+        let t = next_transition(&mut sm, &degraded)
+            .expect("should degrade from bridge capability failure");
         assert_eq!(t.to, State::Degraded);
         assert!(t.reason.contains("readiness"));
     }

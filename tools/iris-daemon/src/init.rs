@@ -16,6 +16,7 @@ pub async fn run_init(cfg: &DaemonConfig) -> Result<()> {
 
     prepare_device(&adb, cfg).await?;
     config_sync::render_and_push(&adb, cfg).await?;
+    config_sync::sync_apk_if_needed(&adb, cfg, true).await?;
     ensure_runtime_ready(&adb, cfg).await?;
 
     tracing::info!("init 완료");

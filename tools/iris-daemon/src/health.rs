@@ -65,14 +65,35 @@ async fn probe_readiness(api: &IrisApi) -> ProbeResult {
 
 async fn probe_bridge(api: &IrisApi) -> ProbeResult {
     match api.bridge_diagnostics().await {
-        Ok(_) => ProbeResult::Ok,
+        Ok(response) => match bridge_capability_failure(&response) {
+            Some(reason) => ProbeResult::Fail(reason),
+            None => ProbeResult::Ok,
+        },
         Err(e) => ProbeResult::Fail(e.to_string()),
     }
+}
+
+fn bridge_capability_failure(
+    response: &iris_common::models::BridgeDiagnosticsResponse,
+) -> Option<String> {
+    let capability = &response.capabilities.snapshot_chat_room_members;
+    if capability.ready {
+        return None;
+    }
+    Some(
+        capability
+            .reason
+            .clone()
+            .unwrap_or_else(|| "snapshot chatroom members capability not ready".to_string()),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iris_common::models::{
+        BridgeDiagnosticsCapabilities, BridgeDiagnosticsCapability, BridgeDiagnosticsResponse,
+    };
 
     #[test]
     fn health_report_is_alive_when_liveness_ok() {
@@ -111,5 +132,38 @@ mod tests {
     fn probe_result_equality() {
         assert_eq!(ProbeResult::Ok, ProbeResult::Ok);
         assert_ne!(ProbeResult::Ok, ProbeResult::Fail("x".to_string()));
+    }
+
+    #[test]
+    fn bridge_capability_failure_uses_snapshot_capability_reason() {
+        let response = BridgeDiagnosticsResponse {
+            reachable: true,
+            running: true,
+            spec_ready: true,
+            checked_at_epoch_ms: None,
+            restart_count: 0,
+            last_crash_message: None,
+            checks: vec![],
+            discovery_install_attempted: true,
+            discovery_hooks: vec![],
+            capabilities: BridgeDiagnosticsCapabilities {
+                inspect_chat_room: BridgeDiagnosticsCapability {
+                    supported: true,
+                    ready: true,
+                    reason: None,
+                },
+                snapshot_chat_room_members: BridgeDiagnosticsCapability {
+                    supported: true,
+                    ready: false,
+                    reason: Some("chatroom resolver unavailable".to_string()),
+                },
+            },
+            error: None,
+        };
+
+        assert_eq!(
+            bridge_capability_failure(&response),
+            Some("chatroom resolver unavailable".to_string())
+        );
     }
 }

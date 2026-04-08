@@ -150,6 +150,8 @@ pub struct InitConfig {
     pub config_template: String,
     #[serde(default = "default_config_dest")]
     pub config_dest: String,
+    #[serde(default = "default_apk_src")]
+    pub apk_src: String,
     #[serde(default = "default_apk_dest")]
     pub apk_dest: String,
 }
@@ -161,6 +163,7 @@ impl Default for InitConfig {
             boot_timeout_secs: default_boot_timeout(),
             config_template: default_config_template(),
             config_dest: default_config_dest(),
+            apk_src: default_apk_src(),
             apk_dest: default_apk_dest(),
         }
     }
@@ -180,6 +183,10 @@ fn default_config_template() -> String {
 
 fn default_config_dest() -> String {
     "/data/iris/config.json".to_string()
+}
+
+fn default_apk_src() -> String {
+    "/root/work/Iris/Iris.apk".to_string()
 }
 
 fn default_apk_dest() -> String {
@@ -213,14 +220,25 @@ impl DaemonConfig {
 }
 
 fn apply_env_overrides(config: &mut DaemonConfig) {
-    if let Ok(url) = std::env::var("IRIS_HEALTH_URL") {
-        config.iris.health_url = url;
+    let env = std::env::vars().collect::<std::collections::HashMap<_, _>>();
+    apply_env_overrides_from(config, &env);
+}
+
+fn apply_env_overrides_from(
+    config: &mut DaemonConfig,
+    env: &std::collections::HashMap<String, String>,
+) {
+    if let Some(url) = env.get("IRIS_HEALTH_URL") {
+        config.iris.health_url.clone_from(url);
     }
-    if let Ok(token) = std::env::var("IRIS_SHARED_TOKEN") {
-        config.iris.shared_token = token;
+    if let Some(token) = env.get("IRIS_SHARED_TOKEN") {
+        config.iris.shared_token.clone_from(token);
     }
-    if let Ok(device) = std::env::var("IRIS_DEVICE") {
-        config.adb.device = device;
+    if let Some(device) = env.get("IRIS_DEVICE") {
+        config.adb.device.clone_from(device);
+    }
+    if let Some(apk_src) = env.get("IRIS_APK_SRC") {
+        config.init.apk_src.clone_from(apk_src);
     }
 }
 
@@ -262,6 +280,7 @@ phantom_killer_disable = false
 boot_timeout_secs = 60
 config_template = "/etc/iris/template.json"
 config_dest = "/data/config.json"
+apk_src = "/root/work/Iris/Iris.apk"
 apk_dest = "/data/Iris.apk"
 "#
     }
@@ -282,16 +301,31 @@ apk_dest = "/data/Iris.apk"
         assert_eq!(config.rollback.max_consecutive_failures, 3);
         assert!(!config.init.phantom_killer_disable);
         assert_eq!(config.init.boot_timeout_secs, 60);
+        assert_eq!(config.init.apk_src, "/root/work/Iris/Iris.apk");
     }
 
     #[test]
-    fn default_config_has_sane_values() {
+    fn default_config_has_expected_watch_values() {
         let config = DaemonConfig::default();
+
         assert_eq!(config.iris.health_url, "http://localhost:3000");
         assert_eq!(config.watch.check_interval_secs, 30);
         assert_eq!(config.watch.health_fail_threshold, 2);
         assert_eq!(config.watch.readiness_fail_threshold, 4);
+    }
+
+    #[test]
+    fn default_config_has_expected_runtime_paths() {
+        let config = DaemonConfig::default();
+
+        assert_eq!(config.init.apk_src, "/root/work/Iris/Iris.apk");
         assert_eq!(config.rollback.max_consecutive_failures, 5);
+    }
+
+    #[test]
+    fn default_config_disables_optional_features() {
+        let config = DaemonConfig::default();
+
         assert!(!config.alert.enabled);
         assert!(!config.rollback.enabled);
     }
@@ -334,5 +368,17 @@ device = "10.0.0.2:5555"
         };
         assert_eq!(config.base_url(), "http://test:3000");
         assert_eq!(config.token(), "secret");
+    }
+
+    #[test]
+    fn env_override_updates_apk_source() {
+        let mut config = DaemonConfig::default();
+        let env = std::collections::HashMap::from([(
+            String::from("IRIS_APK_SRC"),
+            String::from("/tmp/Iris.apk"),
+        )]);
+        apply_env_overrides_from(&mut config, &env);
+
+        assert_eq!(config.init.apk_src, "/tmp/Iris.apk");
     }
 }

@@ -9,7 +9,7 @@ ADB를 통해 Redroid 인스턴스를 제어하고, 상태 머신 기반으로 I
 # 빌드
 cargo build --release -p iris-daemon
 
-# 초기화 (ADB 연결 → 부팅 대기 → config push → Iris 시작)
+# 초기화 (ADB 연결 → 부팅 대기 → config push → APK sync → Iris 시작)
 iris-daemon init
 
 # 감시 루프 시작
@@ -23,7 +23,7 @@ iris-daemon status
 
 | 커맨드 | 설명 |
 |--------|------|
-| `init` | ADB 연결 → 부팅 완료 대기 → phantom killer 비활성화 → config 렌더/push → KakaoTalk 확인 → Iris 시작 |
+| `init` | ADB 연결 → 부팅 완료 대기 → phantom killer 비활성화 → config 렌더/push → host SSOT APK sync → KakaoTalk 확인 → Iris 시작 |
 | `watch` | 상태 머신 감시 루프 실행. systemd watchdog 연동 |
 | `status` | 헬스 프로브를 1회 실행하고 결과를 stdout에 출력 |
 
@@ -62,6 +62,7 @@ phantom_killer_disable = true
 boot_timeout_secs = 120
 config_template = "/root/work/arm-iris-runtime/configs/iris/config.json"
 config_dest = "/data/iris/config.json"
+apk_src = "/root/work/Iris/Iris.apk"
 apk_dest = "/data/local/tmp/Iris.apk"
 ```
 
@@ -72,6 +73,7 @@ apk_dest = "/data/local/tmp/Iris.apk"
 | `IRIS_HEALTH_URL` | `iris.health_url` |
 | `IRIS_SHARED_TOKEN` | `iris.shared_token` |
 | `IRIS_DEVICE` | `adb.device` |
+| `IRIS_APK_SRC` | `init.apk_src` |
 
 `config_template` 내부의 `${VAR}` 플레이스홀더는 현재 환경 변수(`IRIS_*`, `WEBHOOK_*` 등)로 치환된다.
 
@@ -100,8 +102,8 @@ Starting → Healthy ↔ Degraded → Recovering → RollbackNeeded
 
 ## Config Drift 감지
 
-`config_check_every` 사이클마다 디바이스의 config JSON을 pull하여 템플릿 렌더 결과와 비교한다.
-차이가 발견되면 config를 재push하고 Iris를 재시작한다.
+`config_check_every` 사이클마다 디바이스의 config JSON과 APK drift를 확인한다.
+차이가 발견되면 config를 재push하거나 APK를 재sync한 뒤 Iris를 재시작한다.
 
 ## 프로세스 제어
 
