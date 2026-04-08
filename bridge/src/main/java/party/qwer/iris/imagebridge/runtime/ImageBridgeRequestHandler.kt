@@ -14,6 +14,8 @@ internal data class ImageSendRequest(
 internal class ImageBridgeRequestHandler(
     private val imageSender: (ImageSendRequest) -> Unit,
     private val healthProvider: () -> ImageBridgeHealthSnapshot,
+    private val chatRoomInspector: ((Long) -> String)? = null,
+    private val chatRoomMemberSnapshotProvider: ((Long, List<ImageBridgeProtocol.ChatRoomMemberHint>, ImageBridgeProtocol.ChatRoomMemberExtractionPlan?) -> ImageBridgeProtocol.ChatRoomMembersSnapshot)? = null,
     private val handshakeValidator: BridgeHandshakeValidator = BridgeHandshakeValidator(),
     private val serialExecutor: RoomThreadSerialExecutor = RoomThreadSerialExecutor(),
     private val pathValidator: BridgeImagePathValidator = BridgeImagePathValidator(),
@@ -25,6 +27,8 @@ internal class ImageBridgeRequestHandler(
             when (val action = request.action) {
                 ImageBridgeProtocol.ACTION_SEND_IMAGE -> handleSendImage(request)
                 ImageBridgeProtocol.ACTION_HEALTH -> healthProvider().toProtocolResponse()
+                ImageBridgeProtocol.ACTION_INSPECT_CHATROOM -> handleInspectChatRoom(request)
+                ImageBridgeProtocol.ACTION_SNAPSHOT_CHATROOM_MEMBERS -> handleSnapshotChatRoomMembers(request)
                 else -> failureResponse("unknown action: $action")
             }
         } catch (e: Exception) {
@@ -57,6 +61,34 @@ internal class ImageBridgeRequestHandler(
             imageSender(imageRequest)
         }
         return successResponse()
+    }
+
+    private fun handleInspectChatRoom(request: ImageBridgeProtocol.ImageBridgeRequest): ImageBridgeProtocol.ImageBridgeResponse {
+        val roomId = checkNotNull(request.roomId) { "roomId missing" }
+        val inspector = checkNotNull(chatRoomInspector) { "chatroom inspection unavailable" }
+        return ImageBridgeProtocol.ImageBridgeResponse(
+            status = ImageBridgeProtocol.STATUS_OK,
+            inspectionJson = inspector(roomId),
+        )
+    }
+
+    private fun handleSnapshotChatRoomMembers(request: ImageBridgeProtocol.ImageBridgeRequest): ImageBridgeProtocol.ImageBridgeResponse {
+        val roomId = checkNotNull(request.roomId) { "roomId missing" }
+        val provider = checkNotNull(chatRoomMemberSnapshotProvider) { "chatroom member snapshot unavailable" }
+        return ImageBridgeProtocol.ImageBridgeResponse(
+            status = ImageBridgeProtocol.STATUS_OK,
+            memberSnapshot =
+                provider(
+                    roomId,
+                    request.memberHints.ifEmpty {
+                        request.memberIds
+                            .distinct()
+                            .sorted()
+                            .map { userId -> ImageBridgeProtocol.ChatRoomMemberHint(userId = userId) }
+                    },
+                    request.preferredMemberPlan,
+                ),
+        )
     }
 
     private fun logFailure(

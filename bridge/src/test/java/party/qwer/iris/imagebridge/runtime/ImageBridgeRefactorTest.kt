@@ -127,6 +127,11 @@ class ImageBridgeRequestHandlerTest {
                                         ),
                                     ),
                             ),
+                        capabilities =
+                            ImageBridgeCapabilitiesSnapshot(
+                                inspectChatRoom = ImageBridgeCapabilitySnapshot(supported = true, ready = true),
+                                snapshotChatRoomMembers = ImageBridgeCapabilitySnapshot(supported = true, ready = true),
+                            ),
                         restartCount = 3,
                         lastCrashMessage = "bind failed",
                     )
@@ -145,6 +150,107 @@ class ImageBridgeRequestHandlerTest {
         assertEquals("bind failed", response.lastCrashMessage)
         assertEquals(1, response.checks.size)
         assertEquals(1, response.discovery?.hooks?.size)
+        assertTrue(response.capabilities?.snapshotChatRoomMembers?.ready == true)
+    }
+
+    @Test
+    fun `inspect chatroom action returns introspection payload`() {
+        val handler =
+            ImageBridgeRequestHandler(
+                imageSender = { error("should not be called") },
+                healthProvider = { readyHealthSnapshot() },
+                chatRoomInspector = { roomId -> "{\"chatId\":$roomId}" },
+                handshakeValidator = developmentHandshakeValidator(),
+            )
+
+        val response =
+            handler.handle(
+                inspectChatRoomRequest(roomId = 77L),
+            )
+
+        assertEquals(ImageBridgeProtocol.STATUS_OK, response.status)
+        assertEquals("{\"chatId\":77}", response.inspectionJson)
+    }
+
+    @Test
+    fun `inspect chatroom action fails when room id is missing`() {
+        val handler =
+            ImageBridgeRequestHandler(
+                imageSender = { error("should not be called") },
+                healthProvider = { readyHealthSnapshot() },
+                chatRoomInspector = { "{}" },
+                handshakeValidator = developmentHandshakeValidator(),
+                logError = { _, _, _ -> },
+            )
+
+        val response =
+            handler.handle(
+                ImageBridgeProtocol.ImageBridgeRequest(
+                    action = ImageBridgeProtocol.ACTION_INSPECT_CHATROOM,
+                    protocolVersion = ImageBridgeProtocol.PROTOCOL_VERSION,
+                ),
+            )
+
+        assertEquals(ImageBridgeProtocol.STATUS_FAILED, response.status)
+        assertEquals("roomId missing", response.error)
+    }
+
+    @Test
+    fun `snapshot chatroom members action returns payload`() {
+        val handler =
+            ImageBridgeRequestHandler(
+                imageSender = { error("should not be called") },
+                healthProvider = { readyHealthSnapshot() },
+                chatRoomMemberSnapshotProvider = { roomId, expectedMemberHints, preferredPlan ->
+                    assertEquals(listOf(7L, 9L), expectedMemberHints.map { it.userId })
+                    assertEquals("Alice", expectedMemberHints.first().nickname)
+                    assertEquals("profile.nickname", preferredPlan?.nicknamePath)
+                    ImageBridgeProtocol.ChatRoomMembersSnapshot(
+                        roomId = roomId,
+                        sourcePath = "$.members",
+                        sourceClassName = "FakeMember",
+                        scannedAtEpochMs = 12L,
+                        members = listOf(ImageBridgeProtocol.ChatRoomMemberSnapshot(userId = 7L, nickname = "Alice Updated")),
+                        selectedPlan = preferredPlan,
+                        confidence = ImageBridgeProtocol.ChatRoomSnapshotConfidence.HIGH,
+                        confidenceScore = 500,
+                        usedPreferredPlan = true,
+                    )
+                },
+                handshakeValidator = developmentHandshakeValidator(),
+            )
+
+        val response =
+            handler.handle(
+                snapshotChatRoomMembersRequest(
+                    roomId = 55L,
+                    memberIds = listOf(7L, 9L),
+                    memberHints =
+                        listOf(
+                            ImageBridgeProtocol.ChatRoomMemberHint(userId = 7L, nickname = "Alice"),
+                            ImageBridgeProtocol.ChatRoomMemberHint(userId = 9L, nickname = "Bob"),
+                        ),
+                    preferredMemberPlan =
+                        ImageBridgeProtocol.ChatRoomMemberExtractionPlan(
+                            containerPath = "$.members",
+                            sourceClassName = "FakeMember",
+                            userIdPath = "id",
+                            nicknamePath = "profile.nickname",
+                            fingerprint = "$.members|FakeMember|id|profile.nickname",
+                        ),
+                ),
+            )
+
+        assertEquals(ImageBridgeProtocol.STATUS_OK, response.status)
+        assertEquals(55L, response.memberSnapshot?.roomId)
+        assertEquals(
+            "Alice Updated",
+            response.memberSnapshot
+                ?.members
+                ?.single()
+                ?.nickname,
+        )
+        assertTrue(response.memberSnapshot?.usedPreferredPlan == true)
     }
 
     @Test
@@ -317,6 +423,30 @@ private fun sendImageRequest(
     )
 
 private fun healthRequest(token: String? = null): ImageBridgeProtocol.ImageBridgeRequest = ImageBridgeProtocol.buildHealthRequest(token = token)
+
+private fun inspectChatRoomRequest(
+    roomId: Long,
+    token: String? = null,
+): ImageBridgeProtocol.ImageBridgeRequest =
+    ImageBridgeProtocol.buildInspectChatRoomRequest(
+        roomId = roomId,
+        token = token,
+    )
+
+private fun snapshotChatRoomMembersRequest(
+    roomId: Long,
+    memberIds: List<Long> = emptyList(),
+    memberHints: List<ImageBridgeProtocol.ChatRoomMemberHint> = emptyList(),
+    preferredMemberPlan: ImageBridgeProtocol.ChatRoomMemberExtractionPlan? = null,
+    token: String? = null,
+): ImageBridgeProtocol.ImageBridgeRequest =
+    ImageBridgeProtocol.buildSnapshotChatRoomMembersRequest(
+        roomId = roomId,
+        memberIds = memberIds,
+        memberHints = memberHints,
+        preferredMemberPlan = preferredMemberPlan,
+        token = token,
+    )
 
 private fun developmentHandshakeValidator(): BridgeHandshakeValidator =
     BridgeHandshakeValidator(
