@@ -5,11 +5,13 @@ import party.qwer.iris.persistence.AndroidSqliteDriver
 import party.qwer.iris.persistence.BatchedCheckpointJournal
 import party.qwer.iris.persistence.CheckpointJournal
 import party.qwer.iris.persistence.IrisDatabaseSchema
+import party.qwer.iris.persistence.LiveRoomMemberPlanStore
 import party.qwer.iris.persistence.MemberIdentityStateStore
 import party.qwer.iris.persistence.RoomEventStore
 import party.qwer.iris.persistence.SnapshotStateStore
 import party.qwer.iris.persistence.SqliteCheckpointJournal
 import party.qwer.iris.persistence.SqliteDriver
+import party.qwer.iris.persistence.SqliteLiveRoomMemberPlanStore
 import party.qwer.iris.persistence.SqliteMemberIdentityStateStore
 import party.qwer.iris.persistence.SqliteRoomEventStore
 import party.qwer.iris.persistence.SqliteSnapshotStateStore
@@ -25,6 +27,7 @@ internal data class PersistenceRuntime(
     val checkpointJournal: CheckpointJournal,
     val snapshotStateStore: SnapshotStateStore,
     val memberIdentityStateStore: MemberIdentityStateStore,
+    val liveRoomMemberPlanStore: LiveRoomMemberPlanStore,
     val sseEventStore: SseEventStore,
     val roomEventStore: RoomEventStore,
 )
@@ -64,6 +67,7 @@ internal object PersistenceFactory {
                 ),
             snapshotStateStore = SqliteSnapshotStateStore(driver, clock),
             memberIdentityStateStore = SqliteMemberIdentityStateStore(driver, clock),
+            liveRoomMemberPlanStore = SqliteLiveRoomMemberPlanStore(driver, clock),
             sseEventStore = SqliteSseEventStore(driver),
             roomEventStore = SqliteRoomEventStore(driver),
         )

@@ -6,6 +6,7 @@ import kotlinx.coroutines.SupervisorJob
 import party.qwer.iris.delivery.webhook.OutboxRoutingGateway
 import party.qwer.iris.ingress.CommandIngressService
 import party.qwer.iris.persistence.CheckpointJournal
+import party.qwer.iris.persistence.LiveRoomMemberPlanStore
 import party.qwer.iris.persistence.MemberIdentityStateStore
 import party.qwer.iris.persistence.RoomEventStore
 import party.qwer.iris.persistence.SnapshotStateStore
@@ -38,7 +39,9 @@ internal object SnapshotRuntimeFactory {
         sseEventBus: SseEventBus,
         snapshotStateStore: SnapshotStateStore,
         memberIdentityStateStore: MemberIdentityStateStore,
+        liveRoomMemberPlanStore: LiveRoomMemberPlanStore,
         roomEventStore: RoomEventStore? = null,
+        liveMemberSnapshotProvider: LiveRoomMemberSnapshotProvider? = null,
         snapshotFullReconcileIntervalMs: Long = 60_000L,
         missingTombstoneTtlMs: Long? = null,
         roomEventRetentionMs: Long? = null,
@@ -100,7 +103,9 @@ internal object SnapshotRuntimeFactory {
                     roomSnapshotReader = roomSnapshotReader,
                     emitter = memberEventEmitter,
                     stateStore = memberIdentityStateStore,
+                    liveRoomMemberPlanStore = liveRoomMemberPlanStore,
                     roomEventStore = roomEventStore,
+                    liveMemberSnapshotProvider = liveMemberSnapshotProvider,
                     intervalMs = configManager.dbPollingRate,
                 ),
         )

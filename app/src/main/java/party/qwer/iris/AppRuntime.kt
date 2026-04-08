@@ -9,6 +9,7 @@ import party.qwer.iris.delivery.webhook.WebhookOutboxDispatcher
 import party.qwer.iris.http.ReplyImageIngressPolicy
 import party.qwer.iris.http.SseSubscriberPolicy
 import party.qwer.iris.persistence.CheckpointJournal
+import party.qwer.iris.persistence.LiveRoomMemberPlanStore
 import party.qwer.iris.persistence.MemberIdentityStateStore
 import party.qwer.iris.persistence.SnapshotStateStore
 import party.qwer.iris.persistence.SqliteDriver
@@ -187,7 +188,9 @@ internal class AppRuntime(
                     sseEventBus = sseEventBus,
                     snapshotStateStore = snapshotStateStore,
                     memberIdentityStateStore = memberIdentityStateStore,
+                    liveRoomMemberPlanStore = persistenceRuntime.liveRoomMemberPlanStore,
                     roomEventStore = persistenceRuntime.roomEventStore,
+                    liveMemberSnapshotProvider = BridgeLiveRoomMemberSnapshotProvider(bridgeClient),
                     snapshotFullReconcileIntervalMs = runtimeOptions.snapshotFullReconcileIntervalMs,
                     missingTombstoneTtlMs = runtimeOptions.snapshotMissingTombstoneTtlMs,
                     roomEventRetentionMs = runtimeOptions.roomEventRetentionMs,
@@ -258,6 +261,8 @@ internal class AppRuntime(
                         memberRepo = memberRepo,
                         sseEventBus = sseEventBus,
                         roomEventStore = persistenceRuntime.roomEventStore,
+                        chatRoomIntrospectProvider = bridgeClient::inspectChatRoom,
+                        memberNicknameDiagnosticsProvider = memberIdentityObserver::diagnostics,
                         bindHost = runtimeOptions.bindHost,
                         nettyWorkerThreads = runtimeOptions.httpWorkerThreads,
                     ).also {
@@ -277,6 +282,7 @@ internal class AppRuntime(
                 checkpointJournal = checkpointJournal,
                 snapshotStateStore = snapshotStateStore,
                 memberIdentityStateStore = memberIdentityStateStore,
+                liveRoomMemberPlanStore = persistenceRuntime.liveRoomMemberPlanStore,
                 snapshotScope = snapshotScope,
                 observerHelper = observerHelper,
                 dbObserver = dbObserver,
@@ -321,6 +327,7 @@ private data class AppRuntimeStartupAssembly(
     val checkpointJournal: CheckpointJournal,
     val snapshotStateStore: SnapshotStateStore,
     val memberIdentityStateStore: MemberIdentityStateStore,
+    val liveRoomMemberPlanStore: LiveRoomMemberPlanStore,
     val snapshotScope: CoroutineScope,
     val observerHelper: ObserverHelper,
     val dbObserver: DBObserver,
@@ -355,6 +362,7 @@ private data class AppRuntimeStartupAssembly(
                     flushCheckpointJournal = checkpointJournal::flushNow,
                     closeSnapshotStateStore = snapshotStateStore::close,
                     closeMemberIdentityStateStore = memberIdentityStateStore::close,
+                    closeLiveRoomMemberPlanStore = liveRoomMemberPlanStore::close,
                     closePersistenceDriver = persistenceDriver::close,
                     closeKakaoDb = kakaoDb::closeConnection,
                 ),

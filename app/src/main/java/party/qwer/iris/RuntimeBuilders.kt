@@ -50,6 +50,7 @@ internal object RuntimeBuilders {
         val flushCheckpointJournal: () -> Unit = {},
         val closeSnapshotStateStore: () -> Unit = {},
         val closeMemberIdentityStateStore: () -> Unit = {},
+        val closeLiveRoomMemberPlanStore: () -> Unit = {},
         val closePersistenceDriver: () -> Unit = {},
         val closeKakaoDb: () -> Unit = {},
     )
@@ -198,6 +199,7 @@ internal object RuntimeBuilders {
             ShutdownStep(name = "flushCheckpointJournal", action = hooks.flushCheckpointJournal),
             ShutdownStep(name = "closeSnapshotStateStore", action = hooks.closeSnapshotStateStore),
             ShutdownStep(name = "closeMemberIdentityStateStore", action = hooks.closeMemberIdentityStateStore),
+            ShutdownStep(name = "closeLiveRoomMemberPlanStore", action = hooks.closeLiveRoomMemberPlanStore),
             ShutdownStep(name = "closePersistenceDriver", action = hooks.closePersistenceDriver),
             ShutdownStep(name = "closeKakaoDb", action = hooks.closeKakaoDb),
         )
