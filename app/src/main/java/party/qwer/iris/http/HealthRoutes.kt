@@ -6,6 +6,8 @@ import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
+import party.qwer.iris.MemberNicknameDiagnostics
+import party.qwer.iris.internalServerFailure
 import party.qwer.iris.invalidRequest
 import party.qwer.iris.model.CommonErrorResponse
 import party.qwer.iris.model.ImageBridgeHealthResult
@@ -71,11 +73,13 @@ internal fun isBridgeReady(health: ImageBridgeHealthResult): Boolean {
         REQUIRED_DISCOVERY_HOOKS.all { hookName ->
             hooksByName[hookName]?.installed == true
         }
+    val snapshotCapabilityReady = health.capabilities.snapshotChatRoomMembers.ready
     return health.reachable &&
         health.running &&
         health.specReady &&
         health.discoveryInstallAttempted &&
-        requiredHooksReady
+        requiredHooksReady &&
+        snapshotCapabilityReady
 }
 
 internal fun readinessFailureReason(
@@ -92,7 +96,8 @@ internal fun readinessFailureReason(
         }
     }
     if (bridgeHealth != null && !isBridgeReady(bridgeHealth)) {
-        return "bridge not ready"
+        val capabilityReason = bridgeHealth.capabilities.snapshotChatRoomMembers.reason
+        return capabilityReason?.let { "bridge not ready: $it" } ?: "bridge not ready"
     }
     return null
 }
@@ -101,7 +106,8 @@ internal fun Route.installHealthRoutes(
     authSupport: AuthSupport,
     bridgeHealthProvider: (() -> ImageBridgeHealthResult?)?,
     configReadinessProvider: (() -> RuntimeConfigReadiness)? = null,
-    chatRoomIntrospectProvider: ((Long) -> String?)?,
+    chatRoomIntrospectProvider: ((Long) -> String)?,
+    memberNicknameDiagnosticsProvider: ((Long) -> MemberNicknameDiagnostics?)? = null,
 ) {
     get("/health") {
         call.respondText(HEALTH_OK_JSON, ContentType.Application.Json)
@@ -123,7 +129,19 @@ internal fun Route.installHealthRoutes(
     get("/diagnostics/chatroom-fields/{chatId}") {
         if (!authSupport.requireBotControlSignature(call, method = "GET")) return@get
         val chatId = call.parameters["chatId"]?.toLongOrNull() ?: invalidRequest("chatId must be a number")
-        val result = chatRoomIntrospectProvider?.invoke(chatId) ?: invalidRequest("bridge introspection unavailable")
+        val provider = chatRoomIntrospectProvider ?: invalidRequest("bridge introspection unavailable")
+        val result =
+            runCatching { provider(chatId) }
+                .getOrElse { error ->
+                    internalServerFailure(error.message ?: "bridge introspection failed")
+                }
         call.respondText(result, ContentType.Application.Json)
+    }
+    get("/diagnostics/chatroom-members/{chatId}") {
+        if (!authSupport.requireBotControlSignature(call, method = "GET")) return@get
+        val chatId = call.parameters["chatId"]?.toLongOrNull() ?: invalidRequest("chatId must be a number")
+        val provider = memberNicknameDiagnosticsProvider ?: invalidRequest("member diagnostics unavailable")
+        val result = provider(chatId) ?: invalidRequest("member diagnostics unavailable")
+        call.respond(result)
     }
 }

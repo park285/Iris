@@ -1,5 +1,7 @@
 package party.qwer.iris.http
 
+import party.qwer.iris.model.ImageBridgeCapabilities
+import party.qwer.iris.model.ImageBridgeCapability
 import party.qwer.iris.model.ImageBridgeDiscoveryHook
 import party.qwer.iris.model.ImageBridgeHealthResult
 import kotlin.test.Test
@@ -80,6 +82,49 @@ class HealthRoutesTest {
     }
 
     @Test
+    fun `ready fails when snapshot chatroom members capability is missing`() {
+        val reason =
+            readinessFailureReason(
+                bridgeHealth =
+                    healthResult(
+                        requiredHookStates = REQUIRED_HOOK_NAMES.associateWith { true },
+                        capabilities =
+                            ImageBridgeCapabilities(
+                                inspectChatRoom = ImageBridgeCapability(supported = true, ready = true),
+                                snapshotChatRoomMembers =
+                                    ImageBridgeCapability(
+                                        supported = true,
+                                        ready = false,
+                                        reason = "chatroom resolver unavailable",
+                                    ),
+                            ),
+                    ),
+                configReadiness = RuntimeConfigReadiness.allConfigured(),
+            )
+
+        assertEquals("bridge not ready: chatroom resolver unavailable", reason)
+    }
+
+    @Test
+    fun `ready succeeds when snapshot chatroom members capability is ready`() {
+        val reason =
+            readinessFailureReason(
+                bridgeHealth =
+                    healthResult(
+                        requiredHookStates = REQUIRED_HOOK_NAMES.associateWith { true },
+                        capabilities =
+                            ImageBridgeCapabilities(
+                                inspectChatRoom = ImageBridgeCapability(supported = true, ready = true),
+                                snapshotChatRoomMembers = ImageBridgeCapability(supported = true, ready = true),
+                            ),
+                    ),
+                configReadiness = RuntimeConfigReadiness.allConfigured(),
+            )
+
+        assertNull(reason)
+    }
+
+    @Test
     fun `readiness failure returns null when config and bridge are ready`() {
         val reason =
             readinessFailureReason(
@@ -97,6 +142,11 @@ class HealthRoutesTest {
         discoveryInstallAttempted: Boolean = true,
         requiredHookStates: Map<String, Boolean>,
         optionalHooks: List<ImageBridgeDiscoveryHook> = emptyList(),
+        capabilities: ImageBridgeCapabilities =
+            ImageBridgeCapabilities(
+                inspectChatRoom = ImageBridgeCapability(supported = true, ready = true),
+                snapshotChatRoomMembers = ImageBridgeCapability(supported = true, ready = true),
+            ),
     ): ImageBridgeHealthResult =
         ImageBridgeHealthResult(
             reachable = reachable,
@@ -105,6 +155,7 @@ class HealthRoutesTest {
             restartCount = 0,
             discoveryInstallAttempted = discoveryInstallAttempted,
             discoveryHooks = requiredHookStates.map { (name, installed) -> discoveryHook(name, installed) } + optionalHooks,
+            capabilities = capabilities,
         )
 
     private fun discoveryHook(

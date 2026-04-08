@@ -20,6 +20,19 @@ data class ImageBridgeDiscoveryHook(
 )
 
 @Serializable
+data class ImageBridgeCapability(
+    val supported: Boolean = false,
+    val ready: Boolean = false,
+    val reason: String? = null,
+)
+
+@Serializable
+data class ImageBridgeCapabilities(
+    val inspectChatRoom: ImageBridgeCapability = ImageBridgeCapability(),
+    val snapshotChatRoomMembers: ImageBridgeCapability = ImageBridgeCapability(),
+)
+
+@Serializable
 data class ImageBridgeHealthResult(
     val reachable: Boolean,
     val running: Boolean,
@@ -30,5 +43,6 @@ data class ImageBridgeHealthResult(
     val checks: List<ImageBridgeHealthCheck> = emptyList(),
     val discoveryInstallAttempted: Boolean = false,
     val discoveryHooks: List<ImageBridgeDiscoveryHook> = emptyList(),
+    val capabilities: ImageBridgeCapabilities = ImageBridgeCapabilities(),
     val error: String? = null,
 )

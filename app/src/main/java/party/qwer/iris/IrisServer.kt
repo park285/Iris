@@ -53,7 +53,8 @@ internal class IrisServer(
     private val memberRepo: MemberRepository? = null,
     private val sseEventBus: SseEventBus? = null,
     private val roomEventStore: RoomEventStore? = null,
-    private val chatRoomIntrospectProvider: ((Long) -> String?)? = null,
+    private val chatRoomIntrospectProvider: ((Long) -> String)? = null,
+    private val memberNicknameDiagnosticsProvider: ((Long) -> MemberNicknameDiagnostics?)? = null,
     private val bindHost: String = DEFAULT_BIND_HOST,
     private val nettyWorkerThreads: Int = DEFAULT_NETTY_WORKER_THREADS,
 ) {
@@ -174,7 +175,13 @@ internal class IrisServer(
 
     private fun Application.configureRouting() {
         routing {
-            installHealthRoutes(authSupport, bridgeHealthProvider, configReadinessProvider, chatRoomIntrospectProvider)
+            installHealthRoutes(
+                authSupport = authSupport,
+                bridgeHealthProvider = bridgeHealthProvider,
+                configReadinessProvider = configReadinessProvider,
+                chatRoomIntrospectProvider = chatRoomIntrospectProvider,
+                memberNicknameDiagnosticsProvider = memberNicknameDiagnosticsProvider,
+            )
             installConfigRoutes(authSupport, configManager, serverJson)
             installReplyRoutes(
                 authSupport = authSupport,

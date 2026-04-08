@@ -175,9 +175,27 @@ class ProtectedRouteRoleSeparationTest {
                 client.get("/diagnostics/bridge") {
                     applySignedHeaders(path = "/diagnostics/bridge", method = "GET", secret = roleSeparatedConfig.inboundSigningSecret)
                 }
+            val controlChatroomResponse =
+                client.get("/diagnostics/chatroom-fields/123") {
+                    applySignedHeaders(
+                        path = "/diagnostics/chatroom-fields/123",
+                        method = "GET",
+                        secret = roleSeparatedConfig.botControlToken,
+                    )
+                }
+            val inboundChatroomResponse =
+                client.get("/diagnostics/chatroom-fields/123") {
+                    applySignedHeaders(
+                        path = "/diagnostics/chatroom-fields/123",
+                        method = "GET",
+                        secret = roleSeparatedConfig.inboundSigningSecret,
+                    )
+                }
 
             assertEquals(HttpStatusCode.OK, controlResponse.status)
             assertEquals(HttpStatusCode.Unauthorized, inboundResponse.status)
+            assertEquals(HttpStatusCode.OK, controlChatroomResponse.status)
+            assertEquals(HttpStatusCode.Unauthorized, inboundChatroomResponse.status)
         }
 
     private fun io.ktor.client.request.HttpRequestBuilder.applySignedHeaders(

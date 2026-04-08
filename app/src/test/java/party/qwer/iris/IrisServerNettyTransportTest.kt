@@ -6,6 +6,8 @@ import okhttp3.Request
 import party.qwer.iris.http.SseEventEnvelope
 import party.qwer.iris.http.initialSseFrames
 import party.qwer.iris.http.isBridgeReady
+import party.qwer.iris.model.ImageBridgeCapabilities
+import party.qwer.iris.model.ImageBridgeCapability
 import party.qwer.iris.model.ImageBridgeDiscoveryHook
 import party.qwer.iris.model.ImageBridgeHealthResult
 import java.nio.file.Files
@@ -56,6 +58,11 @@ class IrisServerNettyTransportTest {
                 specReady = true,
                 restartCount = 0,
                 discoveryInstallAttempted = true,
+                capabilities =
+                    ImageBridgeCapabilities(
+                        inspectChatRoom = ImageBridgeCapability(supported = true, ready = true),
+                        snapshotChatRoomMembers = ImageBridgeCapability(supported = true, ready = true),
+                    ),
                 discoveryHooks =
                     listOf(
                         ImageBridgeDiscoveryHook(
@@ -104,6 +111,11 @@ class IrisServerNettyTransportTest {
                 specReady = true,
                 restartCount = 0,
                 discoveryInstallAttempted = true,
+                capabilities =
+                    ImageBridgeCapabilities(
+                        inspectChatRoom = ImageBridgeCapability(supported = true, ready = true),
+                        snapshotChatRoomMembers = ImageBridgeCapability(supported = true, ready = true),
+                    ),
                 discoveryHooks =
                     listOf(
                         ImageBridgeDiscoveryHook(
@@ -141,6 +153,11 @@ class IrisServerNettyTransportTest {
                 specReady = true,
                 restartCount = 0,
                 discoveryInstallAttempted = true,
+                capabilities =
+                    ImageBridgeCapabilities(
+                        inspectChatRoom = ImageBridgeCapability(supported = true, ready = true),
+                        snapshotChatRoomMembers = ImageBridgeCapability(supported = true, ready = true),
+                    ),
                 discoveryHooks =
                     listOf(
                         ImageBridgeDiscoveryHook(
