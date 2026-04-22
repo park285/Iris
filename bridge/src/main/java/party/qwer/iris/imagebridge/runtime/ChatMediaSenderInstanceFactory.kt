@@ -44,7 +44,12 @@ internal class ChatMediaSenderInstanceFactory(
             senderConstructorCache.computeIfAbsent(chatRoom.javaClass) { chatRoomClass ->
                 resolveSenderConstructor(chatRoomClass)
             }
-        return constructor.newInstance(chatRoom, threadId, sendWithThreadProxy, attachmentDecoratorProxy)
+        return constructor.newInstance(
+            chatRoom,
+            normalizedThreadIdArgument(constructor.parameterTypes[1], threadId),
+            sendWithThreadProxy,
+            attachmentDecoratorProxy,
+        )
     }
 
     private fun resolveSenderConstructor(chatRoomClass: Class<*>): Constructor<*> {
@@ -53,7 +58,7 @@ internal class ChatMediaSenderInstanceFactory(
                 val parameterTypes = constructor.parameterTypes
                 parameterTypes.size == 4 &&
                     parameterTypes[0].isAssignableFrom(chatRoomClass) &&
-                    parameterTypes[1] == java.lang.Long::class.java &&
+                    isThreadIdParameterType(parameterTypes[1]) &&
                     parameterTypes[2] == registry.function0Class &&
                     parameterTypes[3] == registry.function1Class
             }
@@ -92,6 +97,18 @@ internal class ChatMediaSenderInstanceFactory(
         }
         return bestCandidates.single()
     }
+
+    private fun isThreadIdParameterType(parameterType: Class<*>): Boolean = parameterType == java.lang.Long::class.java || parameterType == java.lang.Long.TYPE
+
+    private fun normalizedThreadIdArgument(
+        parameterType: Class<*>,
+        threadId: Long?,
+    ): Any? =
+        if (parameterType == java.lang.Long.TYPE) {
+            threadId ?: 0L
+        } else {
+            threadId
+        }
 
     private fun typeDistance(
         actualType: Class<*>,

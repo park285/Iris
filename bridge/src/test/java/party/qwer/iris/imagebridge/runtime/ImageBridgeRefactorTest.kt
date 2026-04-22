@@ -555,6 +555,24 @@ class KakaoSendInvocationFactoryTest {
         assertEquals(1, ExactPreferredMediaSender.exactCalls)
         assertEquals(0, ExactPreferredMediaSender.baseCalls)
     }
+
+    @Test
+    fun `sendSingle accepts sender constructor with primitive long thread parameter`() {
+        PrimitiveThreadParamMediaSender.reset()
+        val factory =
+            KakaoSendInvocationFactory(
+                registry = buildPrimitiveThreadParamRegistry(),
+            )
+
+        factory.sendSingle(
+            chatRoom = FakeChatRoom(),
+            imagePath = "/tmp/primitive-thread.png",
+            threadId = null,
+            threadScope = null,
+        )
+
+        assertEquals(listOf("/tmp/primitive-thread.png"), PrimitiveThreadParamMediaSender.sentPaths)
+    }
 }
 
 class ThreadedChatMediaEntryInvokerTest {
@@ -1598,6 +1616,51 @@ private class ExactPreferredMediaSender {
     }
 }
 
+private class PrimitiveThreadParamMediaSender(
+    chatRoom: FakeChatRoom,
+    threadId: Long,
+    sendWithThread: () -> Boolean,
+    attachmentDecorator: (JSONObject) -> JSONObject?,
+) {
+    companion object {
+        val sentPaths = mutableListOf<String>()
+
+        fun reset() {
+            sentPaths.clear()
+        }
+    }
+
+    init {
+        check(chatRoom.hashCode() != 0 || chatRoom.hashCode() == 0)
+        check(threadId == 0L)
+        check(!sendWithThread())
+        check(attachmentDecorator(JSONObject()) != null)
+    }
+
+    fun n(
+        mediaItem: FakeMediaItem,
+        suppressAnimation: Boolean,
+    ) {
+        check(!suppressAnimation)
+        sentPaths += mediaItem.path
+    }
+
+    @Suppress("UNUSED_PARAMETER")
+    fun p(
+        uris: List<Any>,
+        type: FakeMessageType,
+        message: String?,
+        attachment: JSONObject?,
+        forwardExtra: JSONObject?,
+        writeType: FakeWriteType,
+        shareOriginal: Boolean,
+        highQuality: Boolean,
+        listener: FakeListener?,
+    ) {
+        error("not used in this test")
+    }
+}
+
 private abstract class AbstractInheritedMediaSender(
     chatRoom: FakeBaseChatRoom,
     threadId: Long?,
@@ -1900,6 +1963,75 @@ private fun buildExactPreferredRegistry(): KakaoClassRegistry {
         messageTypeClass = FakeMessageType::class.java,
         chatRoomManagerClass = FakeChatRoomManager::class.java,
         chatRoomClass = FakeBaseChatRoom::class.java,
+        singleSendMethod = singleSend,
+        multiSendMethod = multiSend,
+        mediaItemConstructor = mediaItemCtor,
+        masterDbSingletonField = masterDbField,
+        roomDaoMethod = roomDaoMethod,
+        entityLookupMethod = entityLookupMethod,
+        broadRoomResolverMethod = broadResolver,
+        directRoomResolverMethod = directResolver,
+        photoType = FakeMessageType.Photo,
+        multiPhotoType = FakeMessageType.MultiPhoto,
+        writeTypeNone = FakeWriteType.None,
+    )
+}
+
+private fun buildPrimitiveThreadParamRegistry(): KakaoClassRegistry {
+    val singleSend =
+        PrimitiveThreadParamMediaSender::class.java.getMethod(
+            "n",
+            FakeMediaItem::class.java,
+            Boolean::class.javaPrimitiveType,
+        )
+    val multiSend =
+        PrimitiveThreadParamMediaSender::class.java.getMethod(
+            "p",
+            List::class.java,
+            FakeMessageType::class.java,
+            String::class.java,
+            JSONObject::class.java,
+            JSONObject::class.java,
+            FakeWriteType::class.java,
+            Boolean::class.javaPrimitiveType,
+            Boolean::class.javaPrimitiveType,
+            FakeListener::class.java,
+        )
+    val mediaItemCtor =
+        FakeMediaItem::class.java.getConstructor(
+            String::class.java,
+            Long::class.javaPrimitiveType,
+        )
+    val masterDbField = FakeMasterDatabase::class.java.getDeclaredField("INSTANCE")
+    val roomDaoMethod = FakeMasterDatabase::class.java.getMethod("O")
+    val entityLookupMethod =
+        FakeRoomDao::class.java.getMethod(
+            "h",
+            Long::class.javaPrimitiveType,
+        )
+    val broadResolver =
+        FakeChatRoomManager::class.java.getMethod(
+            "e0",
+            Long::class.javaPrimitiveType,
+            Boolean::class.javaPrimitiveType,
+            Boolean::class.javaPrimitiveType,
+        )
+    val directResolver =
+        FakeChatRoomManager::class.java.getMethod(
+            "d0",
+            Long::class.javaPrimitiveType,
+        )
+    return KakaoClassRegistry(
+        mediaItemClass = FakeMediaItem::class.java,
+        function0Class = kotlin.jvm.functions.Function0::class.java,
+        function1Class = kotlin.jvm.functions.Function1::class.java,
+        masterDatabaseClass = FakeMasterDatabase::class.java,
+        writeTypeClass = FakeWriteType::class.java,
+        listenerClass = FakeListener::class.java,
+        chatMediaSenderClass = PrimitiveThreadParamMediaSender::class.java,
+        messageTypeClass = FakeMessageType::class.java,
+        chatRoomManagerClass = FakeChatRoomManager::class.java,
+        chatRoomClass = FakeChatRoomModel::class.java,
         singleSendMethod = singleSend,
         multiSendMethod = multiSend,
         mediaItemConstructor = mediaItemCtor,
