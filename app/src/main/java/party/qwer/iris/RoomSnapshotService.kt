@@ -35,7 +35,16 @@ internal class RoomSnapshotService(
             } else {
                 emptyList()
             }
-        val batchNicknames = resolveNicknamesBatch(memberIds, linkId, roomId)
+        val batchNicknames =
+            if (linkId != null) {
+                memberIdentity
+                    .loadOpenNicknamesBatch(linkId, memberIds.toList())
+                    .mapNotNull { (userId, nickname) ->
+                        nickname?.trim()?.takeIf { it.isNotBlank() }?.let { userId to it }
+                    }.toMap(linkedMapOf())
+            } else {
+                resolveNicknamesBatch(memberIds, linkId, roomId)
+            }
 
         val snapshot =
             snapshotAssembler

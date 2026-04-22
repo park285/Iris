@@ -106,6 +106,43 @@ class MemberIdentityObserverTest {
         }
 
     @Test
+    fun `observer ignores nickname changes for non open rooms`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val reader =
+                StubMemberIdentitySnapshotReader(
+                    rooms = listOf(100L),
+                    snapshots =
+                        mapOf(
+                            100L to
+                                listOf(
+                                    snapshot(chatId = 100L, nicknames = mapOf(1L to "Alice"), openChat = false),
+                                    snapshot(chatId = 100L, nicknames = mapOf(1L to "Alice Updated"), openChat = false),
+                                ),
+                        ),
+                )
+            val eventStore = RecordingMemberIdentityRoomEventStore()
+            val observer =
+                MemberIdentityObserver(
+                    roomSnapshotReader = reader,
+                    emitter = SnapshotEventEmitter(SseEventBus(bufferSize = 16), TestRoutingGateway(), eventStore = eventStore),
+                    stateStore = InMemoryMemberIdentityStateStore(),
+                    intervalMs = 100L,
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+
+            observer.start()
+            advanceTimeBy(60L)
+            runCurrent()
+            advanceTimeBy(60L)
+            runCurrent()
+            observer.stopSuspend()
+
+            assertEquals(0, eventStore.insertedEvents.count { it.eventType == "nickname_change" })
+        }
+
+    @Test
     fun `observer seeds missing rooms before polling so first later rename emits`() =
         runTest {
             val dispatcher = StandardTestDispatcher(testScheduler)
@@ -1326,10 +1363,11 @@ class MemberIdentityObserverTest {
         chatId: Long,
         nicknames: Map<Long, String>,
         memberIds: Set<Long> = nicknames.keys,
+        openChat: Boolean = true,
     ): RoomSnapshotData =
         RoomSnapshotData(
             chatId = ChatId(chatId),
-            linkId = LinkId(chatId + 1000L),
+            linkId = if (openChat) LinkId(chatId + 1000L) else null,
             memberIds = memberIds.map(::UserId).toSet(),
             blindedIds = emptySet(),
             nicknames = nicknames.map { (userId, nickname) -> UserId(userId) to nickname }.toMap(),

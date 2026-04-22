@@ -19,7 +19,14 @@ internal class IngressNicknameTracker(
             explicitNulls = false
         },
 ) {
+    private data class PendingNicknameChange(
+        val previousNickname: String,
+        val candidateNickname: String,
+        val sameObservationCount: Int,
+    )
+
     private val knownNicknames = linkedMapOf<ChatId, MutableMap<UserId, String>>()
+    private val pendingNicknames = linkedMapOf<ChatId, MutableMap<UserId, PendingNicknameChange>>()
     private val lastAlertedNicknames = linkedMapOf<ChatId, MutableMap<UserId, String>>()
     private val lastLoadedEventIdByChat = linkedMapOf<ChatId, Long>()
 
@@ -45,6 +52,7 @@ internal class IngressNicknameTracker(
         val roomKey = ChatId(chatId)
         val userKey = UserId(userId)
         val roomState = knownNicknames.getOrPut(roomKey) { linkedMapOf() }
+        val roomPending = pendingNicknames.getOrPut(roomKey) { linkedMapOf() }
         val alertedNickname = latestAlertedNickname(roomKey, userKey)
         val knownNickname = roomState[userKey]?.trim().orEmpty()
         val previousNickname =
@@ -57,7 +65,26 @@ internal class IngressNicknameTracker(
 
         if (previousNickname.isNullOrBlank()) {
             roomState[userKey] = resolvedNickname
+            roomPending.remove(userKey)
             stateStore.save(roomKey, roomState)
+            cleanupPendingRoom(roomKey)
+            return
+        }
+
+        val pending =
+            roomPending[userKey]
+                ?.takeIf { candidate ->
+                    candidate.previousNickname == previousNickname &&
+                        candidate.candidateNickname == resolvedNickname
+                }
+        val updatedPending =
+            PendingNicknameChange(
+                previousNickname = previousNickname,
+                candidateNickname = resolvedNickname,
+                sameObservationCount = (pending?.sameObservationCount ?: 0) + 1,
+            )
+        roomPending[userKey] = updatedPending
+        if (updatedPending.sameObservationCount < REQUIRED_CONFIRMATION_OBSERVATIONS) {
             return
         }
 
@@ -76,8 +103,10 @@ internal class IngressNicknameTracker(
             )
         }.onSuccess {
             roomState[userKey] = resolvedNickname
+            roomPending.remove(userKey)
             stateStore.save(roomKey, roomState)
             rememberAlertedNickname(roomKey, userKey, resolvedNickname)
+            cleanupPendingRoom(roomKey)
         }.onFailure { error ->
             IrisLogger.error(
                 "[IngressNicknameTracker] Failed to emit nickname change chatId=$chatId, userId=$userId: ${error.message}",
@@ -137,7 +166,14 @@ internal class IngressNicknameTracker(
         lastLoadedEventIdByChat[chatId] = afterId
     }
 
+    private fun cleanupPendingRoom(chatId: ChatId) {
+        if (pendingNicknames[chatId].isNullOrEmpty()) {
+            pendingNicknames.remove(chatId)
+        }
+    }
+
     private companion object {
         const val NICKNAME_HISTORY_SCAN_LIMIT = 2_000
+        const val REQUIRED_CONFIRMATION_OBSERVATIONS = 3
     }
 }

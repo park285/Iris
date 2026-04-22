@@ -106,6 +106,15 @@ class MemberRepository internal constructor(
             chatId = ChatId(chatId),
         ) ?: userId.toString()
 
+    fun resolveOpenNickname(
+        userId: Long,
+        linkId: Long,
+    ): String? =
+        memberIdentity
+            .resolveOpenNickname(UserId(userId), LinkId(linkId))
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+
     fun roomStats(
         chatId: Long,
         period: String?,

@@ -7,6 +7,7 @@ import party.qwer.iris.MemberRepository
 internal class SenderNameResolver(
     private val db: ChatLogRepository,
     private val memberRepo: MemberRepository?,
+    private val canonicalOpenNicknameResolver: ((userId: Long, linkId: Long) -> String?)? = null,
 ) {
     private val senderNameCache = lruMap<SenderNameCacheKey, String>(256)
 
@@ -31,6 +32,20 @@ internal class SenderNameResolver(
             chatId = chatId,
             linkId = linkId,
         ) ?: db.resolveSenderName(userId)
+
+    fun resolveCanonicalOpenNicknameFresh(
+        userId: Long,
+        linkId: Long?,
+    ): String {
+        val resolvedLinkId = linkId ?: return userId.toString()
+        canonicalOpenNicknameResolver?.invoke(userId, resolvedLinkId)?.let { resolved ->
+            return resolved.trim().takeIf { it.isNotBlank() } ?: userId.toString()
+        }
+        memberRepo?.let { repo ->
+            return repo.resolveOpenNickname(userId, resolvedLinkId) ?: userId.toString()
+        }
+        return db.resolveSenderName(userId)
+    }
 
     private fun <K, V : Any> resolveWithCache(
         cache: LinkedHashMap<K, V>,

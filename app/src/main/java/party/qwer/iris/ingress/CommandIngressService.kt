@@ -254,38 +254,35 @@ internal class CommandIngressService(
             return
         }
 
-        observeNicknameChangeFresh(
-            chatId = logEntry.chatId,
-            userId = logEntry.userId,
-            timestamp = logEntry.createdAt?.toLongOrNull() ?: System.currentTimeMillis() / 1000,
-        )
-        scheduleNicknameRechecks(logEntry.chatId, logEntry.userId)
+        val metadata = roomMetadataResolver.resolveResult(logEntry.chatId)
+        val linkId = metadata.metadata.linkId.toLongOrNull()
+
+        if (linkId != null) {
+            observeNicknameChangeFresh(
+                chatId = logEntry.chatId,
+                userId = logEntry.userId,
+                linkId = linkId,
+                timestamp = logEntry.createdAt?.toLongOrNull() ?: System.currentTimeMillis() / 1000,
+            )
+        }
+        if (linkId != null || !metadata.resolved) {
+            scheduleNicknameRechecks(logEntry.chatId, logEntry.userId)
+        }
         scheduleRoomRechecks(logEntry.chatId)
     }
 
     private fun observeNicknameChangeFresh(
         chatId: Long,
         userId: Long,
+        linkId: Long,
         timestamp: Long,
     ) {
         val tracker = nicknameTracker ?: return
-
-        val roomMetadata =
-            runCatching {
-                roomMetadataResolver.resolve(chatId)
-            }.getOrElse { error ->
-                IrisLogger.warn(
-                    "[CommandIngressService] Failed to resolve room metadata for nickname check " +
-                        "chatId=$chatId, userId=$userId: ${error.message}",
-                )
-                return
-            }
         val currentNickname =
             runCatching {
-                senderNameResolver.resolveFresh(
-                    chatId = chatId,
+                senderNameResolver.resolveCanonicalOpenNicknameFresh(
                     userId = userId,
-                    linkId = roomMetadata.linkId.toLongOrNull(),
+                    linkId = linkId,
                 )
             }.getOrElse { error ->
                 IrisLogger.warn(
@@ -299,7 +296,7 @@ internal class CommandIngressService(
             tracker.observe(
                 chatId = chatId,
                 userId = userId,
-                linkId = roomMetadata.linkId.toLongOrNull(),
+                linkId = linkId,
                 currentNickname = currentNickname,
                 timestamp = timestamp,
             )
@@ -325,9 +322,18 @@ internal class CommandIngressService(
                         for (targetDelayMs in NICKNAME_RECHECK_DELAYS_MS) {
                             delay((targetDelayMs - elapsedMs).coerceAtLeast(0L))
                             elapsedMs = targetDelayMs
+                            val metadata = roomMetadataResolver.resolveResult(chatId)
+                            val linkId = metadata.metadata.linkId.toLongOrNull()
+                            if (!metadata.resolved) {
+                                continue
+                            }
+                            if (linkId == null) {
+                                break
+                            }
                             observeNicknameChangeFresh(
                                 chatId = chatId,
                                 userId = userId,
+                                linkId = linkId,
                                 timestamp = System.currentTimeMillis() / 1000,
                             )
                         }

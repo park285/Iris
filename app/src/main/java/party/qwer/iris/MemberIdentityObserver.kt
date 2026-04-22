@@ -313,6 +313,9 @@ internal class MemberIdentityObserver(
 
     private fun handlePresentSnapshot(resolvedSnapshot: ResolvedRoomSnapshot) {
         val snapshot = resolvedSnapshot.snapshot
+        if (snapshot.linkId == null) {
+            return
+        }
         val chatStates = nicknameStates.getOrPut(snapshot.chatId) { linkedMapOf() }
         val chatConfirmed = confirmedNicknames.getOrPut(snapshot.chatId) { linkedMapOf() }
         val events = mutableListOf<NicknameChangeEvent>()
@@ -374,7 +377,7 @@ internal class MemberIdentityObserver(
                         events +=
                             NicknameChangeEvent(
                                 chatId = snapshot.chatId.value,
-                                linkId = snapshot.linkId?.value,
+                                linkId = snapshot.linkId.value,
                                 userId = userId.value,
                                 oldNickname = decision.oldNickname,
                                 newNickname = decision.newNickname,
@@ -412,9 +415,10 @@ internal class MemberIdentityObserver(
         if (latestAlerted == confirmedNickname) {
             return null
         }
+        val linkId = snapshot.linkId ?: return null
         return NicknameChangeEvent(
             chatId = snapshot.chatId.value,
-            linkId = snapshot.linkId?.value,
+            linkId = linkId.value,
             userId = userId.value,
             oldNickname = latestAlerted,
             newNickname = confirmedNickname,
