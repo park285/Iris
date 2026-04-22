@@ -1,5 +1,6 @@
 package party.qwer.iris
 
+import party.qwer.iris.config.ConfigPathPolicy
 import java.io.ByteArrayInputStream
 import java.io.InputStream
 import java.nio.file.Files
@@ -49,7 +50,7 @@ internal data class VerifiedImageHandleStagingPolicy(
     val maxInMemoryBytes: Int = 64 * 1024,
     val spillDirectory: Path =
         java.nio.file.Paths
-            .get(System.getProperty("java.io.tmpdir") ?: "."),
+            .get(ConfigPathPolicy.resolveVerifiedImageSpillDirectory()),
 ) {
     init {
         require(maxInMemoryBytes > 0) { "maxInMemoryBytes must be positive" }

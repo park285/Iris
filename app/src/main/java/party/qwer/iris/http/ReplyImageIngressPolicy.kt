@@ -9,11 +9,10 @@ internal data class ReplyImageIngressPolicy(
     companion object {
         fun fromEnv(
             env: Map<String, String> = System.getenv(),
-            defaultTmpDir: String = System.getProperty("java.io.tmpdir") ?: ".",
         ): ReplyImageIngressPolicy =
             ReplyImageIngressPolicy(
                 imagePolicy = ReplyImagePolicy(),
-                bufferingPolicy = RequestBodyBufferingPolicy.fromEnv(env, defaultTmpDir).copy(maxInMemoryBytes = 1),
+                bufferingPolicy = RequestBodyBufferingPolicy.fromEnv(env).copy(maxInMemoryBytes = 1),
             )
     }
 }

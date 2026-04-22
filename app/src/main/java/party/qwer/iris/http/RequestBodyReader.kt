@@ -7,6 +7,7 @@ import io.ktor.server.request.receiveChannel
 import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readAvailable
 import party.qwer.iris.requestRejected
+import party.qwer.iris.config.ConfigPathPolicy
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.nio.file.Files
@@ -181,7 +182,7 @@ internal data class RequestBodyBufferingPolicy(
     val maxInMemoryBytes: Int = MAX_IN_MEMORY_BODY_BYTES,
     val spillDirectory: Path =
         java.nio.file.Paths
-            .get(System.getProperty("java.io.tmpdir")),
+            .get(ConfigPathPolicy.resolveRequestBodySpillDirectory()),
     val spillStorageFactory: (Path) -> RequestBodyStorage = ::SpillFileRequestBodyStorage,
 ) {
     init {
@@ -194,7 +195,6 @@ internal data class RequestBodyBufferingPolicy(
 
         fun fromEnv(
             env: Map<String, String> = System.getenv(),
-            defaultTmpDir: String = System.getProperty("java.io.tmpdir") ?: ".",
         ): RequestBodyBufferingPolicy {
             val configuredMaxInMemoryBytes =
                 env[MAX_IN_MEMORY_ENV]
@@ -206,7 +206,7 @@ internal data class RequestBodyBufferingPolicy(
                 env[SPILL_DIR_ENV]
                     ?.trim()
                     .orEmpty()
-                    .ifBlank { defaultTmpDir }
+                    .ifBlank { ConfigPathPolicy.resolveRequestBodySpillDirectory(env) }
             return RequestBodyBufferingPolicy(
                 maxInMemoryBytes = configuredMaxInMemoryBytes,
                 spillDirectory =

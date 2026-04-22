@@ -45,5 +45,7 @@ class ConfigPathPolicyTest {
 
         assertEquals("/custom/iris/config.json", ConfigPathPolicy.resolveConfigPath(env))
         assertEquals("/custom/iris/logs", ConfigPathPolicy.resolveLogDirectory(env))
+        assertEquals("/custom/iris/spool/request-bodies", ConfigPathPolicy.resolveRequestBodySpillDirectory(env))
+        assertEquals("/custom/iris/spool/verified-image-handles", ConfigPathPolicy.resolveVerifiedImageSpillDirectory(env))
     }
 }

@@ -1,5 +1,6 @@
 package party.qwer.iris
 
+import party.qwer.iris.config.ConfigPathPolicy
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -63,5 +64,15 @@ class VerifiedImagePayloadHandleTest {
         assertEquals(1, Files.list(spillDir).use { stream -> stream.count() })
         handle.close()
         assertEquals(0, Files.list(spillDir).use { stream -> stream.count() })
+    }
+
+    @Test
+    fun `verified image staging policy defaults to Iris persistent spill directory`() {
+        val policy = VerifiedImageHandleStagingPolicy()
+
+        assertEquals(
+            java.nio.file.Path.of(ConfigPathPolicy.resolveVerifiedImageSpillDirectory()),
+            policy.spillDirectory,
+        )
     }
 }

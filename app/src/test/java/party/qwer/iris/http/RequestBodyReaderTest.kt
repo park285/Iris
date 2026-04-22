@@ -10,6 +10,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.supervisorScope
 import party.qwer.iris.ApiRequestException
+import party.qwer.iris.config.ConfigPathPolicy
 import party.qwer.iris.model.ConfigRequest
 import party.qwer.iris.sha256Hex
 import java.nio.file.Files
@@ -29,7 +30,6 @@ class RequestBodyReaderTest {
                         "IRIS_REQUEST_BODY_MAX_IN_MEMORY_BYTES" to "8192",
                         "IRIS_REQUEST_BODY_SPILL_DIR" to "/tmp/iris-request-bodies",
                     ),
-                defaultTmpDir = "/tmp/default",
             )
 
         assertEquals(8192, policy.maxInMemoryBytes)
@@ -43,12 +43,19 @@ class RequestBodyReaderTest {
                 env =
                     mapOf(
                         "IRIS_REQUEST_BODY_MAX_IN_MEMORY_BYTES" to "0",
+                        "IRIS_DATA_DIR" to "/persistent/iris",
                     ),
-                defaultTmpDir = "/tmp/default",
             )
 
         assertEquals(64 * 1024, policy.maxInMemoryBytes)
-        assertEquals(Path.of("/tmp/default"), policy.spillDirectory)
+        assertEquals(Path.of("/persistent/iris/spool/request-bodies"), policy.spillDirectory)
+    }
+
+    @Test
+    fun `buffering policy uses Iris spill path when env is empty`() {
+        val policy = RequestBodyBufferingPolicy.fromEnv(env = emptyMap())
+
+        assertEquals(Path.of(ConfigPathPolicy.resolveRequestBodySpillDirectory(emptyMap())), policy.spillDirectory)
     }
 
     @Test
@@ -196,19 +203,25 @@ class RequestBodyReaderTest {
     fun `spilled body decodes json from stream without requiring utf8 body read`() =
         runBlocking {
             val payload = """{"endpoint":"https://example.com/webhook"}"""
+            val spillDir = Files.createTempDirectory("request-body-json-spill-")
 
-            readBodyWithStreamingDigest(
-                bodyChannel = ByteReadChannel(payload),
-                declaredContentLength = payload.length.toLong(),
-                maxBodyBytes = 256 * 1024,
-                bufferingPolicy =
-                    RequestBodyBufferingPolicy(
-                        maxInMemoryBytes = 8,
-                        spillStorageFactory = ::NoStringReadSpillStorage,
-                    ),
-            ).use { result ->
-                val decoded = result.decodeJson(kotlinx.serialization.json.Json { ignoreUnknownKeys = true }, ConfigRequest.serializer())
-                assertEquals("https://example.com/webhook", decoded.endpoint)
+            try {
+                readBodyWithStreamingDigest(
+                    bodyChannel = ByteReadChannel(payload),
+                    declaredContentLength = payload.length.toLong(),
+                    maxBodyBytes = 256 * 1024,
+                    bufferingPolicy =
+                        RequestBodyBufferingPolicy(
+                            maxInMemoryBytes = 8,
+                            spillDirectory = spillDir,
+                            spillStorageFactory = ::NoStringReadSpillStorage,
+                        ),
+                ).use { result ->
+                    val decoded = result.decodeJson(kotlinx.serialization.json.Json { ignoreUnknownKeys = true }, ConfigRequest.serializer())
+                    assertEquals("https://example.com/webhook", decoded.endpoint)
+                }
+            } finally {
+                spillDir.deleteRecursively()
             }
         }
 

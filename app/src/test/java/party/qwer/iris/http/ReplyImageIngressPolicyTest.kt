@@ -14,7 +14,6 @@ class ReplyImageIngressPolicyTest {
                         "IRIS_REQUEST_BODY_MAX_IN_MEMORY_BYTES" to "65536",
                         "IRIS_REQUEST_BODY_SPILL_DIR" to "/tmp/iris-reply-spill",
                     ),
-                defaultTmpDir = "/var/tmp",
             )
 
         assertEquals(1, policy.bufferingPolicy.maxInMemoryBytes)
