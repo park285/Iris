@@ -72,6 +72,34 @@ class ConfigPersistenceTest {
     }
 
     @Test
+    fun `load rejects invalid webhook endpoint scheme from file`() {
+        val tmpDir = Files.createTempDirectory("iris-persist-invalid-endpoint").toFile()
+        val configPath = tmpDir.resolve("config.json").absolutePath
+        tmpDir.resolve("config.json").writeText("""{"endpoint":"ftp://example.com/webhook"}""")
+        val persistence = createPersistence(configPath)
+
+        val result = persistence.load()
+
+        assertIs<ConfigLoadResult.Invalid>(result)
+        assertTrue(tmpDir.resolve("config.json.bak").exists())
+        tmpDir.deleteRecursively()
+    }
+
+    @Test
+    fun `load rejects secrets with surrounding whitespace from file`() {
+        val tmpDir = Files.createTempDirectory("iris-persist-invalid-secret").toFile()
+        val configPath = tmpDir.resolve("config.json").absolutePath
+        tmpDir.resolve("config.json").writeText("""{"inboundSigningSecret":" inbound-secret "}""")
+        val persistence = createPersistence(configPath)
+
+        val result = persistence.load()
+
+        assertIs<ConfigLoadResult.Invalid>(result)
+        assertTrue(tmpDir.resolve("config.json.bak").exists())
+        tmpDir.deleteRecursively()
+    }
+
+    @Test
     fun `save writes config and removes temp file`() {
         val tmpDir = Files.createTempDirectory("iris-persist-save").toFile()
         val configPath = tmpDir.resolve("config.json").absolutePath

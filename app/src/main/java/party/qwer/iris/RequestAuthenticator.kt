@@ -16,6 +16,7 @@ internal data class SignaturePrecheck(
     val timestampEpochMs: Long,
     val nonce: String,
     val declaredBodySha256Hex: String,
+    val nonceKey: String,
 )
 
 internal data class SignaturePreverifyResult(
@@ -105,6 +106,11 @@ internal class RequestAuthenticator(
             return SignaturePreverifyResult(AuthResult.UNAUTHORIZED)
         }
 
+        val nonceKey = buildNonceKey(method, path, timestamp, nonce)
+        if (!nonceWindow.tryReserve(nonceKey, now)) {
+            return SignaturePreverifyResult(AuthResult.UNAUTHORIZED)
+        }
+
         return SignaturePreverifyResult(
             result = AuthResult.AUTHORIZED,
             precheck =
@@ -112,6 +118,7 @@ internal class RequestAuthenticator(
                     timestampEpochMs = timestamp,
                     nonce = nonce,
                     declaredBodySha256Hex = normalizedDeclaredBodySha256,
+                    nonceKey = nonceKey,
                 ),
         )
     }
@@ -121,12 +128,16 @@ internal class RequestAuthenticator(
         actualBodySha256Hex: String,
     ): AuthResult {
         val normalizedActualBodySha256 =
-            normalizeBodySha256Hex(actualBodySha256Hex) ?: return AuthResult.UNAUTHORIZED
+            normalizeBodySha256Hex(actualBodySha256Hex) ?: run {
+                nonceWindow.release(precheck.nonceKey)
+                return AuthResult.UNAUTHORIZED
+            }
         if (!precheck.declaredBodySha256Hex.equals(normalizedActualBodySha256, ignoreCase = true)) {
+            nonceWindow.release(precheck.nonceKey)
             return AuthResult.UNAUTHORIZED
         }
 
-        if (!nonceWindow.tryRecord(precheck.nonce, nowEpochMs())) {
+        if (!nonceWindow.commit(precheck.nonceKey, nowEpochMs())) {
             return AuthResult.UNAUTHORIZED
         }
         return AuthResult.AUTHORIZED
@@ -161,6 +172,13 @@ internal class RequestAuthenticator(
 private const val SHA256_HEX_LENGTH = 64
 private const val HEX_DIGITS = "0123456789abcdef"
 private val EMPTY_BODY_SHA256_HEX = sha256Hex(ByteArray(0))
+
+private fun buildNonceKey(
+    method: String,
+    path: String,
+    timestamp: Long,
+    nonce: String,
+): String = "${method.uppercase()}\n$path\n$timestamp\n$nonce"
 
 internal fun signIrisRequest(
     secret: String,

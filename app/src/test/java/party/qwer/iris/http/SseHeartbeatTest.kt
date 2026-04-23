@@ -42,6 +42,25 @@ class SseHeartbeatTest {
     }
 
     @Test
+    fun `initialSseFrames splits multiline payload into multiple data lines`() {
+        val envelope = SseEventEnvelope(id = 7, eventType = "member_event", payload = "line1\nline2", createdAtMs = 0)
+
+        val result = initialSseFrames(listOf(envelope))
+
+        assertTrue(result.contains("data: line1\ndata: line2\n\n"))
+    }
+
+    @Test
+    fun `initialSseFrames sanitizes event type newlines`() {
+        val envelope = SseEventEnvelope(id = 7, eventType = "member\nevent", payload = """{"a":1}""", createdAtMs = 0)
+
+        val result = initialSseFrames(listOf(envelope))
+
+        assertTrue(result.contains("event: member event\n"))
+        assertFalse(result.contains("event: member\nevent\n"))
+    }
+
+    @Test
     fun `initialSseFrames multiple events appear in order after connected`() {
         val envelopes =
             listOf(

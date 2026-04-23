@@ -12,7 +12,10 @@ pub fn canonical_target(path: &str, query: &[(String, String)]) -> String {
     if query.is_empty() {
         return path.to_string();
     }
-    let mut normalized = query.to_vec();
+    let mut normalized = query
+        .iter()
+        .map(|(key, value)| (encode_query_component(key), encode_query_component(value)))
+        .collect::<Vec<_>>();
     normalized.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
     let encoded = normalized
         .into_iter()
@@ -20,6 +23,22 @@ pub fn canonical_target(path: &str, query: &[(String, String)]) -> String {
         .collect::<Vec<_>>()
         .join("&");
     format!("{path}?{encoded}")
+}
+
+fn encode_query_component(value: &str) -> String {
+    value
+        .bytes()
+        .fold(String::with_capacity(value.len()), |mut out, byte| {
+            match byte {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                    out.push(byte as char);
+                }
+                _ => {
+                    let _ = write!(&mut out, "%{byte:02X}");
+                }
+            }
+            out
+        })
 }
 
 #[allow(clippy::too_many_arguments)] // 서명 프로토콜 필드 순서를 그대로 받는 경계 함수
@@ -110,6 +129,21 @@ mod tests {
     #[test]
     fn canonical_target_returns_path_when_no_query() {
         assert_eq!(canonical_target("/health", &[]), "/health");
+    }
+
+    #[test]
+    fn canonical_target_percent_encodes_query_components() {
+        let target = canonical_target(
+            "/query",
+            &[
+                ("symbols".into(), "a&b=c%".into()),
+                ("room name".into(), "한글 채팅".into()),
+            ],
+        );
+        assert_eq!(
+            target,
+            "/query?room%20name=%ED%95%9C%EA%B8%80%20%EC%B1%84%ED%8C%85&symbols=a%26b%3Dc%25"
+        );
     }
 
     #[test]

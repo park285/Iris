@@ -7,7 +7,12 @@ internal class NonceWindow(
     private val maxNonceEntries: Int,
     private val purgeIntervalMs: Long,
 ) {
-    private val nonceTimestamps = LinkedHashMap<String, Long>()
+    private data class NonceEntry(
+        val seenAt: Long,
+        val committed: Boolean,
+    )
+
+    private val nonceEntries = LinkedHashMap<String, NonceEntry>()
     private var lastPurgeAt = 0L
 
     init {
@@ -15,31 +20,61 @@ internal class NonceWindow(
         require(purgeIntervalMs >= 0L) { "purgeIntervalMs must be non-negative" }
     }
 
-    fun tryRecord(
+    fun tryReserve(
         nonce: String,
         now: Long,
     ): Boolean =
         synchronized(this) {
             maybePurge(now)
-            if (nonceTimestamps.containsKey(nonce)) {
+            if (nonceEntries.containsKey(nonce)) {
                 return false
             }
 
-            if (nonceTimestamps.size >= maxNonceEntries) {
+            if (nonceEntries.size >= maxNonceEntries) {
                 purgeExpiredNonces(now)
                 lastPurgeAt = now
-                if (nonceTimestamps.size >= maxNonceEntries) {
+                if (nonceEntries.size >= maxNonceEntries) {
                     return false
                 }
             }
 
-            nonceTimestamps[nonce] = now
+            nonceEntries[nonce] = NonceEntry(seenAt = now, committed = false)
             true
+        }
+
+    fun commit(
+        nonce: String,
+        now: Long,
+    ): Boolean =
+        synchronized(this) {
+            val current = nonceEntries[nonce] ?: return false
+            nonceEntries[nonce] = current.copy(seenAt = now, committed = true)
+            true
+        }
+
+    fun release(nonce: String) {
+        synchronized(this) {
+            val current = nonceEntries[nonce] ?: return
+            if (!current.committed) {
+                nonceEntries.remove(nonce)
+            }
+        }
+    }
+
+    fun tryRecord(
+        nonce: String,
+        now: Long,
+    ): Boolean =
+        synchronized(this) {
+            if (!tryReserve(nonce, now)) {
+                return false
+            }
+            commit(nonce, now)
         }
 
     internal fun size(): Int =
         synchronized(this) {
-            nonceTimestamps.size
+            nonceEntries.size
         }
 
     private fun maybePurge(now: Long) {
@@ -52,6 +87,6 @@ internal class NonceWindow(
 
     private fun purgeExpiredNonces(now: Long) {
         val cutoff = now - maxAgeMs
-        nonceTimestamps.entries.removeIf { (_, seenAt) -> seenAt < cutoff }
+        nonceEntries.entries.removeIf { (_, entry) -> entry.seenAt < cutoff }
     }
 }

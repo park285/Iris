@@ -3,6 +3,7 @@ package party.qwer.iris.http
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -13,6 +14,7 @@ import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import party.qwer.iris.ApiRequestException
 import party.qwer.iris.ConfigManager
 import party.qwer.iris.ConfigProvider
@@ -66,6 +68,7 @@ class ConfigRoutesTest {
                 request = ConfigRequest(endpoint = "https://example.com/webhook"),
             )
 
+        assertTrue(outcome.persisted)
         assertEquals("https://example.com/webhook", configManager.defaultWebhookEndpoint)
         assertTrue(outcome.applied)
         assertFalse(outcome.requiresRestart)
@@ -103,15 +106,59 @@ class ConfigRoutesTest {
                 request = ConfigRequest(port = 4000),
             )
 
-        val response = configManager.configResponse()
+        val response = outcome.response ?: error("expected response for persisted update")
 
         assertEquals(originalPort, configManager.botSocketPort)
         assertEquals(4000, response.user.botHttpPort)
-        assertEquals(originalPort, response.applied.botHttpPort)
+        assertEquals(originalPort, response.runtimeApplied.botHttpPort)
         assertFalse(outcome.applied)
         assertTrue(outcome.requiresRestart)
         configPath.deleteIfExists()
     }
+
+    @Test
+    fun `config post returns persisted response body from atomic update path`() =
+        testApplication {
+            val configPath = temporaryConfigPath("iris-config-routes-http-success")
+            val configManager = ConfigManager(configPath = configPath.toString())
+            try {
+                application {
+                    install(ContentNegotiation) {
+                        json(serverJson)
+                    }
+                    routing {
+                        installConfigRoutes(
+                            authSupport = AuthSupport(party.qwer.iris.RequestAuthenticator(), configRouteConfig),
+                            configManager = configManager,
+                            serverJson = serverJson,
+                        )
+                    }
+                }
+
+                val body = """{"endpoint":"https://example.com/webhook"}"""
+                val response =
+                    client.post("/config/endpoint") {
+                        contentType(ContentType.Application.Json)
+                        setBody(body)
+                        applySignedHeaders(path = "/config/endpoint", body = body)
+                    }
+
+                val payload = serverJson.parseToJsonElement(response.bodyAsText()).jsonObject
+                assertEquals(HttpStatusCode.OK, response.status)
+                assertEquals("endpoint", payload.getValue("name").toString().trim('"'))
+                assertEquals("true", payload.getValue("persisted").toString())
+                assertEquals(
+                    "https://example.com/webhook",
+                    payload.getValue("user").jsonObject.getValue("web_endpoint").toString().trim('"'),
+                )
+                assertEquals(
+                    "https://example.com/webhook",
+                    payload.getValue("runtimeApplied").jsonObject.getValue("web_endpoint").toString().trim('"'),
+                )
+            } finally {
+                configPath.deleteIfExists()
+            }
+        }
 
     @Test
     fun `invalid config signature is rejected before body read`() =

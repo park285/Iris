@@ -6,6 +6,7 @@ import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
+import party.qwer.iris.IrisLogger
 import party.qwer.iris.MemberNicknameDiagnostics
 import party.qwer.iris.internalServerFailure
 import party.qwer.iris.invalidRequest
@@ -38,14 +39,14 @@ internal data class RuntimeConfigReadiness(
     val botControlTokenConfigured: Boolean,
     val bridgeTokenConfigured: Boolean,
     val defaultWebhookEndpointConfigured: Boolean,
+    val bridgeRequired: Boolean = true,
 ) {
     fun bootstrapState(): RuntimeBootstrapState =
         when {
             !inboundSigningSecretConfigured -> RuntimeBootstrapState.Blocked("inbound signing secret not configured")
             !outboundWebhookTokenConfigured -> RuntimeBootstrapState.Blocked("outbound webhook token not configured")
             !botControlTokenConfigured -> RuntimeBootstrapState.Blocked("bot control token not configured")
-            !bridgeTokenConfigured -> RuntimeBootstrapState.Blocked("bridge token not configured")
-            !defaultWebhookEndpointConfigured -> RuntimeBootstrapState.Blocked("webhook endpoint not configured")
+            bridgeRequired && !bridgeTokenConfigured -> RuntimeBootstrapState.Blocked("bridge token not configured")
             else -> RuntimeBootstrapState.Ready
         }
 
@@ -56,13 +57,14 @@ internal data class RuntimeConfigReadiness(
         }
 
     companion object {
-        fun allConfigured(): RuntimeConfigReadiness =
+        fun allConfigured(bridgeRequired: Boolean = true): RuntimeConfigReadiness =
             RuntimeConfigReadiness(
                 inboundSigningSecretConfigured = true,
                 outboundWebhookTokenConfigured = true,
                 botControlTokenConfigured = true,
                 bridgeTokenConfigured = true,
                 defaultWebhookEndpointConfigured = true,
+                bridgeRequired = bridgeRequired,
             )
     }
 }
@@ -93,11 +95,17 @@ internal fun readinessFailureReason(
             return "config not ready: ${bootstrapState.reason}"
         }
     }
-    if (bridgeHealth != null && !isBridgeReady(bridgeHealth)) {
+    val bridgeRequired = configReadiness?.bridgeRequired == true
+    if (bridgeRequired && bridgeHealth != null && !isBridgeReady(bridgeHealth)) {
         return "bridge not ready"
     }
     return null
 }
+
+internal fun readyErrorMessage(
+    rawReason: String,
+    verbose: Boolean,
+): String = if (verbose) rawReason else "not ready"
 
 internal fun Route.installHealthRoutes(
     authSupport: AuthSupport,
@@ -105,6 +113,7 @@ internal fun Route.installHealthRoutes(
     configReadinessProvider: (() -> RuntimeConfigReadiness)? = null,
     chatRoomIntrospectProvider: ((Long) -> String)?,
     memberNicknameDiagnosticsProvider: ((Long) -> MemberNicknameDiagnostics?)? = null,
+    readyVerbose: Boolean = false,
 ) {
     get("/health") {
         call.respondText(HEALTH_OK_JSON, ContentType.Application.Json)
@@ -115,7 +124,13 @@ internal fun Route.installHealthRoutes(
         if (failureReason == null) {
             call.respondText(READY_OK_JSON, ContentType.Application.Json)
         } else {
-            call.respond(HttpStatusCode.ServiceUnavailable, CommonErrorResponse(message = failureReason))
+            if (!readyVerbose) {
+                IrisLogger.warn("[HealthRoutes] /ready failed: $failureReason")
+            }
+            call.respond(
+                HttpStatusCode.ServiceUnavailable,
+                CommonErrorResponse(message = readyErrorMessage(failureReason, readyVerbose)),
+            )
         }
     }
     get("/diagnostics/bridge") {

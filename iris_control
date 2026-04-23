@@ -8,7 +8,7 @@ IRIS_PROCESS_KEYWORD="app_process"
 IRIS_APK_URL="https://github.com/park285/Iris/releases/latest/download/Iris.apk"
 IRIS_APK_PATH="/data/local/tmp/Iris.apk"
 IRIS_APK_LOCAL_FILE="Iris.apk"
-IRIS_MD5_URL="${IRIS_APK_URL}.MD5"
+IRIS_SHA256_URL="${IRIS_APK_URL}.SHA256"
 IRIS_ENV_FILE="${IRIS_ENV_FILE:-}"
 IRIS_CONFIG_PATH="${IRIS_CONFIG_PATH:-/data/local/tmp/config.json}"
 IRIS_ADB_DEVICE="${IRIS_ADB_DEVICE:-${ANDROID_SERIAL:-}}"
@@ -129,8 +129,18 @@ select_adb_device() {
   esac
 }
 
+sh_quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\"'\"'/g")"
+}
+
+env_assign() {
+  local name="$1"
+  local value="$2"
+  printf '%s=%s ' "$name" "$(sh_quote "$value")"
+}
+
 get_iris_http_port() {
-  "${ADB_CMD[@]}" shell "cat '$IRIS_CONFIG_PATH' 2>/dev/null" |
+  "${ADB_CMD[@]}" shell "cat $(sh_quote "$IRIS_CONFIG_PATH") 2>/dev/null" |
     sed -n 's/.*"botHttpPort"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' |
     head -n 1
 }
@@ -185,9 +195,19 @@ iris_status() {
 
 build_remote_runtime_command() {
   local redirect_suffix="${1:-}"
-  cat <<EOF
-IRIS_CONFIG_PATH="$IRIS_CONFIG_PATH" IRIS_ALLOW_CLEARTEXT_HTTP="$IRIS_ALLOW_CLEARTEXT_HTTP" IRIS_WEBHOOK_TRANSPORT_SECURITY_MODE="$IRIS_WEBHOOK_TRANSPORT_SECURITY_MODE" IRIS_WEBHOOK_TRANSPORT="$IRIS_WEBHOOK_TRANSPORT" IRIS_WEBHOOK_TOKEN="$IRIS_WEBHOOK_TOKEN" IRIS_BOT_TOKEN="$IRIS_BOT_TOKEN" IRIS_LOG_LEVEL="$IRIS_LOG_LEVEL" IRIS_BIND_HOST="$IRIS_BIND_HOST" IRIS_ROOM_EVENT_RETENTION_MS="$IRIS_ROOM_EVENT_RETENTION_MS" CLASSPATH="$IRIS_APK_PATH" app_process / party.qwer.iris.Main$redirect_suffix
-EOF
+  {
+    env_assign IRIS_CONFIG_PATH "$IRIS_CONFIG_PATH"
+    env_assign IRIS_ALLOW_CLEARTEXT_HTTP "$IRIS_ALLOW_CLEARTEXT_HTTP"
+    env_assign IRIS_WEBHOOK_TRANSPORT_SECURITY_MODE "$IRIS_WEBHOOK_TRANSPORT_SECURITY_MODE"
+    env_assign IRIS_WEBHOOK_TRANSPORT "$IRIS_WEBHOOK_TRANSPORT"
+    env_assign IRIS_WEBHOOK_TOKEN "$IRIS_WEBHOOK_TOKEN"
+    env_assign IRIS_BOT_TOKEN "$IRIS_BOT_TOKEN"
+    env_assign IRIS_LOG_LEVEL "$IRIS_LOG_LEVEL"
+    env_assign IRIS_BIND_HOST "$IRIS_BIND_HOST"
+    env_assign IRIS_ROOM_EVENT_RETENTION_MS "$IRIS_ROOM_EVENT_RETENTION_MS"
+    env_assign CLASSPATH "$IRIS_APK_PATH"
+    printf 'app_process / party.qwer.iris.Main%s' "$redirect_suffix"
+  }
 }
 
 iris_start() {
@@ -201,7 +221,7 @@ iris_start() {
   echo "Starting Iris service in the background..."
   local remote_command
   remote_command="$(build_remote_runtime_command ' > /dev/null 2>&1 &')"
-  "${ADB_CMD[@]}" shell "su root sh -c '$remote_command'"
+  "${ADB_CMD[@]}" shell "su root sh -c $(sh_quote "$remote_command")"
   sleep 2
 
   local new_pid
@@ -226,7 +246,7 @@ iris_start_foreground() {
   echo "Press Ctrl+C to stop the foreground adb session."
   local remote_command
   remote_command="$(build_remote_runtime_command)"
-  "${ADB_CMD[@]}" shell "su root sh -c '$remote_command'"
+  "${ADB_CMD[@]}" shell "su root sh -c $(sh_quote "$remote_command")"
 }
 
 iris_stop() {
@@ -271,31 +291,35 @@ download_file() {
   fi
 }
 
-verify_md5_if_available() {
+verify_sha256_if_available() {
   local apk_file="$1"
-  local md5_file="$2"
+  local sha256_file="$2"
 
-  if [[ ! -f "$md5_file" ]]; then
-    echo "Warning: MD5 file missing. Skipping checksum verification."
+  if [[ ! -f "$sha256_file" ]]; then
+    echo "Warning: SHA-256 file missing. Skipping checksum verification."
     return 0
   fi
 
-  if ! command -v md5sum >/dev/null 2>&1; then
-    echo "Warning: md5sum is not installed. Skipping checksum verification."
+  if ! command -v sha256sum >/dev/null 2>&1; then
+    echo "Warning: sha256sum is not installed. Skipping checksum verification."
     return 0
   fi
 
-  local downloaded_md5
-  downloaded_md5="$(awk '{print $1}' "$md5_file")"
-  local calculated_md5
-  calculated_md5="$(md5sum "$apk_file" | awk '{print $1}')"
+  local downloaded_sha256
+  downloaded_sha256="$(awk '{print $1}' "$sha256_file")"
+  if ! [[ "$downloaded_sha256" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    echo "Invalid SHA-256 checksum format."
+    return 1
+  fi
+  local calculated_sha256
+  calculated_sha256="$(sha256sum "$apk_file" | awk '{print $1}')"
 
-  if [[ "${downloaded_md5,,}" != "${calculated_md5,,}" ]]; then
-    echo "MD5 checksum mismatch! Downloaded file is corrupted."
+  if [[ "${downloaded_sha256,,}" != "${calculated_sha256,,}" ]]; then
+    echo "SHA-256 checksum mismatch! Downloaded file is corrupted."
     return 1
   fi
 
-  echo "MD5 checksum verification passed."
+  echo "SHA-256 checksum verification passed."
 }
 
 iris_install() {
@@ -304,12 +328,12 @@ iris_install() {
   echo "Downloading Iris.apk..."
   download_file "$IRIS_APK_URL" "$IRIS_APK_LOCAL_FILE"
 
-  echo "Downloading MD5 checksum..."
-  if ! download_file "$IRIS_MD5_URL" "$IRIS_APK_LOCAL_FILE.MD5"; then
-    echo "Warning: Failed to download MD5 checksum. Continuing without checksum verification."
+  echo "Downloading SHA-256 checksum..."
+  if ! download_file "$IRIS_SHA256_URL" "$IRIS_APK_LOCAL_FILE.SHA256"; then
+    echo "Warning: Failed to download SHA-256 checksum. Continuing without checksum verification."
   fi
 
-  verify_md5_if_available "$IRIS_APK_LOCAL_FILE" "$IRIS_APK_LOCAL_FILE.MD5"
+  verify_sha256_if_available "$IRIS_APK_LOCAL_FILE" "$IRIS_APK_LOCAL_FILE.SHA256"
 
   echo "Pushing Iris.apk to device..."
   "${ADB_CMD[@]}" push "$IRIS_APK_LOCAL_FILE" "$IRIS_APK_PATH"
@@ -324,7 +348,7 @@ iris_install() {
 }
 
 cleanup_install_artifacts() {
-  rm -f "$IRIS_APK_LOCAL_FILE" "$IRIS_APK_LOCAL_FILE.MD5"
+  rm -f "$IRIS_APK_LOCAL_FILE" "$IRIS_APK_LOCAL_FILE.SHA256"
 }
 
 main() {

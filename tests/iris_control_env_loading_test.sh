@@ -60,25 +60,25 @@ if ! grep -Fq 'Loaded iris.env:' <<<"$output"; then
   exit 1
 fi
 
-if ! grep -Fq 'IRIS_ALLOW_CLEARTEXT_HTTP="1"' "$command_log"; then
+if ! grep -Fq "IRIS_ALLOW_CLEARTEXT_HTTP='\"'\"'1'\"'\"'" "$command_log"; then
   echo "expected cleartext env passthrough not found"
   cat "$command_log"
   exit 1
 fi
 
-if ! grep -Fq 'IRIS_BIND_HOST="0.0.0.0"' "$command_log"; then
+if ! grep -Fq "IRIS_BIND_HOST='\"'\"'0.0.0.0'\"'\"'" "$command_log"; then
   echo "expected bind host passthrough not found"
   cat "$command_log"
   exit 1
 fi
 
-if ! grep -Fq 'IRIS_WEBHOOK_TOKEN="shared-secret"' "$command_log"; then
+if ! grep -Fq "IRIS_WEBHOOK_TOKEN='\"'\"'shared-secret'\"'\"'" "$command_log"; then
   echo "expected webhook token fallback not found"
   cat "$command_log"
   exit 1
 fi
 
-if ! grep -Fq 'IRIS_BOT_TOKEN="shared-secret"' "$command_log"; then
+if ! grep -Fq "IRIS_BOT_TOKEN='\"'\"'shared-secret'\"'\"'" "$command_log"; then
   echo "expected bot token fallback not found"
   cat "$command_log"
   exit 1

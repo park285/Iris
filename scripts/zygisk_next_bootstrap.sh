@@ -69,12 +69,16 @@ run_adb() {
   "${ADB_CMD[@]}" "$@"
 }
 
+sh_quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\"'\"'/g")"
+}
+
 run_root_shell() {
   local cmd="$1"
   if [[ "$IRIS_USE_ADB_ROOT" == "1" ]]; then
-    run_adb shell "sh -c '$cmd'"
+    run_adb shell "sh -c $(sh_quote "$cmd")"
   else
-    run_adb shell "su 0 sh -c '$cmd'"
+    run_adb shell "su 0 sh -c $(sh_quote "$cmd")"
   fi
 }
 
@@ -137,7 +141,7 @@ bootstrap_zygisk_next() {
   cmd="/system/etc/init/magisk/magisk --auto-selinux --setup-sbin /system/etc/init/magisk /sbin >/dev/null 2>&1 || true; "
   cmd+="/sbin/magisk --sqlite \"update settings set value=0 where key='bootloop'\" >/dev/null 2>&1 || true; "
   cmd+="rm -f /data/adb/modules/zygisksu/disable /data/adb/modules/zygisk_lsposed/disable /data/adb/modules/zn_magisk_compat/disable; "
-  cmd+="rm -rf /data/adb/zygisksu && mkdir -p /data/adb/zygisksu && chmod 0777 /data/adb/zygisksu; "
+  cmd+="rm -rf /data/adb/zygisksu && mkdir -p /data/adb/zygisksu && chmod 0700 /data/adb/zygisksu; "
   cmd+="/sbin/magisk --auto-selinux --post-fs-data >/dev/null 2>&1 || true; "
   cmd+="/sbin/magisk --auto-selinux --service >/dev/null 2>&1 || true; "
   cmd+="cd /data/adb/modules/zygisksu && sh ./post-fs-data.sh >/data/local/tmp/zygisk_next_bootstrap.log 2>&1 &"

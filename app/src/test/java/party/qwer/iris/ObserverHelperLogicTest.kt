@@ -1,6 +1,7 @@
 package party.qwer.iris
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -87,6 +88,66 @@ class ObserverHelperLogicTest {
     }
 
     @Test
+    fun `observer helper closes ingress before flushing checkpoints`() {
+        val ingress =
+            CommandIngressService(
+                db = FakeChatLogRepository(),
+                config = config,
+                checkpointJournal =
+                    object : CheckpointJournal {
+                        override fun load(stream: String): Long? = null
+
+                        override fun advance(
+                            stream: String,
+                            cursor: Long,
+                        ) = Unit
+
+                        override fun flushIfDirty() = Unit
+
+                        override fun flushNow() = Unit
+                    },
+                routingGateway = FakeRoutingGateway(),
+                dispatchDispatcher = Dispatchers.Unconfined,
+                onMarkDirty = {},
+            )
+        val dispatchScopeJob =
+            CommandIngressService::class.java.getDeclaredField("dispatchScope").let { field ->
+                field.isAccessible = true
+                val scope = field.get(ingress) as kotlinx.coroutines.CoroutineScope
+                checkNotNull(scope.coroutineContext[kotlinx.coroutines.Job])
+            }
+        val coordinator =
+            SnapshotCoordinator(
+                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Unconfined),
+                FakeRoomSnapshotReader(rooms = emptyList(), snapshots = emptyMap()),
+                RoomSnapshotManager(),
+                SnapshotEventEmitter(SseEventBus(bufferSize = 4), FakeRoutingGateway()),
+            )
+        val helper =
+            ObserverHelper(
+                ingressService = ingress,
+                snapshotCoordinator = coordinator,
+                checkpointJournal =
+                    object : CheckpointJournal {
+                        override fun load(stream: String): Long? = null
+
+                        override fun advance(
+                            stream: String,
+                            cursor: Long,
+                        ) = Unit
+
+                        override fun flushNow() {
+                            assertTrue(dispatchScopeJob.isCancelled, "checkpoint flush should run after ingress close")
+                        }
+
+                        override fun flushIfDirty() = Unit
+                    },
+            )
+
+        helper.close()
+    }
+
+    @Test
     fun `snapshot diff primes on first run and waits for dirty snapshot processing`() {
         val chatLogRepo = FakeChatLogRepository()
         val snapshotReader =
@@ -160,7 +221,7 @@ class ObserverHelperLogicTest {
         bundle.ingress.checkChange()
 
         assertEquals(5L, chatLogRepo.lastPolledAfterLogId)
-        bundle.ingress.close()
+        runBlocking { bundle.ingress.closeSuspend() }
     }
 
     @Test
@@ -179,7 +240,7 @@ class ObserverHelperLogicTest {
 
         assertEquals(42L, checkpointStore.saved["chat_logs"])
         assertEquals(null, chatLogRepo.lastPolledAfterLogId)
-        bundle.ingress.close()
+        runBlocking { bundle.ingress.closeSuspend() }
     }
 
     @Test
@@ -202,7 +263,7 @@ class ObserverHelperLogicTest {
         bundle.journal.flushNow()
 
         assertEquals(11L, checkpointStore.saved["chat_logs"])
-        bundle.ingress.close()
+        runBlocking { bundle.ingress.closeSuspend() }
     }
 
     @Test
@@ -225,7 +286,7 @@ class ObserverHelperLogicTest {
         bundle.journal.flushNow()
 
         assertEquals(10L, checkpointStore.saved["chat_logs"])
-        bundle.ingress.close()
+        runBlocking { bundle.ingress.closeSuspend() }
     }
 
     @Test
@@ -273,7 +334,7 @@ class ObserverHelperLogicTest {
         bundle.ingress.checkChange()
 
         assertEquals("재균", routingGateway.commands.single().sender)
-        bundle.ingress.close()
+        runBlocking { bundle.ingress.closeSuspend() }
     }
 
     @Test
@@ -308,7 +369,7 @@ class ObserverHelperLogicTest {
         bundle.ingress.checkChange()
 
         assertEquals(listOf(Triple(123L, 456L, 1_711_111_111_000L)), calls)
-        bundle.ingress.close()
+        runBlocking { bundle.ingress.closeSuspend() }
     }
 
     private fun buildObserverHelper(

@@ -171,11 +171,13 @@ internal fun accumulateReplyBodyBytes(
     partBytes: Long,
     maxBytes: Long,
 ): Long {
-    val next = current + partBytes
-    if (next > maxBytes) {
+    if (partBytes < 0) {
+        requestRejected("invalid part size", HttpStatusCode.BadRequest)
+    }
+    if (current > maxBytes || partBytes > maxBytes - current) {
         requestRejected("request body too large", HttpStatusCode.PayloadTooLarge)
     }
-    return next
+    return current + partBytes
 }
 
 internal fun validateMultipartImageManifest(

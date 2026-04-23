@@ -18,6 +18,11 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 private const val SSE_COMMAND_CHANNEL_CAPACITY = 128
 
+internal data class SubscriberReplay(
+    val replay: List<SseEventEnvelope>,
+    val channel: Channel<SseEventEnvelope>,
+)
+
 class SseEventBus(
     private val policy: SseSubscriberPolicy = SseSubscriberPolicy(),
     private val clock: () -> Long = System::currentTimeMillis,
@@ -43,6 +48,11 @@ class SseEventBus(
         data class Replay(
             val afterId: Long,
             val reply: CompletableDeferred<List<SseEventEnvelope>>,
+        ) : SseCommand
+
+        data class OpenSubscriberWithReplay(
+            val afterId: Long,
+            val reply: CompletableDeferred<SubscriberReplay>,
         ) : SseCommand
 
         data class ReplayMissCount(
@@ -91,12 +101,10 @@ class SseEventBus(
     private val scope = CoroutineScope(scopeJob + dispatcher)
     private val commands = Channel<SseCommand>(SSE_COMMAND_CHANNEL_CAPACITY)
     private val closed = AtomicBoolean(false)
-
-    init {
+    private val actorJob =
         scope.launch {
             runActor()
         }
-    }
 
     fun emit(data: String) {
         emit(data, "message")
@@ -164,6 +172,15 @@ class SseEventBus(
             }
         }
 
+    internal suspend fun openSubscriberWithReplaySuspend(afterId: Long): SubscriberReplay =
+        if (closed.get()) {
+            SubscriberReplay(emptyList(), closedSubscriberChannel())
+        } else {
+            dispatchSuspend<SseCommand.OpenSubscriberWithReplay, SubscriberReplay> { reply ->
+                SseCommand.OpenSubscriberWithReplay(afterId, reply)
+            }
+        }
+
     fun replayMissCount(): Long =
         if (closed.get()) {
             0L
@@ -182,14 +199,14 @@ class SseEventBus(
 
     fun openSubscriberChannel(): Channel<SseEventEnvelope> =
         if (closed.get()) {
-            Channel<SseEventEnvelope>(0).also { it.close() }
+            closedSubscriberChannel()
         } else {
             runBlocking { openSubscriberChannelSuspend() }
         }
 
     suspend fun openSubscriberChannelSuspend(): Channel<SseEventEnvelope> =
         if (closed.get()) {
-            Channel<SseEventEnvelope>(0).also { it.close() }
+            closedSubscriberChannel()
         } else {
             dispatchSuspend<SseCommand.OpenSubscriber, Channel<SseEventEnvelope>> { reply ->
                 SseCommand.OpenSubscriber(reply)
@@ -254,124 +271,140 @@ class SseEventBus(
             SseCommand.Close(reply)
         }
         commands.close()
-        scopeJob.cancelAndJoin()
+        actorJob.cancelAndJoin()
     }
 
     private suspend fun runActor() {
-        var nextEventId = store?.maxId() ?: 0L
+        var nextEventId =
+            runCatching { store?.maxId() ?: 0L }
+                .getOrElse { error ->
+                    IrisLogger.error("[SseEventBus] failed to initialize maxId: ${error.message}", error)
+                    0L
+                }
         var nextListenerId = 0L
         val buffer = ArrayDeque<SseEventEnvelope>(policy.bufferCapacity)
         var replayMisses = 0L
         val subscribers = linkedMapOf<Channel<SseEventEnvelope>, SubscriberState>()
         val listeners = linkedMapOf<Long, (SseEventEnvelope) -> Unit>()
 
+        fun replayAfter(afterId: Long): List<SseEventEnvelope> =
+            if (store != null) {
+                store.replayAfter(afterId, policy.replayWindowSize)
+            } else {
+                val oldestInBuffer = buffer.firstOrNull()?.id
+                if (oldestInBuffer != null && afterId > 0 && afterId < oldestInBuffer) {
+                    replayMisses += 1
+                }
+                val matching = buffer.filter { it.id > afterId }
+                if (matching.size > policy.replayWindowSize) {
+                    matching.takeLast(policy.replayWindowSize)
+                } else {
+                    matching
+                }
+            }
+
         for (command in commands) {
-            when (command) {
-                is SseCommand.Emit -> {
-                    val createdAtMs = clock()
-                    val persistedId = store?.insert(command.eventType, command.data, createdAtMs)
-                    nextEventId = persistedId ?: (nextEventId + 1)
-                    val envelope =
-                        SseEventEnvelope(
-                            id = nextEventId,
-                            eventType = command.eventType,
-                            payload = command.data,
-                            createdAtMs = createdAtMs,
-                        )
-                    if (buffer.size >= policy.bufferCapacity) {
-                        buffer.removeFirst()
-                    }
-                    buffer.addLast(envelope)
-
-                    for (listener in listeners.values) {
-                        try {
-                            listener(envelope)
-                        } catch (_: Exception) {
+            try {
+                when (command) {
+                    is SseCommand.Emit -> {
+                        val createdAtMs = clock()
+                        val persistedId = store?.insert(command.eventType, command.data, createdAtMs)
+                        nextEventId = persistedId ?: (nextEventId + 1)
+                        val envelope =
+                            SseEventEnvelope(
+                                id = nextEventId,
+                                eventType = command.eventType,
+                                payload = command.data,
+                                createdAtMs = createdAtMs,
+                            )
+                        if (buffer.size >= policy.bufferCapacity) {
+                            buffer.removeFirst()
                         }
-                    }
+                        buffer.addLast(envelope)
 
-                    subscribers.values.toList().forEach { subscriber ->
-                        val sendResult = subscriber.channel.trySend(envelope)
-                        if (sendResult.isFailure) {
-                            if (subscriber.markedSlowAtMs == null) {
-                                val markedAtMs = clock()
-                                subscribers[subscriber.channel] =
-                                    subscriber.copy(markedSlowAtMs = markedAtMs)
-                                scheduleSlowSubscriberEviction(subscriber.channel, markedAtMs)
-                            }
-                        } else if (subscriber.markedSlowAtMs != null) {
-                            subscribers[subscriber.channel] = subscriber.copy(markedSlowAtMs = null)
-                        }
-                    }
-
-                    command.reply.complete(Unit)
-                }
-
-                is SseCommand.Replay -> {
-                    val replay =
-                        if (store != null) {
-                            store.replayAfter(command.afterId, policy.replayWindowSize)
-                        } else {
-                            val oldestInBuffer = buffer.firstOrNull()?.id
-                            if (oldestInBuffer != null && command.afterId > 0 && command.afterId < oldestInBuffer) {
-                                replayMisses += 1
-                            }
-                            val matching = buffer.filter { it.id > command.afterId }
-                            if (matching.size > policy.replayWindowSize) {
-                                matching.takeLast(policy.replayWindowSize)
-                            } else {
-                                matching
+                        for (listener in listeners.values) {
+                            try {
+                                listener(envelope)
+                            } catch (_: Exception) {
                             }
                         }
-                    command.reply.complete(replay)
-                }
 
-                is SseCommand.ReplayMissCount -> command.reply.complete(replayMisses)
+                        subscribers.values.toList().forEach { subscriber ->
+                            val sendResult = subscriber.channel.trySend(envelope)
+                            if (sendResult.isFailure) {
+                                if (subscriber.markedSlowAtMs == null) {
+                                    val markedAtMs = clock()
+                                    subscribers[subscriber.channel] =
+                                        subscriber.copy(markedSlowAtMs = markedAtMs)
+                                    scheduleSlowSubscriberEviction(subscriber.channel, markedAtMs)
+                                }
+                            } else if (subscriber.markedSlowAtMs != null) {
+                                subscribers[subscriber.channel] = subscriber.copy(markedSlowAtMs = null)
+                            }
+                        }
 
-                is SseCommand.OpenSubscriber -> {
-                    val channel = Channel<SseEventEnvelope>(policy.bufferCapacity)
-                    subscribers[channel] = SubscriberState(channel)
-                    command.reply.complete(channel)
-                }
+                        command.reply.complete(Unit)
+                    }
 
-                is SseCommand.AddSubscriber -> {
-                    subscribers[command.channel] = SubscriberState(command.channel)
-                    command.reply.complete(Unit)
-                }
+                    is SseCommand.Replay -> command.reply.complete(replayAfter(command.afterId))
 
-                is SseCommand.RemoveSubscriber -> {
-                    subscribers.remove(command.channel)
-                    command.reply.complete(Unit)
-                }
+                    is SseCommand.OpenSubscriberWithReplay -> {
+                        val channel = Channel<SseEventEnvelope>(policy.bufferCapacity)
+                        val replay = replayAfter(command.afterId)
+                        subscribers[channel] = SubscriberState(channel)
+                        command.reply.complete(SubscriberReplay(replay = replay, channel = channel))
+                    }
 
-                is SseCommand.SubscriberCount -> command.reply.complete(subscribers.size)
+                    is SseCommand.ReplayMissCount -> command.reply.complete(replayMisses)
 
-                is SseCommand.AddListener -> {
-                    nextListenerId += 1
-                    listeners[nextListenerId] = command.listener
-                    command.reply.complete(nextListenerId)
-                }
+                    is SseCommand.OpenSubscriber -> {
+                        val channel = Channel<SseEventEnvelope>(policy.bufferCapacity)
+                        subscribers[channel] = SubscriberState(channel)
+                        command.reply.complete(channel)
+                    }
 
-                is SseCommand.RemoveListener -> {
-                    listeners.remove(command.listenerId)
-                    command.reply.complete(Unit)
-                }
+                    is SseCommand.AddSubscriber -> {
+                        subscribers[command.channel] = SubscriberState(command.channel)
+                        command.reply.complete(Unit)
+                    }
 
-                is SseCommand.EvictSlowSubscriber -> {
-                    val current = subscribers[command.channel] ?: continue
-                    if (current.markedSlowAtMs == command.markedSlowAtMs) {
+                    is SseCommand.RemoveSubscriber -> {
                         subscribers.remove(command.channel)
-                        current.channel.close()
+                        command.reply.complete(Unit)
+                    }
+
+                    is SseCommand.SubscriberCount -> command.reply.complete(subscribers.size)
+
+                    is SseCommand.AddListener -> {
+                        nextListenerId += 1
+                        listeners[nextListenerId] = command.listener
+                        command.reply.complete(nextListenerId)
+                    }
+
+                    is SseCommand.RemoveListener -> {
+                        listeners.remove(command.listenerId)
+                        command.reply.complete(Unit)
+                    }
+
+                    is SseCommand.EvictSlowSubscriber -> {
+                        val current = subscribers[command.channel] ?: continue
+                        if (current.markedSlowAtMs == command.markedSlowAtMs) {
+                            subscribers.remove(command.channel)
+                            current.channel.close()
+                        }
+                    }
+
+                    is SseCommand.Close -> {
+                        subscribers.values.forEach { it.channel.close() }
+                        subscribers.clear()
+                        listeners.clear()
+                        command.reply.complete(Unit)
+                        break
                     }
                 }
-
-                is SseCommand.Close -> {
-                    subscribers.values.forEach { it.channel.close() }
-                    subscribers.clear()
-                    listeners.clear()
-                    command.reply.complete(Unit)
-                    break
-                }
+            } catch (error: Throwable) {
+                IrisLogger.error("[SseEventBus] actor command failed: ${error.message}", error)
+                failCommand(command, error)
             }
         }
     }
@@ -390,7 +423,56 @@ class SseEventBus(
 
     private suspend fun <C : SseCommand, T> dispatchSuspend(build: (CompletableDeferred<T>) -> C): T {
         val reply = CompletableDeferred<T>()
-        commands.send(build(reply))
+        val command = build(reply)
+
+        if (!actorJob.isActive) {
+            failCommand(command, IllegalStateException("SSE actor unavailable"))
+            return reply.await()
+        }
+
+        val sendResult = commands.trySend(command)
+        if (sendResult.isFailure) {
+            val error = sendResult.exceptionOrNull()
+            if (error != null || !actorJob.isActive) {
+                failCommand(command, error ?: IllegalStateException("SSE actor unavailable"))
+            } else {
+                runCatching { commands.send(command) }
+                    .onFailure { sendError -> failCommand(command, sendError) }
+            }
+        }
+
         return reply.await()
     }
+
+    private fun failCommand(
+        command: SseCommand,
+        error: Throwable,
+    ) {
+        when (command) {
+            is SseCommand.Emit -> command.reply.completeExceptionally(error)
+            is SseCommand.Replay -> command.reply.complete(emptyList())
+            is SseCommand.OpenSubscriberWithReplay ->
+                command.reply.complete(
+                    SubscriberReplay(
+                        replay = emptyList(),
+                        channel = closedSubscriberChannel(),
+                    ),
+                )
+            is SseCommand.ReplayMissCount -> command.reply.complete(0L)
+            is SseCommand.OpenSubscriber -> command.reply.complete(closedSubscriberChannel())
+            is SseCommand.AddSubscriber -> {
+                command.channel.close()
+                command.reply.complete(Unit)
+            }
+            is SseCommand.RemoveSubscriber -> command.reply.complete(Unit)
+            is SseCommand.SubscriberCount -> command.reply.complete(0)
+            is SseCommand.AddListener -> command.reply.complete(-1L)
+            is SseCommand.RemoveListener -> command.reply.complete(Unit)
+            is SseCommand.EvictSlowSubscriber -> command.channel.close()
+            is SseCommand.Close -> command.reply.complete(Unit)
+        }
+    }
+
+    private fun closedSubscriberChannel(): Channel<SseEventEnvelope> =
+        Channel<SseEventEnvelope>(0).also { it.close() }
 }

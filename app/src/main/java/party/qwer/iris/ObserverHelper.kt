@@ -35,8 +35,8 @@ internal class ObserverHelper(
     }
 
     override fun close() {
-        checkpointJournal.flushNow()
         ingressService.close()
+        checkpointJournal.flushNow()
     }
 }
 

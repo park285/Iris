@@ -2,6 +2,7 @@ package party.qwer.iris.persistence
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class SqliteWebhookDeliveryStoreTest {
@@ -603,6 +604,55 @@ class SqliteWebhookDeliveryStoreTest {
         }
     }
 
+    @Test
+    fun `claimReady excludes stale candidate when claim update affects zero rows`() {
+        val driver =
+            FakeSqliteDriver(
+                queryRows =
+                    listOf(
+                        listOf(
+                            41L,
+                            "message-41",
+                            100L,
+                            "default",
+                            """{"text":"hello"}""",
+                            0,
+                        ),
+                    ),
+                updateResults = ArrayDeque(listOf(0)),
+            )
+        val store = SqliteWebhookDeliveryStore(driver) { 1_000L }
+
+        store.use {
+            assertTrue(store.claimReady(limit = 10).isEmpty())
+        }
+    }
+
+    @Test
+    fun `enqueue throws explicit error when inserted id cannot be read`() {
+        val driver =
+            FakeSqliteDriver(
+                queryLongResult = null,
+                updateResults = ArrayDeque(listOf(1)),
+            )
+        val store = SqliteWebhookDeliveryStore(driver)
+
+        store.use {
+            val error =
+                assertFailsWith<IllegalStateException> {
+                    store.enqueue(
+                        PendingWebhookDelivery(
+                            messageId = "message-1",
+                            roomId = 100L,
+                            route = "default",
+                            payloadJson = """{"text":"hello"}""",
+                        ),
+                    )
+                }
+            assertTrue(error.message.orEmpty().contains("failed to read webhook delivery id"))
+        }
+    }
+
     private fun createStore(
         clock: () -> Long = System::currentTimeMillis,
     ): Pair<JdbcSqliteHelper, SqliteWebhookDeliveryStore> {
@@ -611,4 +661,46 @@ class SqliteWebhookDeliveryStoreTest {
         val store = SqliteWebhookDeliveryStore(helper, clock)
         return helper to store
     }
+}
+
+private class FakeSqliteDriver(
+    private val queryLongResult: Long? = 1L,
+    private val queryRows: List<List<Any?>> = emptyList(),
+    private val updateResults: ArrayDeque<Int> = ArrayDeque(),
+) : SqliteDriver {
+    override fun execute(sql: String) = Unit
+
+    override fun queryLong(
+        sql: String,
+        vararg args: Any?,
+    ): Long? = queryLongResult
+
+    override fun <T> query(
+        sql: String,
+        args: List<Any?>,
+        mapRow: (SqliteRow) -> T,
+    ): List<T> = queryRows.map { rowValues -> mapRow(FakeSqliteRow(rowValues)) }
+
+    override fun update(
+        sql: String,
+        args: List<Any?>,
+    ): Int = updateResults.removeFirstOrNull() ?: 1
+
+    override fun <T> inImmediateTransaction(block: SqliteDriver.() -> T): T = block()
+
+    override fun close() = Unit
+}
+
+private class FakeSqliteRow(
+    private val values: List<Any?>,
+) : SqliteRow {
+    override fun getLong(columnIndex: Int): Long = values[columnIndex] as Long
+
+    override fun getString(columnIndex: Int): String = values[columnIndex] as String
+
+    override fun getStringOrNull(columnIndex: Int): String? = values[columnIndex] as String?
+
+    override fun getInt(columnIndex: Int): Int = values[columnIndex] as Int
+
+    override fun isNull(columnIndex: Int): Boolean = values[columnIndex] == null
 }

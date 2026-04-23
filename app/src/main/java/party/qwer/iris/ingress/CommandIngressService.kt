@@ -5,10 +5,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import party.qwer.iris.BotIdentityProvider
 import party.qwer.iris.ChatLogRepository
@@ -51,7 +53,8 @@ internal class CommandIngressService(
         val userId: Long,
     )
 
-    private val dispatchScope = CoroutineScope(SupervisorJob() + dispatchDispatcher)
+    private val dispatchScopeJob = SupervisorJob()
+    private val dispatchScope = CoroutineScope(dispatchScopeJob + dispatchDispatcher)
     private val dispatchSignals = List(partitioningPolicy.partitionCount) { Channel<Unit>(Channel.CONFLATED) }
     private val dispatchLoopJobs: List<Job>
     private val backlog = IngressBacklog(partitioningPolicy, ::partitionIndexForChat)
@@ -137,21 +140,34 @@ internal class CommandIngressService(
         )
 
     override fun close() {
-        synchronized(nicknameRecheckJobs) {
-            nicknameRecheckJobs.values.forEach(Job::cancel)
-            nicknameRecheckJobs.clear()
-        }
-        synchronized(roomRecheckJobs) {
-            roomRecheckJobs.values.forEach(Job::cancel)
-            roomRecheckJobs.clear()
-        }
+        runBlocking { closeSuspend() }
+    }
+
+    suspend fun closeSuspend() {
+        val nicknameJobs =
+            synchronized(nicknameRecheckJobs) {
+                nicknameRecheckJobs.values.toList().also { nicknameRecheckJobs.clear() }
+            }
+        nicknameJobs.forEach(Job::cancel)
+        nicknameJobs.forEach { it.cancelAndJoin() }
+
+        val roomJobs =
+            synchronized(roomRecheckJobs) {
+                roomRecheckJobs.values.toList().also { roomRecheckJobs.clear() }
+            }
+        roomJobs.forEach(Job::cancel)
+        roomJobs.forEach { it.cancelAndJoin() }
+
         dispatchSignals.forEach { signal ->
             signal.close()
         }
         dispatchLoopJobs.forEach { job ->
             job.cancel()
         }
-        dispatchScope.cancel()
+        dispatchLoopJobs.forEach { job ->
+            job.cancelAndJoin()
+        }
+        dispatchScopeJob.cancelAndJoin()
         runCatching {
             routingGateway.close()
         }.onFailure {

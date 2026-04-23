@@ -1,20 +1,23 @@
 package party.qwer.iris.config
 
 import party.qwer.iris.ApiRequestException
-import party.qwer.iris.ConfigManager
-import party.qwer.iris.ConfigUpdateOutcome
+import party.qwer.iris.ConfigMutationPlan
 import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
+import party.qwer.iris.PlannedConfigUpdate
 import party.qwer.iris.UserConfigState
 import party.qwer.iris.canonicalWebhookRoute
 import party.qwer.iris.model.ConfigRequest
 import party.qwer.iris.model.ConfigValues
+import party.qwer.iris.toLegacyConfigValues
+import party.qwer.iris.toUserConfigState
+import party.qwer.iris.updateWebhookConfig
 
 internal fun interface ConfigMutator {
     fun apply(
-        configManager: ConfigManager,
+        snapshotUser: UserConfigState,
         name: String,
         request: ConfigRequest,
-    ): ConfigUpdateOutcome
+    ): PlannedConfigUpdate
 }
 
 internal data class ConfigValidationError(
@@ -118,6 +121,12 @@ internal object ConfigPolicy {
                 restartRequired = true,
                 differs = { snapshot, effective -> snapshot.botControlToken != effective.botControlToken },
             ),
+            ConfigFieldPolicy(
+                field = ConfigField.BRIDGE_TOKEN,
+                contractName = "bridge_token",
+                restartRequired = true,
+                differs = { snapshot, effective -> snapshot.bridgeToken != effective.bridgeToken },
+            ),
         )
 
     val defaultRoutingPolicy: RoutingPolicy =
@@ -130,8 +139,71 @@ internal object ConfigPolicy {
     fun requiresRestart(field: ConfigField): Boolean = fieldPolicy(field).restartRequired
 
     fun validate(state: UserConfigState): List<ConfigValidationError> =
-        fieldPolicies.mapNotNull { policy ->
-            policy.validate(state)?.let { ConfigValidationError(policy.field, it) }
+        buildList {
+            fieldPolicies.mapNotNullTo(this) { policy ->
+                policy.validate(state)?.let { ConfigValidationError(policy.field, it) }
+            }
+
+            validateWebhookEndpoint(state.endpoint.trim())?.let { message ->
+                add(ConfigValidationError(ConfigField.ROUTING_POLICY, "endpoint: $message"))
+            }
+
+            state.webhooks.forEach { (route, endpoint) ->
+                validateRouteMapEntry(
+                    rawRoute = route,
+                    fieldPath = "webhooks.$route",
+                )?.let { message ->
+                    add(ConfigValidationError(ConfigField.ROUTING_POLICY, message))
+                }
+                validateWebhookEndpoint(endpoint.trim())?.let { message ->
+                    add(ConfigValidationError(ConfigField.ROUTING_POLICY, "webhooks.$route: $message"))
+                }
+            }
+
+            state.commandRoutePrefixes.forEach { (route, prefixes) ->
+                validateRouteMapEntry(
+                    rawRoute = route,
+                    fieldPath = "commandRoutePrefixes.$route",
+                )?.let { message ->
+                    add(ConfigValidationError(ConfigField.ROUTING_POLICY, message))
+                }
+                validateNonBlankEntries(
+                    fieldPath = "commandRoutePrefixes.$route",
+                    values = prefixes,
+                    valueName = "prefix",
+                )?.let { message ->
+                    add(ConfigValidationError(ConfigField.ROUTING_POLICY, message))
+                }
+            }
+
+            state.imageMessageTypeRoutes.forEach { (route, messageTypes) ->
+                validateRouteMapEntry(
+                    rawRoute = route,
+                    fieldPath = "imageMessageTypeRoutes.$route",
+                )?.let { message ->
+                    add(ConfigValidationError(ConfigField.ROUTING_POLICY, message))
+                }
+                validateNonBlankEntries(
+                    fieldPath = "imageMessageTypeRoutes.$route",
+                    values = messageTypes,
+                    valueName = "message type",
+                )?.let { message ->
+                    add(ConfigValidationError(ConfigField.ROUTING_POLICY, message))
+                }
+            }
+
+            validateSecret("inboundSigningSecret", state.inboundSigningSecret)?.let { message ->
+                add(ConfigValidationError(ConfigField.INBOUND_SIGNING_SECRET, message))
+            }
+            validateSecret("outboundWebhookToken", state.outboundWebhookToken)?.let { message ->
+                add(ConfigValidationError(ConfigField.OUTBOUND_WEBHOOK_TOKEN, message))
+            }
+            validateSecret("botControlToken", state.botControlToken)?.let { message ->
+                add(ConfigValidationError(ConfigField.BOT_CONTROL_TOKEN, message))
+            }
+            validateSecret("bridgeToken", state.bridgeToken)?.let { message ->
+                add(ConfigValidationError(ConfigField.BRIDGE_TOKEN, message))
+            }
         }
 
     fun validateField(
@@ -158,76 +230,94 @@ internal object ConfigPolicy {
         }
 
     fun validateWebhookRoute(route: String): String? =
-        if (route.all { it.isLetterOrDigit() || it == '-' || it == '_' }) {
+        if (route.isEmpty()) {
+            "route must not be empty"
+        } else if (route.all { it.isLetterOrDigit() || it == '-' || it == '_' }) {
             null
         } else {
             "route must contain only letters, digits, '-' or '_'"
         }
 
-    // 설정 이름 → 변경 로직 매핑 테이블
     private val endpointMutator =
-        ConfigMutator { configManager, name, request ->
+        ConfigMutator { snapshotUser, name, request ->
             val route = resolveEndpointRoute(request.route)
             val value =
                 request.endpoint?.trim()
                     ?: throw ApiRequestException("missing endpoint value")
             validateWebhookEndpoint(value)?.let { throw ApiRequestException(it) }
-            configManager.setWebhookEndpoint(route, value)
-            ConfigUpdateOutcome(
+            val candidateState =
+                updateWebhookConfig(
+                    snapshotUser.toLegacyConfigValues(),
+                    route,
+                    value,
+                ).toUserConfigState()
+            requireValidState(candidateState)
+            PlannedConfigUpdate(
                 name = if (route == DEFAULT_WEBHOOK_ROUTE) name else "$name.$route",
                 applied = true,
                 requiresRestart = false,
+                plan =
+                    ConfigMutationPlan(
+                    candidateSnapshot = candidateState,
+                    applyImmediately = true,
+                ),
             )
         }
 
     private val dbRateMutator =
-        ConfigMutator { configManager, name, request ->
+        ConfigMutator { snapshotUser, name, request ->
             val value =
                 request.rate
                     ?: throw ApiRequestException("missing or invalid rate")
-            requireValidState(
-                field = ConfigField.DB_POLLING_RATE,
-                state = configManager.snapshotUserState().copy(dbPollingRate = value),
-            )
-            configManager.dbPollingRate = value
-            ConfigUpdateOutcome(
+            val candidateState = snapshotUser.copy(dbPollingRate = value)
+            requireValidState(candidateState)
+            PlannedConfigUpdate(
                 name = name,
                 applied = true,
                 requiresRestart = requiresRestart(ConfigField.DB_POLLING_RATE),
+                plan =
+                    ConfigMutationPlan(
+                    candidateSnapshot = candidateState,
+                    applyImmediately = true,
+                ),
             )
         }
 
     private val sendRateMutator =
-        ConfigMutator { configManager, name, request ->
+        ConfigMutator { snapshotUser, name, request ->
             val value =
                 request.rate
                     ?: throw ApiRequestException("missing or invalid rate")
-            requireValidState(
-                field = ConfigField.MESSAGE_SEND_RATE,
-                state = configManager.snapshotUserState().copy(messageSendRate = value),
-            )
-            configManager.messageSendRate = value
-            ConfigUpdateOutcome(
+            val candidateState = snapshotUser.copy(messageSendRate = value)
+            requireValidState(candidateState)
+            PlannedConfigUpdate(
                 name = name,
                 applied = true,
                 requiresRestart = requiresRestart(ConfigField.MESSAGE_SEND_RATE),
+                plan =
+                    ConfigMutationPlan(
+                    candidateSnapshot = candidateState,
+                    applyImmediately = true,
+                ),
             )
         }
 
     private val botPortMutator =
-        ConfigMutator { configManager, name, request ->
+        ConfigMutator { snapshotUser, name, request ->
             val value =
                 request.port
                     ?: throw ApiRequestException("missing or invalid port")
-            requireValidState(
-                field = ConfigField.BOT_SOCKET_PORT,
-                state = configManager.snapshotUserState().copy(botHttpPort = value),
-            )
-            configManager.botSocketPort = value
-            ConfigUpdateOutcome(
+            val candidateState = snapshotUser.copy(botHttpPort = value)
+            requireValidState(candidateState)
+            PlannedConfigUpdate(
                 name = name,
                 applied = false,
                 requiresRestart = requiresRestart(ConfigField.BOT_SOCKET_PORT),
+                plan =
+                    ConfigMutationPlan(
+                    candidateSnapshot = candidateState,
+                    applyImmediately = false,
+                ),
             )
         }
 
@@ -248,14 +338,40 @@ internal object ConfigPolicy {
         return normalized
     }
 
-    private fun requireValidState(
-        field: ConfigField,
-        state: UserConfigState,
-    ) {
-        validateField(field, state)?.let { error ->
+    private fun requireValidState(state: UserConfigState) {
+        validate(state).firstOrNull()?.let { error ->
             throw ApiRequestException(error.message)
         }
     }
 
     private fun fieldPolicy(field: ConfigField): ConfigFieldPolicy = fieldPolicies.first { it.field == field }
+
+    private fun validateRouteMapEntry(
+        rawRoute: String,
+        fieldPath: String,
+    ): String? =
+        validateWebhookRoute(canonicalWebhookRoute(rawRoute))?.let { message ->
+            "$fieldPath: $message"
+        }
+
+    private fun validateNonBlankEntries(
+        fieldPath: String,
+        values: List<String>,
+        valueName: String,
+    ): String? =
+        if (values.any { it.trim().isEmpty() }) {
+            "$fieldPath: $valueName must not be blank"
+        } else {
+            null
+        }
+
+    private fun validateSecret(
+        name: String,
+        value: String,
+    ): String? {
+        if (value.isEmpty()) return null
+        if (value != value.trim()) return "$name must not have leading or trailing whitespace"
+        if (value.any { it.isISOControl() }) return "$name must not contain control characters"
+        return null
+    }
 }

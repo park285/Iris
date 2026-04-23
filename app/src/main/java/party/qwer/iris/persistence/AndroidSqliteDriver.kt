@@ -3,6 +3,41 @@ package party.qwer.iris.persistence
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 
+internal interface BindableSqliteStatement : AutoCloseable {
+    fun bindNull(index: Int)
+
+    fun bindLong(
+        index: Int,
+        value: Long,
+    )
+
+    fun bindString(
+        index: Int,
+        value: String,
+    )
+
+    fun executeUpdateDelete(): Int
+}
+
+internal fun executeBoundUpdate(
+    statementFactory: (String) -> BindableSqliteStatement,
+    sql: String,
+    args: List<Any?>,
+): Int =
+    statementFactory(sql).use { stmt ->
+        args.forEachIndexed { index, value ->
+            val bindIndex = index + 1
+            when (value) {
+                null -> stmt.bindNull(bindIndex)
+                is Long -> stmt.bindLong(bindIndex, value)
+                is Int -> stmt.bindLong(bindIndex, value.toLong())
+                is String -> stmt.bindString(bindIndex, value)
+                else -> stmt.bindString(bindIndex, value.toString())
+            }
+        }
+        stmt.executeUpdateDelete()
+    }
+
 internal class AndroidSqliteDriver(
     private val database: SQLiteDatabase,
 ) : SqliteDriver {
@@ -47,20 +82,7 @@ internal class AndroidSqliteDriver(
     override fun update(
         sql: String,
         args: List<Any?>,
-    ): Int {
-        val stmt = database.compileStatement(sql)
-        args.forEachIndexed { index, value ->
-            val bindIndex = index + 1
-            when (value) {
-                null -> stmt.bindNull(bindIndex)
-                is Long -> stmt.bindLong(bindIndex, value)
-                is Int -> stmt.bindLong(bindIndex, value.toLong())
-                is String -> stmt.bindString(bindIndex, value)
-                else -> stmt.bindString(bindIndex, value.toString())
-            }
-        }
-        return stmt.executeUpdateDelete()
-    }
+    ): Int = executeBoundUpdate(::compileStatement, sql, args)
 
     override fun <T> inImmediateTransaction(block: SqliteDriver.() -> T): T {
         database.beginTransactionNonExclusive()
@@ -89,6 +111,37 @@ internal class AndroidSqliteDriver(
         override fun getInt(columnIndex: Int): Int = cursor.getInt(columnIndex)
 
         override fun isNull(columnIndex: Int): Boolean = cursor.isNull(columnIndex)
+    }
+
+    private fun compileStatement(sql: String): BindableSqliteStatement =
+        AndroidBindableSqliteStatement(database.compileStatement(sql))
+
+    private class AndroidBindableSqliteStatement(
+        private val delegate: android.database.sqlite.SQLiteStatement,
+    ) : BindableSqliteStatement {
+        override fun bindNull(index: Int) {
+            delegate.bindNull(index)
+        }
+
+        override fun bindLong(
+            index: Int,
+            value: Long,
+        ) {
+            delegate.bindLong(index, value)
+        }
+
+        override fun bindString(
+            index: Int,
+            value: String,
+        ) {
+            delegate.bindString(index, value)
+        }
+
+        override fun executeUpdateDelete(): Int = delegate.executeUpdateDelete()
+
+        override fun close() {
+            delegate.close()
+        }
     }
 }
 

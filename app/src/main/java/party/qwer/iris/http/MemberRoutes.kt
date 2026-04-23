@@ -73,9 +73,17 @@ internal fun Route.installMemberRoutes(
             if (!authSupport.requireBotControlSignature(call, method = "GET")) return@get
             val lastEventId = call.request.headers["Last-Event-ID"]?.toLongOrNull() ?: 0L
             call.respondBytesWriter(contentType = ContentType.Text.EventStream) {
-                writeStringUtf8(initialSseFrames(bus.replayEnvelopesSuspend(lastEventId)))
+                val opened = bus.openSubscriberWithReplaySuspend(lastEventId)
+                val channel = opened.channel
+                var lastWrittenEventId = lastEventId
+                writeStringUtf8(": connected\n\n")
+                opened.replay.forEach { envelope ->
+                    if (envelope.id > lastWrittenEventId) {
+                        writeStringUtf8(formatSseFrame(envelope))
+                        lastWrittenEventId = envelope.id
+                    }
+                }
                 flush()
-                val channel = bus.openSubscriberChannelSuspend()
                 try {
                     while (true) {
                         val result =
@@ -89,8 +97,11 @@ internal fun Route.installMemberRoutes(
                             }
                             result.isSuccess -> {
                                 val envelope = result.getOrThrow()
-                                writeStringUtf8("id: ${envelope.id}\nevent: ${envelope.eventType}\ndata: ${envelope.payload}\n\n")
-                                flush()
+                                if (envelope.id > lastWrittenEventId) {
+                                    writeStringUtf8(formatSseFrame(envelope))
+                                    flush()
+                                    lastWrittenEventId = envelope.id
+                                }
                             }
                             else -> break
                         }

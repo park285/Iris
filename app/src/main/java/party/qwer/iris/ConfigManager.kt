@@ -8,11 +8,11 @@ import party.qwer.iris.config.ConfigStateStore
 import party.qwer.iris.http.RuntimeBootstrapState
 import party.qwer.iris.http.RuntimeConfigReadiness
 import party.qwer.iris.model.ConfigResponse
-import party.qwer.iris.model.ConfigUpdateResponse
 import party.qwer.iris.model.ConfigValues
 
 class ConfigManager(
     private val configPath: String = ConfigPathPolicy.resolveConfigPath(),
+    private val env: Map<String, String> = System.getenv(),
 ) : ConfigProvider {
     private val json =
         Json {
@@ -22,6 +22,8 @@ class ConfigManager(
 
     private val stateStore = ConfigStateStore()
     private val persistence = ConfigPersistence(configPath, json)
+    private val bridgeRequirementOverride = parseBridgeRequirementOverride(env["IRIS_REQUIRE_BRIDGE"])
+    private val readyVerboseOverride = parseReadyVerboseOverride(env["IRIS_READY_VERBOSE"])
 
     init {
         loadConfig()
@@ -31,6 +33,7 @@ class ConfigManager(
         when (val loaded = persistence.load()) {
             ConfigLoadResult.Missing -> {
                 IrisLogger.info("config.json not found at $configPath, creating default config.")
+                stateStore.mutate { it.copy(isDirty = true) }
                 saveConfig()
                 return
             }
@@ -83,11 +86,60 @@ class ConfigManager(
         return success
     }
 
+    @Synchronized
     fun saveConfigNow(): Boolean {
         if (!stateStore.current().isDirty) {
             return true
         }
         return saveConfig()
+    }
+
+    @Synchronized
+    internal fun applyConfigMutation(planBuilder: (UserConfigState) -> PlannedConfigUpdate): ConfigUpdateOutcome {
+        val current = stateStore.current()
+        val plannedUpdate = planBuilder(current.snapshotUser)
+        val candidateRuntime = candidateRuntime(current, plannedUpdate.plan)
+        val committedState =
+            if (
+                !current.isDirty &&
+                candidateRuntime.snapshotUser == current.snapshotUser &&
+                candidateRuntime.appliedUser == current.appliedUser
+            ) {
+                current
+            } else {
+                persistThenCommit(candidateRuntime)
+            }
+        val persisted = committedState != null
+        return ConfigUpdateOutcome(
+            name = plannedUpdate.name,
+            persisted = persisted,
+            applied = plannedUpdate.applied,
+            requiresRestart = plannedUpdate.requiresRestart,
+            response =
+                committedState?.let { committed ->
+                    buildConfigUpdateResponse(
+                        status =
+                            ConfigUpdateStatus(
+                                name = plannedUpdate.name,
+                                persisted = true,
+                                applied = plannedUpdate.applied,
+                                requiresRestart = plannedUpdate.requiresRestart,
+                            ),
+                        snapshot = snapshotConfigValues(committed),
+                        effective = effectiveConfigValues(committed),
+                    )
+                },
+        )
+    }
+
+    internal fun persistThenCommit(candidateRuntime: ConfigRuntimeState): ConfigRuntimeState? {
+        if (!persistence.save(candidateRuntime.snapshotUser)) {
+            return null
+        }
+
+        val committedRuntime = candidateRuntime.copy(isDirty = false)
+        stateStore.replace(committedRuntime)
+        return committedRuntime
     }
 
     override var botId: Long
@@ -193,20 +245,29 @@ class ConfigManager(
 
     internal fun runtimeConfigReadiness(): RuntimeConfigReadiness {
         val appliedUser = stateStore.current().appliedUser
+        val envBridgeTokenConfigured = env["IRIS_BRIDGE_TOKEN"]?.trim()?.isNotEmpty() == true
+        val bridgeTokenConfigured = appliedUser.bridgeToken.isNotBlank() || envBridgeTokenConfigured
         return RuntimeConfigReadiness(
             inboundSigningSecretConfigured = appliedUser.inboundSigningSecret.isNotBlank(),
             outboundWebhookTokenConfigured = appliedUser.outboundWebhookToken.isNotBlank(),
             botControlTokenConfigured = appliedUser.botControlToken.isNotBlank(),
-            bridgeTokenConfigured = appliedUser.bridgeToken.isNotBlank(),
+            bridgeTokenConfigured = bridgeTokenConfigured,
             defaultWebhookEndpointConfigured =
                 configuredWebhookEndpoint(
                     appliedUser.toLegacyConfigValues(),
                     DEFAULT_WEBHOOK_ROUTE,
                 ).isNotBlank(),
+            bridgeRequired =
+                resolveBridgeRequirement(
+                    bridgeRequirementOverride = bridgeRequirementOverride,
+                    bridgeTokenConfigured = bridgeTokenConfigured,
+                ),
         )
     }
 
     internal fun runtimeBootstrapState(): RuntimeBootstrapState = runtimeConfigReadiness().bootstrapState()
+
+    internal fun readyVerbose(): Boolean = readyVerboseOverride
 
     override var dbPollingRate: Long
         get() = stateStore.current().appliedUser.dbPollingRate
@@ -241,26 +302,6 @@ class ConfigManager(
         )
     }
 
-    fun configUpdateResponse(
-        name: String,
-        persisted: Boolean,
-        applied: Boolean,
-        requiresRestart: Boolean,
-    ): ConfigUpdateResponse {
-        val current = stateStore.current()
-        return buildConfigUpdateResponse(
-            status =
-                ConfigUpdateStatus(
-                    name = name,
-                    persisted = persisted,
-                    applied = applied,
-                    requiresRestart = requiresRestart,
-                ),
-            snapshot = snapshotConfigValues(current),
-            effective = effectiveConfigValues(current),
-        )
-    }
-
     private fun snapshotConfigValues(state: ConfigRuntimeState = stateStore.current()): ConfigValues =
         AppliedConfigState(
             user = state.snapshotUser,
@@ -272,4 +313,70 @@ class ConfigManager(
             user = state.appliedUser,
             discovered = state.discovered,
         ).toLegacyConfigValues()
+
+    private fun candidateRuntime(
+        current: ConfigRuntimeState,
+        plan: ConfigMutationPlan,
+    ): ConfigRuntimeState =
+        current.copy(
+            snapshotUser = plan.candidateSnapshot,
+            appliedUser =
+                if (plan.applyImmediately) {
+                    plan.candidateSnapshot
+                } else {
+                    current.appliedUser
+                },
+            isDirty = true,
+        )
+}
+
+private fun resolveBridgeRequirement(
+    bridgeRequirementOverride: Boolean?,
+    bridgeTokenConfigured: Boolean,
+): Boolean = bridgeRequirementOverride ?: bridgeTokenConfigured
+
+private fun parseBridgeRequirementOverride(rawValue: String?): Boolean? {
+    val normalized = rawValue?.trim()?.lowercase() ?: return null
+    return when (normalized) {
+        "1",
+        "true",
+        "on",
+        -> true
+
+        "0",
+        "false",
+        "off",
+        -> false
+
+        else -> {
+            IrisLogger.warn(
+                "[ConfigManager] IRIS_REQUIRE_BRIDGE has invalid value '$rawValue'; " +
+                    "falling back to automatic bridge readiness detection",
+            )
+            null
+        }
+    }
+}
+
+private fun parseReadyVerboseOverride(rawValue: String?): Boolean {
+    val normalized = rawValue?.trim()?.lowercase() ?: return false
+    return when (normalized) {
+        "1",
+        "true",
+        "on",
+        -> true
+
+        "0",
+        "false",
+        "off",
+        -> false
+
+        else -> {
+            IrisLogger.warn(
+                "[ConfigManager] IRIS_READY_VERBOSE has invalid value '$rawValue'; " +
+                    "defaulting to false",
+            )
+            false
+        }
+    }
 }

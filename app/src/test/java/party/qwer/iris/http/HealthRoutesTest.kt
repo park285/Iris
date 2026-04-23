@@ -1,9 +1,20 @@
 package party.qwer.iris.http
 
+import io.ktor.client.request.get
+import io.ktor.client.statement.bodyAsText
+import io.ktor.http.HttpStatusCode
+import io.ktor.serialization.kotlinx.json.json
+import io.ktor.server.application.install
+import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.server.routing.routing
+import io.ktor.server.testing.testApplication
+import kotlinx.serialization.json.Json
+import party.qwer.iris.ConfigManager
 import party.qwer.iris.model.ImageBridgeCapabilities
 import party.qwer.iris.model.ImageBridgeCapability
 import party.qwer.iris.model.ImageBridgeDiscoveryHook
 import party.qwer.iris.model.ImageBridgeHealthResult
+import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -11,6 +22,12 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class HealthRoutesTest {
+    private val serverJson =
+        Json {
+            ignoreUnknownKeys = true
+            explicitNulls = false
+        }
+
     @Test
     fun `returns true when all required hooks installed`() {
         val health = healthResult(requiredHookStates = REQUIRED_HOOK_NAMES.associateWith { true })
@@ -60,10 +77,45 @@ class HealthRoutesTest {
                         botControlTokenConfigured = true,
                         bridgeTokenConfigured = true,
                         defaultWebhookEndpointConfigured = true,
+                        bridgeRequired = true,
                     ),
             )
 
         assertEquals("config not ready: inbound signing secret not configured", reason)
+    }
+
+    @Test
+    fun `readiness ignores missing bridge token when bridge not required`() {
+        val reason =
+            readinessFailureReason(
+                bridgeHealth = null,
+                configReadiness =
+                    RuntimeConfigReadiness(
+                        inboundSigningSecretConfigured = true,
+                        outboundWebhookTokenConfigured = true,
+                        botControlTokenConfigured = true,
+                        bridgeTokenConfigured = false,
+                        defaultWebhookEndpointConfigured = true,
+                        bridgeRequired = false,
+                    ),
+            )
+
+        assertNull(reason)
+    }
+
+    @Test
+    fun `runtime readiness does not require default webhook endpoint when secrets are configured`() {
+        val reason =
+            RuntimeConfigReadiness(
+                inboundSigningSecretConfigured = true,
+                outboundWebhookTokenConfigured = true,
+                botControlTokenConfigured = true,
+                bridgeTokenConfigured = false,
+                defaultWebhookEndpointConfigured = false,
+                bridgeRequired = false,
+            ).failureReason()
+
+        assertNull(reason)
     }
 
     @Test
@@ -79,6 +131,44 @@ class HealthRoutesTest {
             )
 
         assertEquals("bridge not ready", reason)
+    }
+
+    @Test
+    fun `configured bridge deployments still fail readiness on unhealthy bridge`() {
+        val reason =
+            readinessFailureReason(
+                bridgeHealth =
+                    healthResult(
+                        running = false,
+                        requiredHookStates = REQUIRED_HOOK_NAMES.associateWith { true },
+                    ),
+                configReadiness =
+                    RuntimeConfigReadiness(
+                        inboundSigningSecretConfigured = true,
+                        outboundWebhookTokenConfigured = true,
+                        botControlTokenConfigured = true,
+                        bridgeTokenConfigured = true,
+                        defaultWebhookEndpointConfigured = true,
+                        bridgeRequired = true,
+                    ),
+            )
+
+        assertEquals("bridge not ready", reason)
+    }
+
+    @Test
+    fun `readiness ignores bridge health when bridge not required`() {
+        val reason =
+            readinessFailureReason(
+                bridgeHealth =
+                    healthResult(
+                        reachable = false,
+                        requiredHookStates = REQUIRED_HOOK_NAMES.associateWith { true },
+                    ),
+                configReadiness = RuntimeConfigReadiness.allConfigured(bridgeRequired = false),
+            )
+
+        assertNull(reason)
     }
 
     @Test
@@ -115,6 +205,112 @@ class HealthRoutesTest {
 
         assertNull(reason)
     }
+
+    @Test
+    fun `ready route treats malformed override as auto and requires env fallback bridge token deployments`() =
+        testApplication {
+            val configDir = Files.createTempDirectory("iris-ready-route-bridge-auto").toFile()
+            val configPath = configDir.resolve("config.json")
+            configPath.writeText(
+                """
+                {
+                  "endpoint":"https://example.com/webhook",
+                  "inboundSigningSecret":"inbound-secret",
+                  "outboundWebhookToken":"outbound-secret",
+                  "botControlToken":"control-secret"
+                }
+                """.trimIndent(),
+            )
+            val manager =
+                ConfigManager(
+                    configPath = configPath.absolutePath,
+                    env =
+                        mapOf(
+                            "IRIS_BRIDGE_TOKEN" to "env-bridge-secret",
+                            "IRIS_REQUIRE_BRIDGE" to "maybe",
+                        ),
+                )
+
+            try {
+                application {
+                    install(ContentNegotiation) {
+                        json(serverJson)
+                    }
+                    routing {
+                        installHealthRoutes(
+                            authSupport = AuthSupport(party.qwer.iris.RequestAuthenticator(), manager),
+                            bridgeHealthProvider = {
+                                healthResult(
+                                    running = false,
+                                    requiredHookStates = REQUIRED_HOOK_NAMES.associateWith { true },
+                                )
+                            },
+                            configReadinessProvider = manager::runtimeConfigReadiness,
+                            chatRoomIntrospectProvider = null,
+                        )
+                    }
+                }
+
+                val response = client.get("/ready")
+
+                assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+                assertTrue(response.bodyAsText().contains("not ready"))
+                assertFalse(response.bodyAsText().contains("bridge not ready"))
+            } finally {
+                configDir.deleteRecursively()
+            }
+        }
+
+    @Test
+    fun `ready route exposes raw reason when verbose is enabled`() =
+        testApplication {
+            val configDir = Files.createTempDirectory("iris-ready-route-verbose").toFile()
+            val configPath = configDir.resolve("config.json")
+            configPath.writeText(
+                """
+                {
+                  "endpoint":"https://example.com/webhook",
+                  "inboundSigningSecret":"inbound-secret",
+                  "outboundWebhookToken":"outbound-secret",
+                  "botControlToken":"control-secret"
+                }
+                """.trimIndent(),
+            )
+            val manager =
+                ConfigManager(
+                    configPath = configPath.absolutePath,
+                    env = mapOf("IRIS_BRIDGE_TOKEN" to "env-bridge-secret"),
+                )
+
+            try {
+                application {
+                    install(ContentNegotiation) {
+                        json(serverJson)
+                    }
+                    routing {
+                        installHealthRoutes(
+                            authSupport = AuthSupport(party.qwer.iris.RequestAuthenticator(), manager),
+                            bridgeHealthProvider = {
+                                healthResult(
+                                    running = false,
+                                    requiredHookStates = REQUIRED_HOOK_NAMES.associateWith { true },
+                                )
+                            },
+                            configReadinessProvider = manager::runtimeConfigReadiness,
+                            chatRoomIntrospectProvider = null,
+                            readyVerbose = true,
+                        )
+                    }
+                }
+
+                val response = client.get("/ready")
+
+                assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+                assertTrue(response.bodyAsText().contains("bridge not ready"))
+            } finally {
+                configDir.deleteRecursively()
+            }
+        }
 
     private fun healthResult(
         reachable: Boolean = true,

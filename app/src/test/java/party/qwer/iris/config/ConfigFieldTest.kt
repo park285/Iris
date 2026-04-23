@@ -18,6 +18,7 @@ class ConfigFieldTest {
                 "INBOUND_SIGNING_SECRET",
                 "OUTBOUND_WEBHOOK_TOKEN",
                 "BOT_CONTROL_TOKEN",
+                "BRIDGE_TOKEN",
             )
         val actual = ConfigField.entries.map { it.name }.toSet()
         assertEquals(expected, actual)
@@ -25,7 +26,7 @@ class ConfigFieldTest {
 
     @Test
     fun `entries count matches expected`() {
-        assertEquals(9, ConfigField.entries.size)
+        assertEquals(10, ConfigField.entries.size)
     }
 
     @Test

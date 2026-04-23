@@ -75,6 +75,10 @@ internal class ReplyAdmissionService(
             val reply: CompletableDeferred<DetachedWorkersPlan>,
         ) : AdmissionCommand
 
+        data class ShutdownCompleted(
+            val reply: CompletableDeferred<Unit>,
+        ) : AdmissionCommand
+
         data class Enqueue(
             val key: ReplyQueueKey,
             val job: ReplyLaneJob,
@@ -188,7 +192,11 @@ internal class ReplyAdmissionService(
             }
         closeWorkersSuspend(plan.workers)
         plan.workerScope?.cancel()
-        closingWorkers.clear()
+        dispatchSuspend<AdmissionCommand.ShutdownCompleted, Unit>(
+            onActorClosed = { Unit },
+        ) {
+            AdmissionCommand.ShutdownCompleted(it)
+        }
         closeCommandActorAndWait()
         IrisLogger.info("[ReplyAdmissionService] Shutdown complete")
     }
@@ -236,6 +244,7 @@ internal class ReplyAdmissionService(
             is AdmissionCommand.Restart -> command.reply.complete(DetachedWorkersPlan(allowed = false))
             is AdmissionCommand.RestartCompleted -> command.reply.complete(Unit)
             is AdmissionCommand.Shutdown -> command.reply.complete(DetachedWorkersPlan(allowed = false))
+            is AdmissionCommand.ShutdownCompleted -> command.reply.complete(Unit)
             is AdmissionCommand.Enqueue ->
                 command.reply.complete(
                     ReplyAdmissionResult(
@@ -255,6 +264,7 @@ internal class ReplyAdmissionService(
             is AdmissionCommand.Restart -> handleRestart(command)
             is AdmissionCommand.RestartCompleted -> handleRestartCompleted(command)
             is AdmissionCommand.Shutdown -> handleShutdown(command)
+            is AdmissionCommand.ShutdownCompleted -> handleShutdownCompleted(command)
             is AdmissionCommand.Enqueue -> handleEnqueue(command)
             is AdmissionCommand.DebugSnapshot -> handleDebugSnapshot(command)
             is AdmissionCommand.WorkerClosed -> handleWorkerClosed(command)
@@ -321,6 +331,11 @@ internal class ReplyAdmissionService(
                 workerScope = oldWorkerScope,
             ),
         )
+    }
+
+    private fun handleShutdownCompleted(command: AdmissionCommand.ShutdownCompleted) {
+        closingWorkers.clear()
+        command.reply.complete(Unit)
     }
 
     private suspend fun handleEnqueue(command: AdmissionCommand.Enqueue) {

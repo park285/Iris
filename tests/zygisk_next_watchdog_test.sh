@@ -13,6 +13,12 @@ fi
 # shellcheck source=/dev/null
 source "$script_path"
 
+expected_bootstrap="$repo_root/scripts/zygisk_next_bootstrap.sh"
+if [[ "$BOOTSTRAP_SCRIPT" != "$expected_bootstrap" ]]; then
+  echo "unexpected BOOTSTRAP_SCRIPT default: $BOOTSTRAP_SCRIPT"
+  exit 1
+fi
+
 adb_cmd() {
   case "$*" in
     "shell su 0 sh -c '/data/adb/modules/zygisksu/bin/zygiskd64 status 2>&1'")

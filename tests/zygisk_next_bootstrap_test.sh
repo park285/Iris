@@ -16,6 +16,11 @@ source "$script_path"
 commands=()
 release_value=13
 
+if [[ "$(sh_quote "abc' def")" != "'abc'\"'\"' def'" ]]; then
+  echo "sh_quote did not escape single quotes as expected"
+  exit 1
+fi
+
 run_adb() {
   commands+=("$*")
 
@@ -51,7 +56,7 @@ commands=()
 bootstrap_zygisk_next
 
 expected=(
-  "shell su 0 sh -c '/system/etc/init/magisk/magisk --auto-selinux --setup-sbin /system/etc/init/magisk /sbin >/dev/null 2>&1 || true; /sbin/magisk --sqlite \"update settings set value=0 where key='bootloop'\" >/dev/null 2>&1 || true; rm -f /data/adb/modules/zygisksu/disable /data/adb/modules/zygisk_lsposed/disable /data/adb/modules/zn_magisk_compat/disable; rm -rf /data/adb/zygisksu && mkdir -p /data/adb/zygisksu && chmod 0777 /data/adb/zygisksu; /sbin/magisk --auto-selinux --post-fs-data >/dev/null 2>&1 || true; /sbin/magisk --auto-selinux --service >/dev/null 2>&1 || true; cd /data/adb/modules/zygisksu && sh ./post-fs-data.sh >/data/local/tmp/zygisk_next_bootstrap.log 2>&1 & sleep 1; setprop ctl.restart zygote'"
+  "shell su 0 sh -c '/system/etc/init/magisk/magisk --auto-selinux --setup-sbin /system/etc/init/magisk /sbin >/dev/null 2>&1 || true; /sbin/magisk --sqlite \"update settings set value=0 where key='\"'\"'bootloop'\"'\"'\" >/dev/null 2>&1 || true; rm -f /data/adb/modules/zygisksu/disable /data/adb/modules/zygisk_lsposed/disable /data/adb/modules/zn_magisk_compat/disable; rm -rf /data/adb/zygisksu && mkdir -p /data/adb/zygisksu && chmod 0700 /data/adb/zygisksu; /sbin/magisk --auto-selinux --post-fs-data >/dev/null 2>&1 || true; /sbin/magisk --auto-selinux --service >/dev/null 2>&1 || true; cd /data/adb/modules/zygisksu && sh ./post-fs-data.sh >/data/local/tmp/zygisk_next_bootstrap.log 2>&1 & sleep 1; setprop ctl.restart zygote'"
   "shell su 0 sh -c '/sbin/magisk --auto-selinux --boot-complete'"
   "shell su 0 sh -c 'test -d /sbin/.magisk && test -S /sbin/.magisk/device/socket'"
 )

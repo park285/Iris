@@ -50,6 +50,10 @@ internal class WebhookOutboxDispatcher(
     private val executeRequestOverride: (suspend (Request, String) -> Int)? = null,
     clientFactoryOverride: WebhookHttpClientFactory? = null,
 ) : Closeable {
+    init {
+        require(partitionCount > 0) { "partitionCount must be > 0" }
+    }
+
     private val scopeJob = SupervisorJob()
     private val coroutineScope = CoroutineScope(scopeJob + dispatcher)
     private val clientFactory =
@@ -65,6 +69,7 @@ internal class WebhookOutboxDispatcher(
     private val requestExecutor: suspend (Request, String) -> Int = executeRequestOverride ?: { request, url -> deliveryClient.execute(request, url) }
     private val routePartitions = ConcurrentHashMap<String, RoutePartitions>()
     private val outstandingClaims = ConcurrentHashMap<Long, ClaimedDelivery>()
+    private val lifecycleLock = Any()
 
     @Volatile
     private var pollingJob: Job? = null
@@ -76,22 +81,24 @@ internal class WebhookOutboxDispatcher(
     private var shuttingDown: Boolean = false
 
     fun start() {
-        if (pollingJob?.isActive == true) {
-            return
-        }
-        shuttingDown = false
-        recoverExpiredClaimsNow()
-        pollingJob =
-            coroutineScope.launch {
-                while (isActive) {
-                    if (shuttingDown) {
-                        break
-                    }
-                    recoverExpiredClaimsIfDue()
-                    pumpReadyEntries()
-                    delay(deliveryPolicy.pollIntervalMs)
-                }
+        synchronized(lifecycleLock) {
+            if (pollingJob?.isActive == true) {
+                return
             }
+            shuttingDown = false
+            recoverExpiredClaimsNow()
+            pollingJob =
+                coroutineScope.launch {
+                    while (isActive) {
+                        if (shuttingDown) {
+                            break
+                        }
+                        recoverExpiredClaimsIfDue()
+                        pumpReadyEntries()
+                        delay(deliveryPolicy.pollIntervalMs)
+                    }
+                }
+        }
     }
 
     private fun recoverExpiredClaimsIfDue() {
@@ -130,7 +137,7 @@ internal class WebhookOutboxDispatcher(
         RoutePartitions(
             route = route,
             partitions =
-                List(partitionCount.coerceAtLeast(1)) { index ->
+                List(partitionCount) { index ->
                     val channel = Channel<ClaimedDelivery>(deliveryPolicy.partitionQueueCapacity)
                     val job =
                         coroutineScope.launch {
@@ -243,12 +250,10 @@ internal class WebhookOutboxDispatcher(
                 val inboundConfigured = runtimeConfig.activeInboundSigningSecret().isNotBlank()
                 val outboundConfigured = runtimeConfig.activeOutboundWebhookToken().isNotBlank()
                 val botControlConfigured = runtimeConfig.activeBotControlToken().isNotBlank()
-                val defaultWebhookConfigured = runtimeConfig.webhookEndpointFor(DEFAULT_WEBHOOK_ROUTE).isNotBlank()
                 when {
                     !inboundConfigured -> "inbound signing secret not configured"
                     !outboundConfigured -> "outbound webhook token not configured"
                     !botControlConfigured -> "bot control token not configured"
-                    !defaultWebhookConfigured -> "default webhook endpoint not configured"
                     else -> null
                 }
             }
@@ -286,9 +291,11 @@ internal class WebhookOutboxDispatcher(
     }
 
     suspend fun closeSuspend() {
-        shuttingDown = true
-        val job = pollingJob
-        pollingJob = null
+        val job =
+            synchronized(lifecycleLock) {
+                shuttingDown = true
+                pollingJob.also { pollingJob = null }
+            }
         job?.cancelAndJoin()
         routePartitions.values.forEach { route ->
             route.partitions.forEach { partition ->

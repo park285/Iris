@@ -56,13 +56,21 @@ internal class MultipartReplyCollector(
             try {
                 when (part) {
                     is PartData.FormItem -> {
+                        if (part.name != "metadata") {
+                            invalidRequest("unsupported multipart form part: ${part.name}")
+                        }
                         if (!acceptMetadata(part, multipart)) {
                             return null
                         }
                     }
 
-                    is PartData.FileItem -> acceptImage(part)
-                    else -> Unit
+                    is PartData.FileItem -> {
+                        if (part.name != "image") {
+                            invalidRequest("unsupported multipart file part: ${part.name}")
+                        }
+                        acceptImage(part)
+                    }
+                    else -> invalidRequest("unsupported multipart part")
                 }
             } finally {
                 part.dispose()
@@ -96,9 +104,6 @@ internal class MultipartReplyCollector(
         part: PartData.FormItem,
         multipart: MultiPartData,
     ): Boolean {
-        if (part.name != "metadata") {
-            return true
-        }
         if (metadata != null) {
             invalidRequest("duplicate metadata part")
         }
@@ -116,9 +121,6 @@ internal class MultipartReplyCollector(
     }
 
     private fun acceptImage(part: PartData.FileItem) {
-        if (part.name != "image") {
-            return
-        }
         val currentMetadata = metadata ?: invalidRequest("metadata part must precede image parts")
         val expectedPart =
             currentMetadata.images.getOrNull(nextExpectedImageIndex)

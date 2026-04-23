@@ -17,6 +17,11 @@ internal class ConfigStateStore {
     }
 
     @Synchronized
+    fun replace(nextState: ConfigRuntimeState): ConfigRuntimeState {
+        state = nextState
+        return nextState
+    }
+
     fun updateUserState(
         applyImmediately: Boolean,
         transform: (UserConfigState) -> UserConfigState,

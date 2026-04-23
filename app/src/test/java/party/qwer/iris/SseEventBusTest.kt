@@ -1,17 +1,21 @@
 package party.qwer.iris
 
 import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.runTest
 import party.qwer.iris.http.SseEventEnvelope
 import party.qwer.iris.http.SseSubscriberPolicy
 import party.qwer.iris.http.initialSseFrames
 import party.qwer.iris.persistence.IrisDatabaseSchema
+import party.qwer.iris.persistence.SseEventStore
 import party.qwer.iris.persistence.JdbcSqliteHelper
 import party.qwer.iris.persistence.SqliteSseEventStore
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
-@OptIn(DelicateCoroutinesApi::class)
+@OptIn(DelicateCoroutinesApi::class, ExperimentalCoroutinesApi::class)
 class SseEventBusTest {
     @Test
     fun `initialSseFrames includes event type field`() {
@@ -90,6 +94,69 @@ class SseEventBusTest {
         assertEquals("snapshot", received.single().eventType)
         assertEquals("{}", received.single().payload)
     }
+
+    @Test
+    fun `openSubscriberWithReplaySuspend returns replay and live subscriber from same command`() =
+        runTest {
+            val bus = SseEventBus(bufferSize = 10)
+            bus.emit("a")
+            bus.emit("b")
+
+            val opened = bus.openSubscriberWithReplaySuspend(1L)
+            bus.emit("c")
+
+            assertEquals(listOf("b"), opened.replay.map { it.payload })
+            assertEquals("c", opened.channel.receive().payload)
+            bus.close()
+        }
+
+    @Test
+    fun `emit returns store error instead of hanging when insert fails`() =
+        with(
+            SseEventBus(
+                policy = SseSubscriberPolicy(bufferCapacity = 10, replayWindowSize = 10),
+                store = ThrowingStore(insertError = IllegalStateException("insert boom")),
+            ),
+        ) {
+            val error =
+                assertFailsWith<IllegalStateException> {
+                    emit("boom", "message")
+                }
+
+            assertEquals("insert boom", error.message)
+            close()
+        }
+
+    @Test
+    fun `replay returns empty when store replay fails instead of hanging`() =
+        with(
+            SseEventBus(
+                policy = SseSubscriberPolicy(bufferCapacity = 10, replayWindowSize = 10),
+                store = ThrowingStore(replayError = IllegalStateException("replay boom")),
+            ),
+        ) {
+            val replay = replayEnvelopes(0L)
+
+            assertTrue(replay.isEmpty())
+            close()
+        }
+
+    @Test
+    fun `bus falls back to zero when store maxId initialization fails`() =
+        with(
+            SseEventBus(
+                policy = SseSubscriberPolicy(bufferCapacity = 10, replayWindowSize = 10),
+                store = ThrowingStore(maxIdError = IllegalStateException("maxId boom")),
+            ),
+        ) {
+            val received = mutableListOf<SseEventEnvelope>()
+            val listenerId = addListener { envelope -> received += envelope }
+            emit("first", "message")
+            removeListener(listenerId)
+
+            assertEquals(1L, received.single().id)
+            close()
+        }
 
     // --- store 통합 테스트 ---
 
@@ -266,5 +333,35 @@ class SseEventBusTest {
         IrisDatabaseSchema.createSseEventsTable(helper)
         val store = SqliteSseEventStore(helper)
         return helper to store
+    }
+
+    private class ThrowingStore(
+        private val insertError: Throwable? = null,
+        private val replayError: Throwable? = null,
+        private val maxIdError: Throwable? = null,
+    ) : SseEventStore {
+        override fun insert(
+            eventType: String,
+            payload: String,
+            createdAtMs: Long,
+        ): Long {
+            insertError?.let { throw it }
+            return 1L
+        }
+
+        override fun replayAfter(
+            afterId: Long,
+            limit: Int,
+        ): List<SseEventEnvelope> {
+            replayError?.let { throw it }
+            return emptyList()
+        }
+
+        override fun maxId(): Long {
+            maxIdError?.let { throw it }
+            return 0L
+        }
+
+        override fun prune(keepCount: Int) = Unit
     }
 }

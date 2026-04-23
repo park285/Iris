@@ -2,7 +2,8 @@
 
 set -euo pipefail
 
-BOOTSTRAP_SCRIPT="${BOOTSTRAP_SCRIPT:-/root/work/Iris/zygisk_next_bootstrap.sh}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BOOTSTRAP_SCRIPT="${BOOTSTRAP_SCRIPT:-$SCRIPT_DIR/zygisk_next_bootstrap.sh}"
 IRIS_ADB_DEVICE="${IRIS_ADB_DEVICE:-127.0.0.1:5555}"
 SLEEP_SECONDS="${SLEEP_SECONDS:-20}"
 BRIDGE_SOCKET_NAME="${BRIDGE_SOCKET_NAME:-@iris-image-bridge}"

@@ -62,9 +62,10 @@ pub async fn sync_apk_if_needed(
     }
 
     adb.push(apk_src, &cfg.init.apk_dest).await?;
+    let quoted_apk_dest = shell_quote(&cfg.init.apk_dest);
     let chmod_command = format!(
         "su 0 sh -lc {}",
-        shell_quote(&format!("chmod 644 {}", cfg.init.apk_dest)),
+        shell_quote(&format!("chmod 644 {quoted_apk_dest}")),
     );
     let _ = adb.shell(&chmod_command).await;
     tracing::info!(src = %apk_src.display(), dest = %cfg.init.apk_dest, "APK sync 완료");
@@ -90,7 +91,8 @@ async fn sync_config_if_needed(adb: &Adb, cfg: &DaemonConfig) -> Result<bool> {
     if !template_path.exists() {
         return Ok(false);
     }
-    let device_config = match adb.shell(&format!("cat {}", cfg.init.config_dest)).await {
+    let config_path = shell_quote(&cfg.init.config_dest);
+    let device_config = match adb.shell(&format!("cat {config_path}")).await {
         Ok(content) => content,
         Err(error) => {
             tracing::warn!(error = %error, "디바이스 config 읽기 실패 — config drift check 건너뜀");
@@ -162,8 +164,9 @@ async fn device_file_sha256(adb: &Adb, remote_path: &str) -> Result<Option<Strin
 }
 
 fn build_device_sha256_command(remote_path: &str) -> String {
+    let quoted_path = shell_quote(remote_path);
     let inner = format!(
-        "sha256sum {remote_path} 2>/dev/null || toybox sha256sum {remote_path} 2>/dev/null || true"
+        "sha256sum {quoted_path} 2>/dev/null || toybox sha256sum {quoted_path} 2>/dev/null || true"
     );
     format!("su 0 sh -lc {}", shell_quote(&inner))
 }
@@ -296,8 +299,23 @@ mod tests {
     #[test]
     fn build_device_sha256_command_uses_root_shell_and_fallback() {
         let command = build_device_sha256_command("/data/local/tmp/Iris.apk");
-        assert!(command.contains("su 0 sh -lc"));
-        assert!(command.contains("sha256sum /data/local/tmp/Iris.apk"));
-        assert!(command.contains("toybox sha256sum /data/local/tmp/Iris.apk"));
+        let quoted_path = shell_quote("/data/local/tmp/Iris.apk");
+        let expected_inner = format!(
+            "sha256sum {quoted_path} 2>/dev/null || toybox sha256sum {quoted_path} 2>/dev/null || true"
+        );
+
+        assert_eq!(command, format!("su 0 sh -lc {}", shell_quote(&expected_inner)));
+    }
+
+    #[test]
+    fn build_device_sha256_command_quotes_remote_path() {
+        let remote_path = "/data/local/tmp/Iris weird's.apk";
+        let command = build_device_sha256_command(remote_path);
+        let quoted_path = shell_quote(remote_path);
+        let expected_inner = format!(
+            "sha256sum {quoted_path} 2>/dev/null || toybox sha256sum {quoted_path} 2>/dev/null || true"
+        );
+
+        assert_eq!(command, format!("su 0 sh -lc {}", shell_quote(&expected_inner)));
     }
 }

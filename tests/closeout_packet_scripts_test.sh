@@ -6,6 +6,20 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
+required_scripts=(
+  "scripts/replay_closeout.sh"
+  "scripts/verify_closeout_packet.py"
+  "scripts/closeout_facts.py"
+  "scripts/generate_bundle_manifest.py"
+)
+
+for file in "${required_scripts[@]}"; do
+  if [[ ! -f "$repo_root/$file" ]]; then
+    echo "missing required closeout script: $file"
+    exit 1
+  fi
+done
+
 packet_dir="$tmpdir/packet"
 mkdir -p "$packet_dir/scripts" "$packet_dir/docs" "$packet_dir/gradle/wrapper" "$packet_dir/tools" "$packet_dir/artifacts/metadata"
 
@@ -54,6 +68,9 @@ References: `artifacts/metadata/consistency-check.json` `scripts/verify_closeout
 EOF
 
 python3 "$packet_dir/scripts/closeout_facts.py" "$packet_dir" >"$packet_dir/artifacts/metadata/packet-facts.json"
+python3 "$repo_root/scripts/generate_bundle_manifest.py" "$packet_dir"
+python3 "$packet_dir/scripts/verify_closeout_packet.py" "$packet_dir"
+python3 "$repo_root/scripts/generate_bundle_manifest.py" "$packet_dir"
 python3 "$packet_dir/scripts/verify_closeout_packet.py" "$packet_dir"
 ANDROID_SDK_ROOT="$tmpdir/android-sdk" mkdir -p "$tmpdir/android-sdk"
 ANDROID_SDK_ROOT="$tmpdir/android-sdk" bash "$packet_dir/scripts/replay_closeout.sh"
@@ -70,6 +87,26 @@ fi
 
 if ! grep -Fq "$tmpdir/android-sdk" "$packet_dir/local.properties"; then
   echo "replay_closeout.sh did not rewrite local.properties from ANDROID_SDK_ROOT fallback"
+  exit 1
+fi
+
+if ! grep -Fq "scripts/replay_closeout.sh" "$packet_dir/BUNDLE_MANIFEST.txt"; then
+  echo "BUNDLE_MANIFEST.txt missing replay_closeout.sh"
+  exit 1
+fi
+
+if ! grep -Fq "scripts/verify_closeout_packet.py" "$packet_dir/BUNDLE_MANIFEST.txt"; then
+  echo "BUNDLE_MANIFEST.txt missing verify_closeout_packet.py"
+  exit 1
+fi
+
+if ! grep -Fq "scripts/closeout_facts.py" "$packet_dir/BUNDLE_MANIFEST.txt"; then
+  echo "BUNDLE_MANIFEST.txt missing closeout_facts.py"
+  exit 1
+fi
+
+if ! grep -Fq "artifacts/metadata/consistency-check.json" "$packet_dir/BUNDLE_MANIFEST.txt"; then
+  echo "BUNDLE_MANIFEST.txt missing consistency-check.json"
   exit 1
 fi
 
@@ -93,6 +130,7 @@ Item 5 Status: Closed
 Residual Risk: None
 EOF
 python3 "$incomplete_dir/scripts/closeout_facts.py" "$incomplete_dir" >"$incomplete_dir/artifacts/metadata/packet-facts.json"
+python3 "$repo_root/scripts/generate_bundle_manifest.py" "$incomplete_dir"
 
 set +e
 python3 "$incomplete_dir/scripts/verify_closeout_packet.py" "$incomplete_dir" >/dev/null 2>&1

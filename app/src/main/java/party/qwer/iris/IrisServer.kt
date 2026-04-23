@@ -181,6 +181,7 @@ internal class IrisServer(
                 configReadinessProvider = configReadinessProvider,
                 chatRoomIntrospectProvider = chatRoomIntrospectProvider,
                 memberNicknameDiagnosticsProvider = memberNicknameDiagnosticsProvider,
+                readyVerbose = configManager.readyVerbose(),
             )
             installConfigRoutes(authSupport, configManager, serverJson)
             installReplyRoutes(

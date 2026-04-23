@@ -131,6 +131,33 @@ class ConfigPolicyTest {
     }
 
     @Test
+    fun `validate rejects invalid webhook endpoint scheme`() {
+        val state = UserConfigState(endpoint = "ftp://example.com/webhook")
+
+        val errors = ConfigPolicy.validate(state)
+
+        assertTrue(errors.any { it.field == ConfigField.ROUTING_POLICY && it.message.contains("endpoint") })
+    }
+
+    @Test
+    fun `validate rejects invalid webhook route key`() {
+        val state = UserConfigState(webhooks = mapOf("bad route" to "https://example.com/webhook"))
+
+        val errors = ConfigPolicy.validate(state)
+
+        assertTrue(errors.any { it.field == ConfigField.ROUTING_POLICY && it.message.contains("webhooks.bad route") })
+    }
+
+    @Test
+    fun `validate rejects secrets with surrounding whitespace`() {
+        val state = UserConfigState(inboundSigningSecret = " inbound-secret ")
+
+        val errors = ConfigPolicy.validate(state)
+
+        assertTrue(errors.any { it.field == ConfigField.INBOUND_SIGNING_SECRET })
+    }
+
+    @Test
     fun `default routing policy has empty maps and requires external bootstrap`() {
         val policy = ConfigPolicy.defaultRoutingPolicy
         assertEquals(emptyMap<String, List<String>>(), policy.commandRoutePrefixes)

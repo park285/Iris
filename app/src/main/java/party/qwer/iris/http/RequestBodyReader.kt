@@ -6,6 +6,7 @@ import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.receiveChannel
 import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readAvailable
+import party.qwer.iris.IrisLogger
 import party.qwer.iris.requestRejected
 import party.qwer.iris.config.ConfigPathPolicy
 import java.io.ByteArrayOutputStream
@@ -34,15 +35,18 @@ internal suspend fun readBodyWithStreamingDigest(
     bodyChannel: ByteReadChannel,
     declaredContentLength: Long?,
     maxBodyBytes: Int,
-    bufferingPolicy: RequestBodyBufferingPolicy = RequestBodyBufferingPolicy(),
+    bufferingPolicy: RequestBodyBufferingPolicy = RequestBodyBufferingPolicy.default(),
 ): RequestBodyHandle {
-    if (declaredContentLength != null && declaredContentLength > maxBodyBytes) {
+    if (declaredContentLength != null && declaredContentLength < 0) {
+        requestRejected("invalid content length", HttpStatusCode.BadRequest)
+    }
+    if (declaredContentLength != null && declaredContentLength > maxBodyBytes.toLong()) {
         requestRejected("request body too large", HttpStatusCode.PayloadTooLarge)
     }
 
     val digest = MessageDigest.getInstance("SHA-256")
     val buffer = ByteArray(STREAM_BUFFER_BYTES)
-    var totalRead = 0
+    var totalRead = 0L
 
     val requestBodySink = RequestBodySink(policy = bufferingPolicy)
     try {
@@ -51,10 +55,7 @@ internal suspend fun readBodyWithStreamingDigest(
             if (read == -1) {
                 break
             }
-            totalRead += read
-            if (totalRead > maxBodyBytes) {
-                requestRejected("request body too large", HttpStatusCode.PayloadTooLarge)
-            }
+            totalRead = accumulateReadBytes(totalRead, read.toLong(), maxBodyBytes.toLong())
             digest.update(buffer, 0, read)
             requestBodySink.write(buffer, 0, read)
         }
@@ -62,7 +63,7 @@ internal suspend fun readBodyWithStreamingDigest(
         val hexDigest = digest.digest().joinToString("") { byte -> "%02x".format(byte) }
         return requestBodySink.detachHandle(
             sha256Hex = hexDigest,
-            sizeBytes = totalRead.toLong(),
+            sizeBytes = totalRead,
         )
     } catch (error: Throwable) {
         requestBodySink.close()
@@ -74,15 +75,18 @@ internal fun readInputStreamWithStreamingDigest(
     input: InputStream,
     declaredContentLength: Long?,
     maxBodyBytes: Int,
-    bufferingPolicy: RequestBodyBufferingPolicy = RequestBodyBufferingPolicy(),
+    bufferingPolicy: RequestBodyBufferingPolicy = RequestBodyBufferingPolicy.default(),
 ): RequestBodyHandle {
-    if (declaredContentLength != null && declaredContentLength > maxBodyBytes) {
+    if (declaredContentLength != null && declaredContentLength < 0) {
+        requestRejected("invalid content length", HttpStatusCode.BadRequest)
+    }
+    if (declaredContentLength != null && declaredContentLength > maxBodyBytes.toLong()) {
         requestRejected("request body too large", HttpStatusCode.PayloadTooLarge)
     }
 
     val digest = MessageDigest.getInstance("SHA-256")
     val buffer = ByteArray(STREAM_BUFFER_BYTES)
-    var totalRead = 0
+    var totalRead = 0L
 
     val requestBodySink = RequestBodySink(policy = bufferingPolicy)
     try {
@@ -94,10 +98,7 @@ internal fun readInputStreamWithStreamingDigest(
             if (read == 0) {
                 continue
             }
-            totalRead += read
-            if (totalRead > maxBodyBytes) {
-                requestRejected("request body too large", HttpStatusCode.PayloadTooLarge)
-            }
+            totalRead = accumulateReadBytes(totalRead, read.toLong(), maxBodyBytes.toLong())
             digest.update(buffer, 0, read)
             requestBodySink.write(buffer, 0, read)
         }
@@ -105,7 +106,7 @@ internal fun readInputStreamWithStreamingDigest(
         val hexDigest = digest.digest().joinToString("") { byte -> "%02x".format(byte) }
         return requestBodySink.detachHandle(
             sha256Hex = hexDigest,
-            sizeBytes = totalRead.toLong(),
+            sizeBytes = totalRead,
         )
     } catch (error: Throwable) {
         requestBodySink.close()
@@ -113,8 +114,22 @@ internal fun readInputStreamWithStreamingDigest(
     }
 }
 
+private fun accumulateReadBytes(
+    current: Long,
+    partBytes: Long,
+    maxBytes: Long,
+): Long {
+    if (partBytes < 0) {
+        requestRejected("invalid part size", HttpStatusCode.BadRequest)
+    }
+    if (current > maxBytes || partBytes > maxBytes - current) {
+        requestRejected("request body too large", HttpStatusCode.PayloadTooLarge)
+    }
+    return current + partBytes
+}
+
 private class RequestBodySink(
-    private val policy: RequestBodyBufferingPolicy = RequestBodyBufferingPolicy(),
+    private val policy: RequestBodyBufferingPolicy = RequestBodyBufferingPolicy.default(),
 ) : AutoCloseable {
     private var totalBufferedBytes = 0
     private var storage: RequestBodyStorage =
@@ -150,20 +165,7 @@ private class RequestBodySink(
     }
 
     private fun spillToDisk(memoryStorage: InMemoryRequestBodyStorage): RequestBodyStorage {
-        Files.createDirectories(policy.spillDirectory)
-        val spillPath =
-            Files.createTempFile(
-                policy.spillDirectory,
-                REQUEST_BODY_TEMP_FILE_PREFIX,
-                REQUEST_BODY_TEMP_FILE_SUFFIX,
-            )
-        val spillStorage =
-            try {
-                policy.spillStorageFactory(spillPath)
-            } catch (error: Throwable) {
-                Files.deleteIfExists(spillPath)
-                throw error
-            }
+        val (spillPath, spillStorage) = createSpillStorage()
         return try {
             val inMemoryBytes = memoryStorage.toByteArray()
             if (inMemoryBytes.isNotEmpty()) {
@@ -176,22 +178,70 @@ private class RequestBodySink(
             throw error
         }
     }
+
+    private fun createSpillStorage(): Pair<Path, RequestBodyStorage> =
+        createSpillPath(policy.spillDirectory)
+            .let { spillPath -> spillPath to createSpillStorage(spillPath) }
+
+    private fun createSpillPath(directory: Path): Path =
+        runCatching { prepareSpillPath(directory) }.getOrElse { error ->
+            if (!policy.allowJvmTempFallback) {
+                throw error
+            }
+            val fallbackDirectory =
+                Path.of(System.getProperty("java.io.tmpdir"), "request-bodies")
+            IrisLogger.warn(
+                "[RequestBodyReader] Failed to prepare spill directory ${policy.spillDirectory}: ${error.message}. " +
+                    "Falling back to $fallbackDirectory",
+            )
+            prepareSpillPath(fallbackDirectory)
+        }
+
+    private fun prepareSpillPath(directory: Path): Path {
+        Files.createDirectories(directory)
+        return Files.createTempFile(
+            directory,
+            REQUEST_BODY_TEMP_FILE_PREFIX,
+            REQUEST_BODY_TEMP_FILE_SUFFIX,
+        )
+    }
+
+    private fun createSpillStorage(spillPath: Path): RequestBodyStorage =
+        try {
+            policy.spillStorageFactory(spillPath)
+        } catch (error: Throwable) {
+            Files.deleteIfExists(spillPath)
+            throw error
+        }
 }
 
 internal data class RequestBodyBufferingPolicy(
     val maxInMemoryBytes: Int = MAX_IN_MEMORY_BODY_BYTES,
-    val spillDirectory: Path =
-        java.nio.file.Paths
-            .get(ConfigPathPolicy.resolveRequestBodySpillDirectory()),
+    val spillDirectory: Path,
+    private val implicitSpillDirectory: Path? = null,
     val spillStorageFactory: (Path) -> RequestBodyStorage = ::SpillFileRequestBodyStorage,
 ) {
     init {
         require(maxInMemoryBytes > 0) { "maxInMemoryBytes must be positive" }
     }
 
+    val allowJvmTempFallback: Boolean
+        get() = implicitSpillDirectory != null && spillDirectory == implicitSpillDirectory
+
     companion object {
         private const val MAX_IN_MEMORY_ENV = "IRIS_REQUEST_BODY_MAX_IN_MEMORY_BYTES"
         private const val SPILL_DIR_ENV = "IRIS_REQUEST_BODY_SPILL_DIR"
+
+        fun default(): RequestBodyBufferingPolicy {
+            val implicitSpillDirectory =
+                java.nio.file.Paths
+                    .get(ConfigPathPolicy.resolveRequestBodySpillDirectory())
+            return RequestBodyBufferingPolicy(
+                spillDirectory =
+                    implicitSpillDirectory,
+                implicitSpillDirectory = implicitSpillDirectory,
+            )
+        }
 
         fun fromEnv(
             env: Map<String, String> = System.getenv(),
@@ -202,16 +252,20 @@ internal data class RequestBodyBufferingPolicy(
                     ?.toIntOrNull()
                     ?.takeIf { it > 0 }
                     ?: MAX_IN_MEMORY_BODY_BYTES
-            val configuredSpillDirectory =
+            val explicitSpillDirectory =
                 env[SPILL_DIR_ENV]
                     ?.trim()
                     .orEmpty()
+            val configuredSpillDirectory =
+                explicitSpillDirectory
                     .ifBlank { ConfigPathPolicy.resolveRequestBodySpillDirectory(env) }
+            val spillDirectory =
+                java.nio.file.Paths
+                    .get(configuredSpillDirectory)
             return RequestBodyBufferingPolicy(
                 maxInMemoryBytes = configuredMaxInMemoryBytes,
-                spillDirectory =
-                    java.nio.file.Paths
-                        .get(configuredSpillDirectory),
+                spillDirectory = spillDirectory,
+                implicitSpillDirectory = spillDirectory.takeIf { explicitSpillDirectory.isBlank() },
             )
         }
     }

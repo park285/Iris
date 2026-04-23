@@ -4,6 +4,7 @@ import io.ktor.client.request.forms.MultiPartFormDataContent
 import io.ktor.client.request.forms.formData
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -849,6 +850,145 @@ class ReplyRoutesMultipartTest {
                                     buildPacket { writeFully(blob) },
                                     headersOf(
                                         HttpHeaders.ContentDisposition to listOf("form-data; name=\"image\"; filename=\"one.png\""),
+                                        HttpHeaders.ContentType to listOf("image/png"),
+                                    ),
+                                )
+                            },
+                        ),
+                    )
+                    applySignedHeaders(
+                        path = "/reply",
+                        method = "POST",
+                        bodySha256Hex = sha256Hex(metadata.toByteArray()),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.BadRequest, response.status)
+            assertEquals(0, sender.multiPhotoCalls)
+        }
+
+    @Test
+    fun `multipart image request rejects unknown form part`() =
+        testApplication {
+            val sender = RecordingMultipartMessageSender()
+            application {
+                install(ContentNegotiation) {
+                    json(serverJson)
+                }
+                install(StatusPages) {
+                    exception<ApiRequestException> { call, cause ->
+                        call.respond(cause.status, CommonErrorResponse(message = cause.message))
+                    }
+                }
+                routing {
+                    installReplyRoutes(
+                        authSupport = AuthSupport(party.qwer.iris.RequestAuthenticator(), multipartRouteConfig),
+                        serverJson = serverJson,
+                        notificationReferer = "ref",
+                        messageSender = sender,
+                        replyStatusProvider = null,
+                    )
+                }
+            }
+
+            val image = pngBytes(1, 2, 3, 4)
+            val metadata =
+                serverJson.encodeToString(
+                    ReplyImageMetadata(
+                        type = ReplyType.IMAGE,
+                        room = "123456",
+                        images =
+                            listOf(
+                                ReplyImagePartSpec(
+                                    index = 0,
+                                    sha256Hex = sha256Hex(image),
+                                    byteLength = image.size.toLong(),
+                                    contentType = "image/png",
+                                ),
+                            ),
+                    ),
+                )
+            val response =
+                this.client.post("/reply") {
+                    setBody(
+                        MultiPartFormDataContent(
+                            formData {
+                                append("metadata", metadata, headersOf(HttpHeaders.ContentType, "application/json"))
+                                append("unexpected", "oops", headersOf(HttpHeaders.ContentType, "text/plain"))
+                                append(
+                                    "image",
+                                    buildPacket { writeFully(image) },
+                                    headersOf(
+                                        HttpHeaders.ContentDisposition to listOf("form-data; name=\"image\"; filename=\"one.png\""),
+                                        HttpHeaders.ContentType to listOf("image/png"),
+                                    ),
+                                )
+                            },
+                        ),
+                    )
+                    applySignedHeaders(
+                        path = "/reply",
+                        method = "POST",
+                        bodySha256Hex = sha256Hex(metadata.toByteArray()),
+                    )
+                }
+
+            assertEquals(HttpStatusCode.BadRequest, response.status)
+            assertEquals(0, sender.multiPhotoCalls)
+        }
+
+    @Test
+    fun `multipart image request rejects unknown file part`() =
+        testApplication {
+            val sender = RecordingMultipartMessageSender()
+            application {
+                install(ContentNegotiation) {
+                    json(serverJson)
+                }
+                install(StatusPages) {
+                    exception<ApiRequestException> { call, cause ->
+                        call.respond(cause.status, CommonErrorResponse(message = cause.message))
+                    }
+                }
+                routing {
+                    installReplyRoutes(
+                        authSupport = AuthSupport(party.qwer.iris.RequestAuthenticator(), multipartRouteConfig),
+                        serverJson = serverJson,
+                        notificationReferer = "ref",
+                        messageSender = sender,
+                        replyStatusProvider = null,
+                    )
+                }
+            }
+
+            val image = pngBytes(1, 2, 3, 4)
+            val metadata =
+                serverJson.encodeToString(
+                    ReplyImageMetadata(
+                        type = ReplyType.IMAGE,
+                        room = "123456",
+                        images =
+                            listOf(
+                                ReplyImagePartSpec(
+                                    index = 0,
+                                    sha256Hex = sha256Hex(image),
+                                    byteLength = image.size.toLong(),
+                                    contentType = "image/png",
+                                ),
+                            ),
+                    ),
+                )
+            val response =
+                this.client.post("/reply") {
+                    setBody(
+                        MultiPartFormDataContent(
+                            formData {
+                                append("metadata", metadata, headersOf(HttpHeaders.ContentType, "application/json"))
+                                append(
+                                    "attachment",
+                                    buildPacket { writeFully(image) },
+                                    headersOf(
+                                        HttpHeaders.ContentDisposition to listOf("form-data; name=\"attachment\"; filename=\"one.png\""),
                                         HttpHeaders.ContentType to listOf("image/png"),
                                     ),
                                 )

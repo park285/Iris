@@ -3,6 +3,7 @@ package party.qwer.iris.persistence
 import party.qwer.iris.http.SseEventEnvelope
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class SqliteSseEventStoreTest {
@@ -168,16 +169,27 @@ class SqliteSseEventStoreTest {
     }
 
     @Test
-    fun `prune with zero keepCount deletes all events`() {
+    fun `prune with zero keepCount fails`() {
         val (helper, store) = createStore()
         helper.use {
             store.insert("message", "a", 1000L)
             store.insert("message", "b", 2000L)
 
-            store.prune(keepCount = 0)
+            assertFailsWith<IllegalArgumentException> {
+                store.prune(keepCount = 0)
+            }
+        }
+    }
 
-            assertEquals(0L, store.maxId())
-            assertTrue(store.replayAfter(0L, limit = 100).isEmpty())
+    @Test
+    fun `prune with negative keepCount fails`() {
+        val (helper, store) = createStore()
+        helper.use {
+            store.insert("message", "a", 1000L)
+
+            assertFailsWith<IllegalArgumentException> {
+                store.prune(keepCount = -1)
+            }
         }
     }
 

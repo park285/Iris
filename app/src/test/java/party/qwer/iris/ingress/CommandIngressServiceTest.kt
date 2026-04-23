@@ -3,6 +3,7 @@ package party.qwer.iris.ingress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -69,7 +70,7 @@ class CommandIngressServiceTest {
         assertEquals(42L, ingress.lastBufferedLogId())
         assertEquals(null, db.lastPolledAfterLogId)
         assertTrue(markDirtyCalls.isEmpty())
-        ingress.close()
+        runBlocking { ingress.closeSuspend() }
     }
 
     @Test
@@ -94,7 +95,7 @@ class CommandIngressServiceTest {
         assertEquals(5L, ingress.lastPolledLogId())
         assertEquals(5L, ingress.lastBufferedLogId())
         assertEquals(5L, db.lastPolledAfterLogId)
-        ingress.close()
+        runBlocking { ingress.closeSuspend() }
     }
 
     @Test
@@ -128,7 +129,7 @@ class CommandIngressServiceTest {
         assertEquals(10L, store.load("chat_logs"))
         journal.flushIfDirty()
         assertEquals(11L, store.load("chat_logs"))
-        ingress.close()
+        runBlocking { ingress.closeSuspend() }
     }
 
     @Test
@@ -158,7 +159,7 @@ class CommandIngressServiceTest {
         ingress.checkChange()
 
         assertEquals(listOf(100L, 200L, 100L), markDirtyCalls)
-        ingress.close()
+        runBlocking { ingress.closeSuspend() }
     }
 
     @Test
@@ -183,7 +184,7 @@ class CommandIngressServiceTest {
 
         assertEquals(11L, journal.saved["chat_logs"])
         assertEquals(listOf("chat_logs" to 11L), journal.advanceCalls)
-        ingress.close()
+        runBlocking { ingress.closeSuspend() }
     }
 
     @Test
@@ -231,7 +232,7 @@ class CommandIngressServiceTest {
             val event = eventStore.insertedEvents.last { it.eventType == "nickname_change" }
             assertTrue(event.payload.contains("\"oldNickname\":\"Old Name\""))
             assertTrue(event.payload.contains("\"newNickname\":\"New Name\""))
-            ingress.close()
+            runBlocking { ingress.closeSuspend() }
         }
 
     @Test
@@ -282,7 +283,7 @@ class CommandIngressServiceTest {
             val event = eventStore.insertedEvents.single { it.eventType == "nickname_change" }
             assertTrue(event.payload.contains("\"oldNickname\":\"Old Name\""))
             assertTrue(event.payload.contains("\"newNickname\":\"New Name\""))
-            ingress.close()
+            runBlocking { ingress.closeSuspend() }
         }
 
     @Test
@@ -321,7 +322,7 @@ class CommandIngressServiceTest {
             runCurrent()
 
             assertEquals(0, eventStore.insertedEvents.count { it.eventType == "nickname_change" })
-            ingress.close()
+            runBlocking { ingress.closeSuspend() }
         }
 
     @Test
@@ -361,7 +362,7 @@ class CommandIngressServiceTest {
 
             assertEquals(1, routingGateway.commands.size)
             assertEquals(11L, ingress.lastObservedLogId())
-            ingress.close()
+            runBlocking { ingress.closeSuspend() }
         }
 
     @Test
@@ -409,7 +410,7 @@ class CommandIngressServiceTest {
             val event = eventStore.insertedEvents.last { it.eventType == "nickname_change" }
             assertTrue(event.payload.contains("\"oldNickname\":\"Old Name\""))
             assertTrue(event.payload.contains("\"newNickname\":\"New Name\""))
-            ingress.close()
+            runBlocking { ingress.closeSuspend() }
         }
 
     @Test
@@ -456,7 +457,7 @@ class CommandIngressServiceTest {
             runCurrent()
 
             assertEquals(0, eventStore.insertedEvents.count { it.eventType == "nickname_change" })
-            ingress.close()
+            runBlocking { ingress.closeSuspend() }
         }
 
     @Test
@@ -500,7 +501,7 @@ class CommandIngressServiceTest {
             val event = eventStore.insertedEvents.single { it.eventType == "nickname_change" }
             assertTrue(event.payload.contains("\"oldNickname\":\"Old Name\""))
             assertTrue(event.payload.contains("\"newNickname\":\"New Name\""))
-            ingress.close()
+            runBlocking { ingress.closeSuspend() }
         }
 
     @Test
@@ -548,7 +549,7 @@ class CommandIngressServiceTest {
             val event = eventStore.insertedEvents.single { it.eventType == "nickname_change" }
             assertTrue(event.payload.contains("\"oldNickname\":\"Old Name\""))
             assertTrue(event.payload.contains("\"newNickname\":\"New Name\""))
-            ingress.close()
+            runBlocking { ingress.closeSuspend() }
         }
 
     @Test
@@ -581,7 +582,7 @@ class CommandIngressServiceTest {
             runCurrent()
 
             assertTrue(markDirtyCalls.count { it == 100L } >= 4)
-            ingress.close()
+            runBlocking { ingress.closeSuspend() }
         }
 
     @Test
@@ -614,7 +615,7 @@ class CommandIngressServiceTest {
             runCurrent()
 
             assertTrue(markDirtyCalls.count { it == 100L } >= 4)
-            ingress.close()
+            runBlocking { ingress.closeSuspend() }
         }
 
     @Test
@@ -638,7 +639,7 @@ class CommandIngressServiceTest {
         ingress.checkChange()
 
         assertEquals(0, journal.flushIfDirtyCalls)
-        ingress.close()
+        runBlocking { ingress.closeSuspend() }
     }
 
     @Test
@@ -657,7 +658,7 @@ class CommandIngressServiceTest {
         repeat(3) { ingress.checkChange() }
 
         assertTrue(markDirtyCalls.isEmpty())
-        ingress.close()
+        runBlocking { ingress.closeSuspend() }
     }
 
     @Test
@@ -698,7 +699,7 @@ class CommandIngressServiceTest {
 
             assertEquals(2, routingGateway.commands.size)
             assertEquals(12L, ingress.lastObservedLogId())
-            ingress.close()
+            runBlocking { ingress.closeSuspend() }
         }
 
     @Test
@@ -731,7 +732,7 @@ class CommandIngressServiceTest {
             ingress.checkChange()
             assertEquals(2, db.pollCalls)
             assertEquals(11L, db.lastPolledAfterLogId)
-            ingress.close()
+            runBlocking { ingress.closeSuspend() }
         }
 
     @Test
@@ -765,7 +766,7 @@ class CommandIngressServiceTest {
             ingress.checkChange()
 
             assertEquals(1, db.pollCalls)
-            ingress.close()
+            runBlocking { ingress.closeSuspend() }
         }
 
     @Test
@@ -828,7 +829,7 @@ class CommandIngressServiceTest {
                 ),
                 ingress.progressSnapshot(),
             )
-            ingress.close()
+            runBlocking { ingress.closeSuspend() }
         }
 
     @Test
@@ -893,7 +894,7 @@ class CommandIngressServiceTest {
             assertEquals(12L, ingress.lastObservedLogId())
             assertEquals(listOf("chat_logs" to 11L, "chat_logs" to 12L), journal.advanceCalls.takeLast(2))
             assertEquals(1, routeCalls[12L]?.get())
-            ingress.close()
+            runBlocking { ingress.closeSuspend() }
         }
 
     @Test
@@ -941,7 +942,7 @@ class CommandIngressServiceTest {
             assertEquals("2", imageCmd.messageType)
             assertEquals("cmd-log-123", imageCmd.threadId)
             assertEquals(2, imageCmd.threadScope)
-            ingress.close()
+            runBlocking { ingress.closeSuspend() }
         }
 
     @Test
@@ -964,10 +965,36 @@ class CommandIngressServiceTest {
         val job = checkNotNull(dispatchScope.coroutineContext[Job])
         assertTrue(job.isActive)
 
-        ingress.close()
+        runBlocking { ingress.closeSuspend() }
 
         assertTrue(job.isCancelled)
     }
+
+    @Test
+    fun `close waits for dispatch loop jobs to finish`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val ingress =
+                CommandIngressService(
+                    db = FakeChatLogRepository(latestLogId = 10L),
+                    config = config,
+                    checkpointJournal = FakeCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
+                    routingGateway = FakeRoutingGateway(),
+                    dispatchDispatcher = dispatcher,
+                    onMarkDirty = {},
+                )
+
+            val jobs =
+                CommandIngressService::class.java.getDeclaredField("dispatchLoopJobs").let { field ->
+                    field.isAccessible = true
+                    @Suppress("UNCHECKED_CAST")
+                    field.get(ingress) as List<Job>
+                }
+
+            ingress.closeSuspend()
+
+            assertTrue(jobs.all { it.isCompleted }, "close should wait for dispatch loop jobs to complete")
+        }
 }
 
 private class FakeChatLogRepository(

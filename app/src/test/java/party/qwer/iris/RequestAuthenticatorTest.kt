@@ -249,6 +249,99 @@ class RequestAuthenticatorTest {
     }
 
     @Test
+    fun `preverify reserves nonce before finalize completes`() {
+        val authenticator = RequestAuthenticator(nowEpochMs = { 1_000L })
+        val body = """{"endpoint":"http://example"}"""
+        val bodySha256Hex = sha256Hex(body.toByteArray())
+        val timestamp = "1000"
+        val nonce = "nonce-reserved"
+        val signature =
+            signIrisRequestWithBodyHash(
+                secret = "secret",
+                method = "POST",
+                path = "/config/endpoint",
+                timestamp = timestamp,
+                nonce = nonce,
+                bodySha256Hex = bodySha256Hex,
+            )
+
+        val first =
+            authenticator.preverify(
+                method = "POST",
+                path = "/config/endpoint",
+                declaredBodySha256Hex = bodySha256Hex,
+                expectedSecret = "secret",
+                timestampHeader = timestamp,
+                nonceHeader = nonce,
+                signatureHeader = signature,
+            )
+        val second =
+            authenticator.preverify(
+                method = "POST",
+                path = "/config/endpoint",
+                declaredBodySha256Hex = bodySha256Hex,
+                expectedSecret = "secret",
+                timestampHeader = timestamp,
+                nonceHeader = nonce,
+                signatureHeader = signature,
+            )
+
+        assertEquals(AuthResult.AUTHORIZED, first.result)
+        assertEquals(AuthResult.UNAUTHORIZED, second.result)
+    }
+
+    @Test
+    fun `preverify nonce scope includes canonical target`() {
+        val authenticator = RequestAuthenticator(nowEpochMs = { 1_000L })
+        val body = ""
+        val bodySha256Hex = sha256Hex(body.toByteArray())
+        val timestamp = "1000"
+        val nonce = "nonce-scoped"
+        val firstSignature =
+            signIrisRequestWithBodyHash(
+                secret = "secret",
+                method = "GET",
+                path = "/config",
+                timestamp = timestamp,
+                nonce = nonce,
+                bodySha256Hex = bodySha256Hex,
+            )
+        val secondSignature =
+            signIrisRequestWithBodyHash(
+                secret = "secret",
+                method = "GET",
+                path = "/rooms",
+                timestamp = timestamp,
+                nonce = nonce,
+                bodySha256Hex = bodySha256Hex,
+            )
+
+        val first =
+            authenticator.preverify(
+                method = "GET",
+                path = "/config",
+                declaredBodySha256Hex = bodySha256Hex,
+                expectedSecret = "secret",
+                timestampHeader = timestamp,
+                nonceHeader = nonce,
+                signatureHeader = firstSignature,
+            )
+        val second =
+            authenticator.preverify(
+                method = "GET",
+                path = "/rooms",
+                declaredBodySha256Hex = bodySha256Hex,
+                expectedSecret = "secret",
+                timestampHeader = timestamp,
+                nonceHeader = nonce,
+                signatureHeader = secondSignature,
+            )
+
+        assertEquals(AuthResult.AUTHORIZED, first.result)
+        assertEquals(AuthResult.AUTHORIZED, second.result)
+    }
+
+    @Test
     fun `body hash mismatch does not consume nonce before finalize succeeds`() {
         val authenticator = RequestAuthenticator(nowEpochMs = { 1_000L })
         val body = """{"endpoint":"http://example"}"""
@@ -324,7 +417,7 @@ class RequestAuthenticatorTest {
     }
 
     @Test
-    fun `expired nonce remains blocked until purge cadence runs`() {
+    fun `same nonce can be reused with fresh timestamp`() {
         var now = 1_000L
         val authenticator =
             RequestAuthenticator(
@@ -339,14 +432,10 @@ class RequestAuthenticatorTest {
 
         now = 2_500L
         val filler = authenticateSignedRequest(authenticator, now = now, nonce = "nonce-2")
-        val reusedBeforePurge = authenticateSignedRequest(authenticator, now = now, nonce = "nonce-1")
-
-        now = 6_500L
-        val reusedAfterPurge = authenticateSignedRequest(authenticator, now = now, nonce = "nonce-1")
+        val reusedWithFreshTimestamp = authenticateSignedRequest(authenticator, now = now, nonce = "nonce-1")
 
         assertEquals(AuthResult.AUTHORIZED, filler)
-        assertEquals(AuthResult.UNAUTHORIZED, reusedBeforePurge)
-        assertEquals(AuthResult.AUTHORIZED, reusedAfterPurge)
+        assertEquals(AuthResult.AUTHORIZED, reusedWithFreshTimestamp)
     }
 
     private fun authenticateSignedRequest(

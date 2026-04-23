@@ -88,6 +88,20 @@ class RequestBodyReaderTest {
         }
 
     @Test
+    fun `rejects negative Content-Length`() =
+        runBlocking {
+            val error =
+                assertFailsWith<ApiRequestException> {
+                    readBodyWithStreamingDigest(
+                        bodyChannel = ByteReadChannel("small"),
+                        declaredContentLength = -1,
+                        maxBodyBytes = 1024,
+                    )
+                }
+            assertEquals(HttpStatusCode.BadRequest, error.status)
+        }
+
+    @Test
     fun `returns body and streaming sha256 digest`() =
         runBlocking {
             val payload = """{"action":"test","data":"hello"}"""
@@ -140,6 +154,19 @@ class RequestBodyReaderTest {
                 assertEquals(payload, result.readUtf8Body())
             }
         }
+
+    @Test
+    fun `accumulateReplyBodyBytes rejects overflowing addition`() {
+        val error =
+            assertFailsWith<ApiRequestException> {
+                accumulateReplyBodyBytes(
+                    current = Long.MAX_VALUE - 4,
+                    partBytes = 10,
+                    maxBytes = Long.MAX_VALUE,
+                )
+            }
+        assertEquals(HttpStatusCode.PayloadTooLarge, error.status)
+    }
 
     @Test
     fun `large body spills to temp storage during read and removes it after success`() =
@@ -302,6 +329,43 @@ class RequestBodyReaderTest {
         }
 
     @Test
+    fun `implicit default path does not fall back when spill storage factory fails`() =
+        runBlocking {
+            withIsolatedJvmTempDir { tempDir ->
+                val dataDir = Files.createTempDirectory("request-body-spill-data-")
+                try {
+                    val error =
+                        assertFailsWith<IllegalStateException> {
+                            readBodyWithStreamingDigest(
+                                bodyChannel = ByteReadChannel("z".repeat(96 * 1024)),
+                                declaredContentLength = null,
+                                maxBodyBytes = 256 * 1024,
+                                bufferingPolicy =
+                                    RequestBodyBufferingPolicy
+                                        .fromEnv(
+                                            env =
+                                                mapOf(
+                                                    "IRIS_DATA_DIR" to dataDir.toString(),
+                                                    "IRIS_REQUEST_BODY_MAX_IN_MEMORY_BYTES" to "64",
+                                                ),
+                                        ).copy(
+                                            spillStorageFactory = ::FailingOpenSpillStorage,
+                                        ),
+                            )
+                        }
+
+                    assertEquals("spill open failed", error.message)
+                    assertTrue(
+                        Files.notExists(tempDir.resolve("request-bodies")),
+                        "expected spill storage factory failure to avoid jvm temp fallback",
+                    )
+                } finally {
+                    dataDir.deleteRecursively()
+                }
+            }
+        }
+
+    @Test
     fun `spill path is created on demand when configured directory does not exist`() =
         runBlocking {
             val baseDir = Files.createTempDirectory("request-body-spill-parent-")
@@ -323,6 +387,124 @@ class RequestBodyReaderTest {
                 assertTrue(Files.isDirectory(missingSpillDir), "expected spill directory to be created automatically")
             } finally {
                 baseDir.deleteRecursively()
+            }
+        }
+
+    @Test
+    fun `implicit default spill path falls back to jvm temp dir on host`() =
+        runBlocking {
+            withIsolatedJvmTempDir { tempDir ->
+                val baseDir = Files.createTempDirectory("request-body-spill-blocked-")
+                val blockingFile = baseDir.resolve("not-a-directory")
+                Files.write(blockingFile, "blocked".toByteArray())
+                val impossibleDataDir = blockingFile
+
+                try {
+                    readBodyWithStreamingDigest(
+                        bodyChannel = ByteReadChannel("z".repeat(96 * 1024)),
+                        declaredContentLength = null,
+                        maxBodyBytes = 256 * 1024,
+                        bufferingPolicy =
+                            RequestBodyBufferingPolicy.fromEnv(
+                                env =
+                                    mapOf(
+                                        "IRIS_DATA_DIR" to impossibleDataDir.toString(),
+                                        "IRIS_REQUEST_BODY_MAX_IN_MEMORY_BYTES" to "64",
+                                    ),
+                            ),
+                    ).use { result ->
+                        assertTrue(result is SpillFileRequestBodyHandle)
+                        assertEquals("z".repeat(96 * 1024), result.readUtf8Body())
+                    }
+
+                    assertTrue(
+                        Files.exists(tempDir.resolve("request-bodies")),
+                        "expected fallback spill directory under java.io.tmpdir to be used",
+                    )
+                } finally {
+                    baseDir.deleteRecursively()
+                }
+            }
+        }
+
+    @Test
+    fun `explicit spill dir env override does not fall back to jvm temp dir`() =
+        runBlocking {
+            withIsolatedJvmTempDir { tempDir ->
+                val baseDir = Files.createTempDirectory("request-body-spill-blocked-")
+                val blockingFile = baseDir.resolve("not-a-directory")
+                Files.write(blockingFile, "blocked".toByteArray())
+                val impossibleSpillDir = blockingFile.resolve("nested")
+
+                try {
+                    val error =
+                        assertFailsWith<java.nio.file.FileSystemException> {
+                            readBodyWithStreamingDigest(
+                                bodyChannel = ByteReadChannel("z".repeat(96 * 1024)),
+                                declaredContentLength = null,
+                                maxBodyBytes = 256 * 1024,
+                                bufferingPolicy =
+                                    RequestBodyBufferingPolicy.fromEnv(
+                                        env =
+                                            mapOf(
+                                                "IRIS_REQUEST_BODY_SPILL_DIR" to impossibleSpillDir.toString(),
+                                                "IRIS_REQUEST_BODY_MAX_IN_MEMORY_BYTES" to "64",
+                                            ),
+                                    ),
+                            )
+                        }
+
+                    assertTrue(
+                        error.message.orEmpty().contains(impossibleSpillDir.parent.toString()),
+                        "expected explicit spill dir failure to mention the configured path",
+                    )
+                    assertTrue(
+                        Files.notExists(tempDir.resolve("request-bodies")),
+                        "expected explicit spill dir failure to avoid jvm temp fallback",
+                    )
+                } finally {
+                    baseDir.deleteRecursively()
+                }
+            }
+        }
+
+    @Test
+    fun `customized default policy spill dir does not fall back to jvm temp dir`() =
+        runBlocking {
+            withIsolatedJvmTempDir { tempDir ->
+                val baseDir = Files.createTempDirectory("request-body-spill-blocked-")
+                val blockingFile = baseDir.resolve("not-a-directory")
+                Files.write(blockingFile, "blocked".toByteArray())
+                val impossibleSpillDir = blockingFile.resolve("nested")
+
+                try {
+                    val error =
+                        assertFailsWith<java.nio.file.FileSystemException> {
+                            readBodyWithStreamingDigest(
+                                bodyChannel = ByteReadChannel("z".repeat(96 * 1024)),
+                                declaredContentLength = null,
+                                maxBodyBytes = 256 * 1024,
+                                bufferingPolicy =
+                                    RequestBodyBufferingPolicy
+                                        .default()
+                                        .copy(
+                                            maxInMemoryBytes = 64,
+                                            spillDirectory = impossibleSpillDir,
+                                        ),
+                            )
+                        }
+
+                    assertTrue(
+                        error.message.orEmpty().contains(impossibleSpillDir.parent.toString()),
+                        "expected customized default policy failure to mention the configured path",
+                    )
+                    assertTrue(
+                        Files.notExists(tempDir.resolve("request-bodies")),
+                        "expected customized default policy failure to avoid jvm temp fallback",
+                    )
+                } finally {
+                    baseDir.deleteRecursively()
+                }
             }
         }
 
@@ -367,6 +549,11 @@ private class FailingSpillStorage(
     override fun close() {
         Files.deleteIfExists(path)
     }
+}
+
+private fun FailingOpenSpillStorage(path: Path): RequestBodyStorage {
+    Files.deleteIfExists(path)
+    throw IllegalStateException("spill open failed")
 }
 
 private class NoStringReadSpillStorage(

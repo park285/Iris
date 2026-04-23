@@ -37,17 +37,10 @@ internal fun Route.installConfigRoutes(
                     val name = call.parameters["name"] ?: throw ApiRequestException("missing config name")
                     val request = bodyResult.decodeJson(serverJson, ConfigRequest.serializer())
                     val updateOutcome = applyConfigUpdate(configManager, name, request)
-                    if (!configManager.saveConfigNow()) {
+                    if (!updateOutcome.persisted) {
                         throw ApiRequestException("failed to persist config update", HttpStatusCode.InternalServerError)
                     }
-                    call.respond(
-                        configManager.configUpdateResponse(
-                            name = updateOutcome.name,
-                            persisted = true,
-                            applied = updateOutcome.applied,
-                            requiresRestart = updateOutcome.requiresRestart,
-                        ),
-                    )
+                    call.respond(updateOutcome.response ?: error("persisted config update must include response"))
                 }
             ) {
                 return@post

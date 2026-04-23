@@ -1,11 +1,21 @@
 package party.qwer.iris.persistence
 
+import party.qwer.iris.IrisLogger
 import java.util.UUID
 
 class SqliteWebhookDeliveryStore(
     private val db: SqliteDriver,
     private val clock: () -> Long = System::currentTimeMillis,
 ) : WebhookDeliveryStore {
+    private data class ClaimCandidate(
+        val id: Long,
+        val messageId: String,
+        val roomId: Long,
+        val route: String,
+        val payloadJson: String,
+        val failedAttemptCount: Int,
+    )
+
     override fun enqueue(delivery: PendingWebhookDelivery): Long =
         db.inImmediateTransaction {
             val now = clock()
@@ -18,13 +28,13 @@ class SqliteWebhookDeliveryStore(
             queryLong(
                 "SELECT id FROM ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE} WHERE message_id = ?",
                 delivery.messageId,
-            )!!
+            ) ?: throw IllegalStateException("failed to read webhook delivery id for messageId=${delivery.messageId}")
         }
 
     override fun claimReady(limit: Int): List<ClaimedDelivery> =
         db.inImmediateTransaction {
             val now = clock()
-            val rows =
+            val candidates =
                 query(
                     """SELECT id, message_id, room_id, route, payload_json, attempt_count
                        FROM ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE}
@@ -32,25 +42,38 @@ class SqliteWebhookDeliveryStore(
                        ORDER BY id LIMIT ?""",
                     listOf(now, limit),
                 ) { row ->
-                    val id = row.getLong(0)
-                    val claimToken = UUID.randomUUID().toString()
-                    update(
-                        """UPDATE ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE}
-                           SET status = 'CLAIMED', claim_token = ?, claimed_at = ?, updated_at = ?
-                           WHERE id = ? AND status IN ('PENDING', 'RETRY')""",
-                        listOf(claimToken, now, now, id),
-                    )
-                    ClaimedDelivery(
-                        id = id,
+                    ClaimCandidate(
+                        id = row.getLong(0),
                         messageId = row.getString(1),
                         roomId = row.getLong(2),
                         route = row.getString(3),
                         payloadJson = row.getString(4),
                         failedAttemptCount = row.getInt(5),
-                        claimToken = claimToken,
                     )
                 }
-            rows
+            candidates.mapNotNull { candidate ->
+                val claimToken = UUID.randomUUID().toString()
+                val updated =
+                    update(
+                        """UPDATE ${IrisDatabaseSchema.WEBHOOK_OUTBOX_TABLE}
+                           SET status = 'CLAIMED', claim_token = ?, claimed_at = ?, updated_at = ?
+                           WHERE id = ? AND status IN ('PENDING', 'RETRY')""",
+                        listOf(claimToken, now, now, candidate.id),
+                    )
+                if (updated != 1) {
+                    IrisLogger.warn("[SqliteWebhookDeliveryStore] stale claim candidate ignored: id=${candidate.id}")
+                    return@mapNotNull null
+                }
+                ClaimedDelivery(
+                    id = candidate.id,
+                    messageId = candidate.messageId,
+                    roomId = candidate.roomId,
+                    route = candidate.route,
+                    payloadJson = candidate.payloadJson,
+                    failedAttemptCount = candidate.failedAttemptCount,
+                    claimToken = claimToken,
+                )
+            }
         }
 
     override fun markSent(

@@ -36,6 +36,7 @@ class SqliteSseEventStore(
     override fun maxId(): Long = driver.queryLong("SELECT MAX(id) FROM ${IrisDatabaseSchema.SSE_EVENTS_TABLE}") ?: 0L
 
     override fun prune(keepCount: Int) {
+        require(keepCount > 0) { "keepCount must be positive" }
         driver.execute(
             "DELETE FROM ${IrisDatabaseSchema.SSE_EVENTS_TABLE} WHERE id NOT IN (SELECT id FROM ${IrisDatabaseSchema.SSE_EVENTS_TABLE} ORDER BY id DESC LIMIT $keepCount)",
         )

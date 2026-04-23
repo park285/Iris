@@ -30,6 +30,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
@@ -163,6 +164,83 @@ class WebhookOutboxDispatcherTest {
                 Files.deleteIfExists(Path.of(configPath))
             }
         }
+
+    @Test
+    fun `concurrent start performs one startup recovery and one polling loop`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val configPath = temporaryConfigPath("iris-outbox-concurrent-start")
+            val config = createBootstrappedConfigManager(configPath)
+            val firstRecoverEntered = CountDownLatch(1)
+            val secondRecoverEntered = CountDownLatch(1)
+            val releaseRecover = CountDownLatch(1)
+            lateinit var store: RecordingWebhookDeliveryStore
+            store =
+                RecordingWebhookDeliveryStore(
+                    claimedEntries = emptyList(),
+                    onRecoverExpiredClaims = {
+                        when (store.recoverCallCount.get()) {
+                            1 -> firstRecoverEntered.countDown()
+                            2 -> secondRecoverEntered.countDown()
+                        }
+                        assertTrue(releaseRecover.await(5, TimeUnit.SECONDS), "test should release startup recovery")
+                    },
+                )
+            val outboxDispatcher =
+                WebhookOutboxDispatcher(
+                    config = config,
+                    store = store,
+                    deliveryPolicy =
+                        WebhookDeliveryPolicy(
+                            pollIntervalMs = 1_000L,
+                            maxClaimBatchSize = 1,
+                        ),
+                    clock = { testScheduler.currentTime },
+                    dispatcher = dispatcher,
+                )
+            val firstStart = Thread { outboxDispatcher.start() }
+            val secondStart = Thread { outboxDispatcher.start() }
+
+            try {
+                firstStart.start()
+                assertTrue(firstRecoverEntered.await(5, TimeUnit.SECONDS), "first start should enter startup recovery")
+                secondStart.start()
+                assertFalse(
+                    secondRecoverEntered.await(300, TimeUnit.MILLISECONDS),
+                    "second concurrent start must not enter startup recovery",
+                )
+                releaseRecover.countDown()
+                firstStart.join(1_000L)
+                secondStart.join(1_000L)
+                runCurrent()
+
+                assertEquals(1, store.recoverCallCount.get())
+                assertEquals(1, store.claimReadyCallCount.get())
+            } finally {
+                releaseRecover.countDown()
+                outboxDispatcher.closeSuspend()
+                Files.deleteIfExists(Path.of(configPath))
+            }
+        }
+
+    @Test
+    fun `partitionCount must be positive`() {
+        val configPath = temporaryConfigPath("iris-outbox-invalid-partitions")
+        val config = createBootstrappedConfigManager(configPath)
+        val store = RecordingWebhookDeliveryStore(claimedEntries = emptyList())
+
+        try {
+            assertFailsWith<IllegalArgumentException> {
+                WebhookOutboxDispatcher(
+                    config = config,
+                    store = store,
+                    partitionCount = 0,
+                )
+            }
+        } finally {
+            Files.deleteIfExists(Path.of(configPath))
+        }
+    }
 
     @Test
     fun `close after attempt start resolves failure instead of requeue`() {
@@ -378,6 +456,64 @@ class WebhookOutboxDispatcherTest {
         assertEquals(listOf(1L), store.releasedIds.toList())
         assertTrue(store.resolvedOutcomes.isEmpty())
         assertTrue(store.releaseReasons.any { it.contains("dispatcher bootstrap not ready") })
+    }
+
+    @Test
+    fun `dispatcher delivers route specific webhook even when default endpoint is blank`() {
+        val port = reservePort()
+        val server =
+            HttpServer.create(InetSocketAddress("127.0.0.1", port), 0).apply {
+                createContext("/webhook/chatbotgo") { exchange ->
+                    exchange.sendResponseHeaders(204, -1)
+                    exchange.close()
+                }
+                executor = Executors.newSingleThreadExecutor()
+                start()
+            }
+        val sentLatch = CountDownLatch(1)
+        val store =
+            RecordingWebhookDeliveryStore(
+                claimedEntries = listOf(claimedEntry(id = 1L, roomId = 1L, messageId = "msg-route", route = "chatbotgo")),
+                onMarkSent = { sentLatch.countDown() },
+            )
+        val config =
+            object : party.qwer.iris.ConfigProvider {
+                override val botId: Long = 0L
+                override val botName: String = "iris"
+                override val botSocketPort: Int = 0
+                override val inboundSigningSecret: String = "inbound-secret"
+                override val outboundWebhookToken: String = "outbound-secret"
+                override val botControlToken: String = "control-secret"
+                override val dbPollingRate: Long = 100L
+                override val messageSendRate: Long = 0L
+                override val messageSendJitterMax: Long = 0L
+
+                override fun webhookEndpointFor(route: String): String =
+                    if (route == "chatbotgo") {
+                        "http://127.0.0.1:$port/webhook/chatbotgo"
+                    } else {
+                        ""
+                    }
+            }
+
+        try {
+            WebhookOutboxDispatcher(
+                config = config,
+                store = store,
+                transportOverride = "http1",
+                deliveryPolicy = WebhookDeliveryPolicy(pollIntervalMs = 25L, maxClaimBatchSize = 1),
+                clock = fakeClock::get,
+            ).use { dispatcher ->
+                dispatcher.start()
+                assertTrue(sentLatch.await(5, TimeUnit.SECONDS))
+            }
+        } finally {
+            server.stop(0)
+            (server.executor as? java.util.concurrent.ExecutorService)?.shutdownNow()
+        }
+
+        assertTrue(store.releasedIds.isEmpty())
+        assertTrue(store.deadIds.isEmpty())
     }
 
     @Test
@@ -759,11 +895,12 @@ class WebhookOutboxDispatcherTest {
         id: Long,
         roomId: Long,
         messageId: String,
+        route: String = DEFAULT_WEBHOOK_ROUTE,
     ): ClaimedDelivery =
         ClaimedDelivery(
             id = id,
             roomId = roomId,
-            route = DEFAULT_WEBHOOK_ROUTE,
+            route = route,
             messageId = messageId,
             payloadJson = """{"messageId":"$messageId"}""",
             failedAttemptCount = 0,
@@ -787,9 +924,12 @@ private class RecordingWebhookDeliveryStore(
     private val onRenew: () -> Unit = {},
     private val onRelease: () -> Unit = {},
     private val onDead: () -> Unit = {},
+    private val onClaimReady: () -> Unit = {},
+    private val onRecoverExpiredClaims: () -> Unit = {},
 ) : WebhookDeliveryStore {
     private var claimed = false
     val closeCallCount = AtomicInteger(0)
+    val claimReadyCallCount = AtomicInteger(0)
     val retriedIds = CopyOnWriteArrayList<Long>()
     val retryReasons = CopyOnWriteArrayList<String>()
     val renewedIds = CopyOnWriteArrayList<Long>()
@@ -804,6 +944,8 @@ private class RecordingWebhookDeliveryStore(
     override fun enqueue(delivery: PendingWebhookDelivery): Long = 0L
 
     override fun claimReady(limit: Int): List<ClaimedDelivery> {
+        claimReadyCallCount.incrementAndGet()
+        onClaimReady()
         if (claimed) return emptyList()
         claimed = true
         return claimedEntries.take(limit)
@@ -867,6 +1009,7 @@ private class RecordingWebhookDeliveryStore(
     override fun recoverExpiredClaims(olderThanMs: Long): Int {
         recoverOlderThanMs += olderThanMs
         recoverCallCount.incrementAndGet()
+        onRecoverExpiredClaims()
         return 0
     }
 
