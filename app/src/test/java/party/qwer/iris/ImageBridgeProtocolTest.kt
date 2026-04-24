@@ -70,6 +70,7 @@ class ImageBridgeProtocolTest {
                 capabilities =
                     ImageBridgeProtocol.ImageBridgeCapabilities(
                         inspectChatRoom = ImageBridgeProtocol.ImageBridgeCapability(supported = true, ready = true),
+                        openChatRoom = ImageBridgeProtocol.ImageBridgeCapability(supported = true, ready = true),
                         snapshotChatRoomMembers =
                             ImageBridgeProtocol.ImageBridgeCapability(
                                 supported = true,
@@ -102,6 +103,7 @@ class ImageBridgeProtocolTest {
         assertTrue(restored.memberSnapshot?.usedPreferredPlan == true)
         assertEquals(111, restored.memberSnapshot?.candidateGap)
         assertEquals("profile.nickname", restored.memberSnapshot?.selectedPlan?.nicknamePath)
+        assertTrue(restored.capabilities?.openChatRoom?.ready == true)
         assertEquals("chatroom resolver unavailable", restored.capabilities?.snapshotChatRoomMembers?.reason)
     }
 
@@ -157,6 +159,16 @@ class ImageBridgeProtocolTest {
         val request = ImageBridgeProtocol.buildInspectChatRoomRequest(roomId = 77L, token = "bridge-token")
 
         assertEquals(ImageBridgeProtocol.ACTION_INSPECT_CHATROOM, request.action)
+        assertEquals(ImageBridgeProtocol.PROTOCOL_VERSION, request.protocolVersion)
+        assertEquals(77L, request.roomId)
+        assertEquals("bridge-token", request.token)
+    }
+
+    @Test
+    fun `buildOpenChatRoomRequest includes room id and token`() {
+        val request = ImageBridgeProtocol.buildOpenChatRoomRequest(roomId = 77L, token = "bridge-token")
+
+        assertEquals(ImageBridgeProtocol.ACTION_OPEN_CHATROOM, request.action)
         assertEquals(ImageBridgeProtocol.PROTOCOL_VERSION, request.protocolVersion)
         assertEquals(77L, request.roomId)
         assertEquals("bridge-token", request.token)

@@ -18,6 +18,11 @@ internal fun currentBridgeCapabilities(
                 ready = registryAvailable && specReady,
                 reason = if (registryAvailable && specReady) null else readinessReason,
             ),
+        openChatRoom =
+            ImageBridgeCapabilitySnapshot(
+                supported = true,
+                ready = true,
+            ),
         snapshotChatRoomMembers =
             ImageBridgeCapabilitySnapshot(
                 supported = registryAvailable,

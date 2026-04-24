@@ -15,6 +15,7 @@ internal class ImageBridgeRequestHandler(
     private val imageSender: (ImageSendRequest) -> Unit,
     private val healthProvider: () -> ImageBridgeHealthSnapshot,
     private val chatRoomInspector: ((Long) -> String)? = null,
+    private val chatRoomOpener: ((Long) -> Unit)? = null,
     private val chatRoomMemberSnapshotProvider: ((Long, List<ImageBridgeProtocol.ChatRoomMemberHint>, ImageBridgeProtocol.ChatRoomMemberExtractionPlan?) -> ImageBridgeProtocol.ChatRoomMembersSnapshot)? = null,
     private val handshakeValidator: BridgeHandshakeValidator = BridgeHandshakeValidator(),
     private val serialExecutor: RoomThreadSerialExecutor = RoomThreadSerialExecutor(),
@@ -28,6 +29,7 @@ internal class ImageBridgeRequestHandler(
                 ImageBridgeProtocol.ACTION_SEND_IMAGE -> handleSendImage(request)
                 ImageBridgeProtocol.ACTION_HEALTH -> healthProvider().toProtocolResponse()
                 ImageBridgeProtocol.ACTION_INSPECT_CHATROOM -> handleInspectChatRoom(request)
+                ImageBridgeProtocol.ACTION_OPEN_CHATROOM -> handleOpenChatRoom(request)
                 ImageBridgeProtocol.ACTION_SNAPSHOT_CHATROOM_MEMBERS -> handleSnapshotChatRoomMembers(request)
                 else -> failureResponse("unknown action: $action")
             }
@@ -69,6 +71,15 @@ internal class ImageBridgeRequestHandler(
         return ImageBridgeProtocol.ImageBridgeResponse(
             status = ImageBridgeProtocol.STATUS_OK,
             inspectionJson = inspector(roomId),
+        )
+    }
+
+    private fun handleOpenChatRoom(request: ImageBridgeProtocol.ImageBridgeRequest): ImageBridgeProtocol.ImageBridgeResponse {
+        val roomId = checkNotNull(request.roomId) { "roomId missing" }
+        val opener = checkNotNull(chatRoomOpener) { "chatroom opener unavailable" }
+        opener(roomId)
+        return ImageBridgeProtocol.ImageBridgeResponse(
+            status = ImageBridgeProtocol.STATUS_OK,
         )
     }
 

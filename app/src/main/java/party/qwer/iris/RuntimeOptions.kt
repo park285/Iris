@@ -6,6 +6,9 @@ internal data class RuntimeOptions(
     val httpWorkerThreads: Int,
     val bridgeHealthRefreshMs: Long,
     val snapshotFullReconcileIntervalMs: Long,
+    val chatRoomRefreshEnabled: Boolean,
+    val chatRoomRefreshIntervalMs: Long,
+    val chatRoomRefreshOpenDelayMs: Long,
     val snapshotMissingTombstoneTtlMs: Long?,
     val roomEventRetentionMs: Long?,
     val imageDeletionIntervalMs: Long,
@@ -16,6 +19,8 @@ internal data class RuntimeOptions(
         private const val DEFAULT_HTTP_WORKER_THREADS = 2
         private const val DEFAULT_BRIDGE_HEALTH_REFRESH_MS = 5_000L
         private const val DEFAULT_SNAPSHOT_FULL_RECONCILE_INTERVAL_MS = 60_000L
+        private const val DEFAULT_CHATROOM_REFRESH_INTERVAL_MS = 600_000L
+        private const val DEFAULT_CHATROOM_REFRESH_OPEN_DELAY_MS = 5_000L
         private const val DEFAULT_ROOM_EVENT_RETENTION_MS = 7L * 24 * 60 * 60 * 1000
 
         fun fromEnv(env: Map<String, String> = System.getenv()): RuntimeOptions =
@@ -32,6 +37,17 @@ internal data class RuntimeOptions(
                     positiveDurationMillisOrDefault(
                         env["IRIS_SNAPSHOT_FULL_RECONCILE_INTERVAL_MS"],
                         DEFAULT_SNAPSHOT_FULL_RECONCILE_INTERVAL_MS,
+                    ),
+                chatRoomRefreshEnabled = booleanFlagEnabled(env["IRIS_CHATROOM_REFRESH_ENABLED"]),
+                chatRoomRefreshIntervalMs =
+                    positiveDurationMillisOrDefault(
+                        env["IRIS_CHATROOM_REFRESH_INTERVAL_MS"],
+                        DEFAULT_CHATROOM_REFRESH_INTERVAL_MS,
+                    ),
+                chatRoomRefreshOpenDelayMs =
+                    positiveDurationMillisOrDefault(
+                        env["IRIS_CHATROOM_REFRESH_OPEN_DELAY_MS"],
+                        DEFAULT_CHATROOM_REFRESH_OPEN_DELAY_MS,
                     ),
                 snapshotMissingTombstoneTtlMs =
                     optionalPositiveDurationMillis(

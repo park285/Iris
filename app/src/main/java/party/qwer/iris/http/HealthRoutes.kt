@@ -6,10 +6,13 @@ import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
+import io.ktor.server.routing.post
+import party.qwer.iris.ImageBridgeResult
 import party.qwer.iris.IrisLogger
 import party.qwer.iris.MemberNicknameDiagnostics
 import party.qwer.iris.internalServerFailure
 import party.qwer.iris.invalidRequest
+import party.qwer.iris.model.ChatRoomOpenResponse
 import party.qwer.iris.model.CommonErrorResponse
 import party.qwer.iris.model.ImageBridgeHealthResult
 
@@ -112,6 +115,7 @@ internal fun Route.installHealthRoutes(
     bridgeHealthProvider: (() -> ImageBridgeHealthResult?)?,
     configReadinessProvider: (() -> RuntimeConfigReadiness)? = null,
     chatRoomIntrospectProvider: ((Long) -> String)?,
+    chatRoomOpenProvider: ((Long) -> ImageBridgeResult)? = null,
     memberNicknameDiagnosticsProvider: ((Long) -> MemberNicknameDiagnostics?)? = null,
     readyVerbose: Boolean = false,
 ) {
@@ -148,6 +152,20 @@ internal fun Route.installHealthRoutes(
                     internalServerFailure(error.message ?: "bridge introspection failed")
                 }
         call.respondText(result, ContentType.Application.Json)
+    }
+    post("/diagnostics/chatroom-open/{chatId}") {
+        if (!authSupport.requireBotControlSignature(call, method = "POST")) return@post
+        val chatId = call.parameters["chatId"]?.toLongOrNull() ?: invalidRequest("chatId must be a number")
+        val provider = chatRoomOpenProvider ?: invalidRequest("chatroom opener unavailable")
+        val result =
+            runCatching { provider(chatId) }
+                .getOrElse { error ->
+                    internalServerFailure(error.message ?: "chatroom open failed")
+                }
+        if (!result.success) {
+            internalServerFailure(result.error ?: "chatroom open failed")
+        }
+        call.respond(ChatRoomOpenResponse(chatId = chatId, opened = true))
     }
     get("/diagnostics/chatroom-members/{chatId}") {
         if (!authSupport.requireBotControlSignature(call, method = "GET")) return@get

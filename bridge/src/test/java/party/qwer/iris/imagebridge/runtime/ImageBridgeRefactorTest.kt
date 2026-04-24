@@ -130,6 +130,7 @@ class ImageBridgeRequestHandlerTest {
                         capabilities =
                             ImageBridgeCapabilitiesSnapshot(
                                 inspectChatRoom = ImageBridgeCapabilitySnapshot(supported = true, ready = true),
+                                openChatRoom = ImageBridgeCapabilitySnapshot(supported = true, ready = true),
                                 snapshotChatRoomMembers = ImageBridgeCapabilitySnapshot(supported = true, ready = true),
                             ),
                         restartCount = 3,
@@ -150,6 +151,7 @@ class ImageBridgeRequestHandlerTest {
         assertEquals("bind failed", response.lastCrashMessage)
         assertEquals(1, response.checks.size)
         assertEquals(1, response.discovery?.hooks?.size)
+        assertTrue(response.capabilities?.openChatRoom?.ready == true)
         assertTrue(response.capabilities?.snapshotChatRoomMembers?.ready == true)
     }
 
@@ -187,6 +189,68 @@ class ImageBridgeRequestHandlerTest {
             handler.handle(
                 ImageBridgeProtocol.ImageBridgeRequest(
                     action = ImageBridgeProtocol.ACTION_INSPECT_CHATROOM,
+                    protocolVersion = ImageBridgeProtocol.PROTOCOL_VERSION,
+                ),
+            )
+
+        assertEquals(ImageBridgeProtocol.STATUS_FAILED, response.status)
+        assertEquals("roomId missing", response.error)
+    }
+
+    @Test
+    fun `open chatroom action delegates to opener and returns ok`() {
+        var openedRoomId: Long? = null
+        val handler =
+            ImageBridgeRequestHandler(
+                imageSender = { error("should not be called") },
+                healthProvider = { readyHealthSnapshot() },
+                chatRoomOpener = { roomId -> openedRoomId = roomId },
+                handshakeValidator = developmentHandshakeValidator(),
+            )
+
+        val response =
+            handler.handle(
+                openChatRoomRequest(roomId = 77L),
+            )
+
+        assertEquals(ImageBridgeProtocol.STATUS_OK, response.status)
+        assertEquals(77L, openedRoomId)
+    }
+
+    @Test
+    fun `open chatroom action fails when opener is unavailable`() {
+        val handler =
+            ImageBridgeRequestHandler(
+                imageSender = { error("should not be called") },
+                healthProvider = { readyHealthSnapshot() },
+                handshakeValidator = developmentHandshakeValidator(),
+                logError = { _, _, _ -> },
+            )
+
+        val response =
+            handler.handle(
+                openChatRoomRequest(roomId = 77L),
+            )
+
+        assertEquals(ImageBridgeProtocol.STATUS_FAILED, response.status)
+        assertEquals("chatroom opener unavailable", response.error)
+    }
+
+    @Test
+    fun `open chatroom action fails when room id is missing`() {
+        val handler =
+            ImageBridgeRequestHandler(
+                imageSender = { error("should not be called") },
+                healthProvider = { readyHealthSnapshot() },
+                chatRoomOpener = { error("should not be called") },
+                handshakeValidator = developmentHandshakeValidator(),
+                logError = { _, _, _ -> },
+            )
+
+        val response =
+            handler.handle(
+                ImageBridgeProtocol.ImageBridgeRequest(
+                    action = ImageBridgeProtocol.ACTION_OPEN_CHATROOM,
                     protocolVersion = ImageBridgeProtocol.PROTOCOL_VERSION,
                 ),
             )
@@ -405,6 +469,57 @@ class ImageBridgeRequestHandlerTest {
     }
 }
 
+class ChatRoomIntentMetadataResolverTest {
+    @Test
+    fun `resolves Kakao chatroom type value from room`() {
+        val resolver = ChatRoomIntentMetadataResolver { FakeRoom(FakeChatRoomType.OpenMulti) }
+
+        assertEquals("OM", resolver.resolveChatRoomType(123L))
+    }
+
+    @Test
+    fun `falls back to enum name when value accessor is unavailable`() {
+        val resolver = ChatRoomIntentMetadataResolver { FakeRoomWithoutValue(FallbackType.NormalMulti) }
+
+        assertEquals("NormalMulti", resolver.resolveChatRoomType(123L))
+    }
+
+    @Test
+    fun `returns null when room cannot be resolved`() {
+        val resolver = ChatRoomIntentMetadataResolver { null }
+
+        assertEquals(null, resolver.resolveChatRoomType(123L))
+    }
+
+    private class FakeRoom(
+        private val type: FakeChatRoomType,
+    ) {
+        @Suppress("unused")
+        fun y1(): FakeChatRoomType = type
+    }
+
+    private enum class FakeChatRoomType(
+        private val value: String,
+    ) {
+        OpenMulti("OM"),
+        ;
+
+        @Suppress("unused")
+        fun getValue(): String = value
+    }
+
+    private class FakeRoomWithoutValue(
+        private val type: FallbackType,
+    ) {
+        @Suppress("unused")
+        fun y1(): FallbackType = type
+    }
+
+    private enum class FallbackType {
+        NormalMulti,
+    }
+}
+
 private fun sendImageRequest(
     roomId: Long,
     imagePaths: List<String>,
@@ -429,6 +544,15 @@ private fun inspectChatRoomRequest(
     token: String? = null,
 ): ImageBridgeProtocol.ImageBridgeRequest =
     ImageBridgeProtocol.buildInspectChatRoomRequest(
+        roomId = roomId,
+        token = token,
+    )
+
+private fun openChatRoomRequest(
+    roomId: Long,
+    token: String? = null,
+): ImageBridgeProtocol.ImageBridgeRequest =
+    ImageBridgeProtocol.buildOpenChatRoomRequest(
         roomId = roomId,
         token = token,
     )

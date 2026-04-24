@@ -17,6 +17,9 @@ class RuntimeOptionsTest {
         assertEquals(2, options.httpWorkerThreads)
         assertEquals(5_000L, options.bridgeHealthRefreshMs)
         assertEquals(60_000L, options.snapshotFullReconcileIntervalMs)
+        assertFalse(options.chatRoomRefreshEnabled)
+        assertEquals(600_000L, options.chatRoomRefreshIntervalMs)
+        assertEquals(5_000L, options.chatRoomRefreshOpenDelayMs)
         assertEquals(7L * 24 * 60 * 60 * 1000, options.roomEventRetentionMs)
         assertEquals(3_600_000L, options.imageDeletionIntervalMs)
         assertEquals(86_400_000L, options.imageRetentionMs)
@@ -32,6 +35,9 @@ class RuntimeOptionsTest {
                     "IRIS_HTTP_WORKER_THREADS" to "6",
                     "IRIS_BRIDGE_HEALTH_REFRESH_MS" to "1500",
                     "IRIS_SNAPSHOT_FULL_RECONCILE_INTERVAL_MS" to "2500",
+                    "IRIS_CHATROOM_REFRESH_ENABLED" to "true",
+                    "IRIS_CHATROOM_REFRESH_INTERVAL_MS" to "3000",
+                    "IRIS_CHATROOM_REFRESH_OPEN_DELAY_MS" to "700",
                     "IRIS_ROOM_EVENT_RETENTION_MS" to "4500",
                     "IRIS_IMAGE_DELETE_INTERVAL_MS" to "2500",
                     "IRIS_IMAGE_RETENTION_MS" to "3500",
@@ -43,6 +49,9 @@ class RuntimeOptionsTest {
         assertEquals(6, options.httpWorkerThreads)
         assertEquals(1_500L, options.bridgeHealthRefreshMs)
         assertEquals(2_500L, options.snapshotFullReconcileIntervalMs)
+        assertTrue(options.chatRoomRefreshEnabled)
+        assertEquals(3_000L, options.chatRoomRefreshIntervalMs)
+        assertEquals(700L, options.chatRoomRefreshOpenDelayMs)
         assertEquals(4_500L, options.roomEventRetentionMs)
         assertEquals(2_500L, options.imageDeletionIntervalMs)
         assertEquals(3_500L, options.imageRetentionMs)
@@ -74,6 +83,30 @@ class RuntimeOptionsTest {
         assertEquals(
             60_000L,
             RuntimeOptions.fromEnv(mapOf("IRIS_SNAPSHOT_FULL_RECONCILE_INTERVAL_MS" to "abc")).snapshotFullReconcileIntervalMs,
+        )
+    }
+
+    @Test
+    fun `chatroom refresh intervals ignore empty zero and invalid overrides`() {
+        assertEquals(
+            600_000L,
+            RuntimeOptions.fromEnv(mapOf("IRIS_CHATROOM_REFRESH_INTERVAL_MS" to "")).chatRoomRefreshIntervalMs,
+        )
+        assertEquals(
+            600_000L,
+            RuntimeOptions.fromEnv(mapOf("IRIS_CHATROOM_REFRESH_INTERVAL_MS" to "0")).chatRoomRefreshIntervalMs,
+        )
+        assertEquals(
+            600_000L,
+            RuntimeOptions.fromEnv(mapOf("IRIS_CHATROOM_REFRESH_INTERVAL_MS" to "-1")).chatRoomRefreshIntervalMs,
+        )
+        assertEquals(
+            600_000L,
+            RuntimeOptions.fromEnv(mapOf("IRIS_CHATROOM_REFRESH_INTERVAL_MS" to "abc")).chatRoomRefreshIntervalMs,
+        )
+        assertEquals(
+            5_000L,
+            RuntimeOptions.fromEnv(mapOf("IRIS_CHATROOM_REFRESH_OPEN_DELAY_MS" to "0")).chatRoomRefreshOpenDelayMs,
         )
     }
 

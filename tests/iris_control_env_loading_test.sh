@@ -14,6 +14,9 @@ IRIS_SHARED_TOKEN=shared-secret
 IRIS_DEVICE=127.0.0.1:5555
 IRIS_ALLOW_CLEARTEXT_HTTP=1
 IRIS_BIND_HOST=0.0.0.0
+IRIS_CHATROOM_REFRESH_ENABLED=1
+IRIS_CHATROOM_REFRESH_INTERVAL_MS=60000
+IRIS_CHATROOM_REFRESH_OPEN_DELAY_MS=5000
 EOF
 
 cat >"$tmpdir/adb" <<'EOF'
@@ -68,6 +71,24 @@ fi
 
 if ! grep -Fq "IRIS_BIND_HOST='\"'\"'0.0.0.0'\"'\"'" "$command_log"; then
   echo "expected bind host passthrough not found"
+  cat "$command_log"
+  exit 1
+fi
+
+if ! grep -Fq "IRIS_CHATROOM_REFRESH_ENABLED='\"'\"'1'\"'\"'" "$command_log"; then
+  echo "expected chatroom refresh enabled passthrough not found"
+  cat "$command_log"
+  exit 1
+fi
+
+if ! grep -Fq "IRIS_CHATROOM_REFRESH_INTERVAL_MS='\"'\"'60000'\"'\"'" "$command_log"; then
+  echo "expected chatroom refresh interval passthrough not found"
+  cat "$command_log"
+  exit 1
+fi
+
+if ! grep -Fq "IRIS_CHATROOM_REFRESH_OPEN_DELAY_MS='\"'\"'5000'\"'\"'" "$command_log"; then
+  echo "expected chatroom refresh open delay passthrough not found"
   cat "$command_log"
   exit 1
 fi

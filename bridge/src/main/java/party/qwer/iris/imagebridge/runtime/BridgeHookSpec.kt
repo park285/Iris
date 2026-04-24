@@ -32,6 +32,7 @@ internal data class ImageBridgeCapabilitySnapshot(
 
 internal data class ImageBridgeCapabilitiesSnapshot(
     val inspectChatRoom: ImageBridgeCapabilitySnapshot = ImageBridgeCapabilitySnapshot(),
+    val openChatRoom: ImageBridgeCapabilitySnapshot = ImageBridgeCapabilitySnapshot(),
     val snapshotChatRoomMembers: ImageBridgeCapabilitySnapshot = ImageBridgeCapabilitySnapshot(),
 )
 
@@ -160,6 +161,14 @@ internal fun ImageBridgeHealthSnapshot.toJson(): JSONObject =
                     },
                 )
                 put(
+                    "openChatRoom",
+                    JSONObject().apply {
+                        put("supported", capabilities.openChatRoom.supported)
+                        put("ready", capabilities.openChatRoom.ready)
+                        capabilities.openChatRoom.reason?.let { put("reason", it) }
+                    },
+                )
+                put(
                     "snapshotChatRoomMembers",
                     JSONObject().apply {
                         put("supported", capabilities.snapshotChatRoomMembers.supported)
@@ -209,6 +218,12 @@ internal fun ImageBridgeHealthSnapshot.toProtocolResponse(): party.qwer.iris.Ima
                         supported = capabilities.inspectChatRoom.supported,
                         ready = capabilities.inspectChatRoom.ready,
                         reason = capabilities.inspectChatRoom.reason,
+                    ),
+                openChatRoom =
+                    party.qwer.iris.ImageBridgeProtocol.ImageBridgeCapability(
+                        supported = capabilities.openChatRoom.supported,
+                        ready = capabilities.openChatRoom.ready,
+                        reason = capabilities.openChatRoom.reason,
                     ),
                 snapshotChatRoomMembers =
                     party.qwer.iris.ImageBridgeProtocol.ImageBridgeCapability(

@@ -29,6 +29,7 @@ data class ImageBridgeCapability(
 @Serializable
 data class ImageBridgeCapabilities(
     val inspectChatRoom: ImageBridgeCapability = ImageBridgeCapability(),
+    val openChatRoom: ImageBridgeCapability = ImageBridgeCapability(),
     val snapshotChatRoomMembers: ImageBridgeCapability = ImageBridgeCapability(),
 )
 
@@ -45,4 +46,10 @@ data class ImageBridgeHealthResult(
     val discoveryHooks: List<ImageBridgeDiscoveryHook> = emptyList(),
     val capabilities: ImageBridgeCapabilities = ImageBridgeCapabilities(),
     val error: String? = null,
+)
+
+@Serializable
+data class ChatRoomOpenResponse(
+    val chatId: Long,
+    val opened: Boolean,
 )

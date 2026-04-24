@@ -2,6 +2,7 @@ package party.qwer.iris.http
 
 import io.ktor.client.request.get
 import io.ktor.client.request.header
+import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
@@ -15,6 +16,7 @@ import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
 import party.qwer.iris.ConfigManager
 import party.qwer.iris.ConfigProvider
+import party.qwer.iris.ImageBridgeResult
 import party.qwer.iris.MemberNicknameDiagnostics
 import party.qwer.iris.MemberRepository
 import party.qwer.iris.MessageSender
@@ -164,6 +166,7 @@ class ProtectedRouteRoleSeparationTest {
                             )
                         },
                         chatRoomIntrospectProvider = { """{"chatId":$it}""" },
+                        chatRoomOpenProvider = { ImageBridgeResult(success = true) },
                         memberNicknameDiagnosticsProvider = { chatId -> MemberNicknameDiagnostics(chatId = chatId) },
                     )
                 }
@@ -209,6 +212,22 @@ class ProtectedRouteRoleSeparationTest {
                         secret = roleSeparatedConfig.inboundSigningSecret,
                     )
                 }
+            val controlOpenResponse =
+                client.post("/diagnostics/chatroom-open/123") {
+                    applySignedHeaders(
+                        path = "/diagnostics/chatroom-open/123",
+                        method = "POST",
+                        secret = roleSeparatedConfig.botControlToken,
+                    )
+                }
+            val inboundOpenResponse =
+                client.post("/diagnostics/chatroom-open/123") {
+                    applySignedHeaders(
+                        path = "/diagnostics/chatroom-open/123",
+                        method = "POST",
+                        secret = roleSeparatedConfig.inboundSigningSecret,
+                    )
+                }
 
             assertEquals(HttpStatusCode.OK, controlResponse.status)
             assertEquals(HttpStatusCode.Unauthorized, inboundResponse.status)
@@ -216,6 +235,8 @@ class ProtectedRouteRoleSeparationTest {
             assertEquals(HttpStatusCode.Unauthorized, inboundChatroomResponse.status)
             assertEquals(HttpStatusCode.OK, controlMembersResponse.status)
             assertEquals(HttpStatusCode.Unauthorized, inboundMembersResponse.status)
+            assertEquals(HttpStatusCode.OK, controlOpenResponse.status)
+            assertEquals(HttpStatusCode.Unauthorized, inboundOpenResponse.status)
         }
 
     private fun io.ktor.client.request.HttpRequestBuilder.applySignedHeaders(

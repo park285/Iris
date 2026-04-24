@@ -223,6 +223,18 @@ internal class AppRuntime(
             rollback.defer(kakaoProfileIndexer::stop)
             IrisLogger.info("Kakao profile indexer started")
 
+            val chatRoomRefreshScheduler =
+                ChatRoomRefreshScheduler(
+                    enabled = runtimeOptions.chatRoomRefreshEnabled,
+                    refreshIntervalMs = runtimeOptions.chatRoomRefreshIntervalMs,
+                    openDelayMs = runtimeOptions.chatRoomRefreshOpenDelayMs,
+                    roomIdProvider = { chatRoomRefreshRoomIds(memberRepo.listRooms()) },
+                    chatRoomOpener = bridgeClient::openChatRoom,
+                ).also {
+                    it.start()
+                    rollback.defer(it::stop)
+                }
+
             val imageDeleter =
                 ImageDeleter(
                     IRIS_IMAGE_DIR_PATH,
@@ -261,6 +273,7 @@ internal class AppRuntime(
                         sseEventBus = sseEventBus,
                         roomEventStore = persistenceRuntime.roomEventStore,
                         chatRoomIntrospectProvider = bridgeClient::inspectChatRoom,
+                        chatRoomOpenProvider = bridgeClient::openChatRoom,
                         memberNicknameDiagnosticsProvider = memberIdentityObserver::diagnostics,
                         bindHost = runtimeOptions.bindHost,
                         nettyWorkerThreads = runtimeOptions.httpWorkerThreads,
@@ -288,6 +301,7 @@ internal class AppRuntime(
                 snapshotObserver = snapshotObserver,
                 memberIdentityObserver = memberIdentityObserver,
                 kakaoProfileIndexer = kakaoProfileIndexer,
+                chatRoomRefreshScheduler = chatRoomRefreshScheduler,
                 imageDeleter = imageDeleter,
                 bridgeHealthCache = bridgeHealthCache,
                 irisServer = irisServer,
@@ -333,6 +347,7 @@ private data class AppRuntimeStartupAssembly(
     val snapshotObserver: SnapshotObserver,
     val memberIdentityObserver: MemberIdentityObserver,
     val kakaoProfileIndexer: KakaoProfileIndexer,
+    val chatRoomRefreshScheduler: ChatRoomRefreshScheduler,
     val imageDeleter: ImageDeleter,
     val bridgeHealthCache: BridgeHealthCache,
     val irisServer: IrisServer?,
@@ -346,6 +361,7 @@ private data class AppRuntimeStartupAssembly(
                     stopSnapshotObserver = snapshotObserver::stop,
                     stopMemberIdentityObserver = memberIdentityObserver::stop,
                     stopProfileIndexer = kakaoProfileIndexer::stop,
+                    stopChatRoomRefreshScheduler = chatRoomRefreshScheduler::stop,
                     stopImageDeleter = imageDeleter::stopDeletion,
                     closeWebhookOutbox = webhookOutboxDispatcher::close,
                     closeIngress = observerHelper::close,

@@ -53,6 +53,15 @@ internal object ImageBridgeServer {
         lastRegistryError.set(registryError)
         val imageSender = registry?.let { KakaoImageSender(it) }
         val chatRoomResolver = registry?.let { ChatRoomResolver(it) }
+        val chatRoomIntentMetadataResolver =
+            ChatRoomIntentMetadataResolver { roomId ->
+                chatRoomResolver?.resolve(roomId)
+            }
+        val chatRoomOpener =
+            ChatRoomOpener(
+                context = context,
+                chatRoomTypeResolver = chatRoomIntentMetadataResolver::resolveChatRoomType,
+            )
         val chatRoomMemberExtractor = ChatRoomMemberExtractor()
         val verifier =
             BridgeHookSpecVerifier(
@@ -78,6 +87,7 @@ internal object ImageBridgeServer {
                     val room = resolver.resolve(roomId) ?: error("chatroom not found: $roomId")
                     ChatRoomIntrospector.scanJson(room, maxDepth = 2)
                 },
+                chatRoomOpener = chatRoomOpener::open,
                 chatRoomMemberSnapshotProvider = { roomId, expectedMemberHints, preferredPlan ->
                     val resolver = chatRoomResolver ?: error("chatroom resolver unavailable: ${registryError ?: "unknown error"}")
                     val room = resolver.resolve(roomId) ?: error("chatroom not found: $roomId")

@@ -54,6 +54,7 @@ internal class IrisServer(
     private val sseEventBus: SseEventBus? = null,
     private val roomEventStore: RoomEventStore? = null,
     private val chatRoomIntrospectProvider: ((Long) -> String)? = null,
+    private val chatRoomOpenProvider: ((Long) -> ImageBridgeResult)? = null,
     private val memberNicknameDiagnosticsProvider: ((Long) -> MemberNicknameDiagnostics?)? = null,
     private val bindHost: String = DEFAULT_BIND_HOST,
     private val nettyWorkerThreads: Int = DEFAULT_NETTY_WORKER_THREADS,
@@ -180,6 +181,7 @@ internal class IrisServer(
                 bridgeHealthProvider = bridgeHealthProvider,
                 configReadinessProvider = configReadinessProvider,
                 chatRoomIntrospectProvider = chatRoomIntrospectProvider,
+                chatRoomOpenProvider = chatRoomOpenProvider,
                 memberNicknameDiagnosticsProvider = memberNicknameDiagnosticsProvider,
                 readyVerbose = configManager.readyVerbose(),
             )

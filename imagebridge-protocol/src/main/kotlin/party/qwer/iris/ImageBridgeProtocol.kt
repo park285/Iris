@@ -15,6 +15,7 @@ object ImageBridgeProtocol {
     const val ACTION_SEND_IMAGE = "send_image"
     const val ACTION_HEALTH = "health"
     const val ACTION_INSPECT_CHATROOM = "inspect_chatroom"
+    const val ACTION_OPEN_CHATROOM = "open_chatroom"
     const val ACTION_SNAPSHOT_CHATROOM_MEMBERS = "snapshot_chatroom_members"
     const val STATUS_SENT = "sent"
     const val STATUS_FAILED = "failed"
@@ -66,6 +67,7 @@ object ImageBridgeProtocol {
     @Serializable
     data class ImageBridgeCapabilities(
         val inspectChatRoom: ImageBridgeCapability = ImageBridgeCapability(),
+        val openChatRoom: ImageBridgeCapability = ImageBridgeCapability(),
         val snapshotChatRoomMembers: ImageBridgeCapability = ImageBridgeCapability(),
     )
 
@@ -188,6 +190,17 @@ object ImageBridgeProtocol {
     ): ImageBridgeRequest =
         ImageBridgeRequest(
             action = ACTION_INSPECT_CHATROOM,
+            protocolVersion = PROTOCOL_VERSION,
+            roomId = roomId,
+            token = token,
+        )
+
+    fun buildOpenChatRoomRequest(
+        roomId: Long,
+        token: String? = null,
+    ): ImageBridgeRequest =
+        ImageBridgeRequest(
+            action = ACTION_OPEN_CHATROOM,
             protocolVersion = PROTOCOL_VERSION,
             roomId = roomId,
             token = token,

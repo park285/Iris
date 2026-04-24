@@ -163,6 +163,7 @@ class UdsImageBridgeClientTest {
                 capabilities =
                     ImageBridgeProtocol.ImageBridgeCapabilities(
                         inspectChatRoom = ImageBridgeProtocol.ImageBridgeCapability(supported = true, ready = true),
+                        openChatRoom = ImageBridgeProtocol.ImageBridgeCapability(supported = true, ready = true),
                         snapshotChatRoomMembers =
                             ImageBridgeProtocol.ImageBridgeCapability(
                                 supported = true,
@@ -237,6 +238,54 @@ class UdsImageBridgeClientTest {
         assertEquals(ImageBridgeProtocol.ACTION_INSPECT_CHATROOM, request.action)
         assertEquals(55L, request.roomId)
         assertEquals("bridge-token", request.token)
+    }
+
+    @Test
+    fun `opens chatroom through bridge protocol`() {
+        val responseBuffer = ByteArrayOutputStream()
+        ImageBridgeProtocol.writeFrame(
+            responseBuffer,
+            ImageBridgeProtocol.ImageBridgeResponse(status = ImageBridgeProtocol.STATUS_OK),
+        )
+        val fakeSocket = FakeBridgeSocket(input = ByteArrayInputStream(responseBuffer.toByteArray()))
+        val client =
+            UdsImageBridgeClient(
+                bridgeToken = "bridge-token",
+                socketFactory = { fakeSocket },
+            )
+
+        val result = client.openChatRoom(55L)
+
+        assertTrue(result.success)
+        val request = ImageBridgeProtocol.readRequestFrame(ByteArrayInputStream(fakeSocket.outputStream.toByteArray()))
+        assertEquals(ImageBridgeProtocol.ACTION_OPEN_CHATROOM, request.action)
+        assertEquals(55L, request.roomId)
+        assertEquals("bridge-token", request.token)
+    }
+
+    @Test
+    fun `open chatroom returns bridge failure`() {
+        val responseBuffer = ByteArrayOutputStream()
+        ImageBridgeProtocol.writeFrame(
+            responseBuffer,
+            ImageBridgeProtocol.ImageBridgeResponse(
+                status = ImageBridgeProtocol.STATUS_FAILED,
+                error = "chatroom open failed",
+            ),
+        )
+        val client =
+            UdsImageBridgeClient(
+                socketFactory = {
+                    FakeBridgeSocket(
+                        input = ByteArrayInputStream(responseBuffer.toByteArray()),
+                    )
+                },
+            )
+
+        val result = client.openChatRoom(55L)
+
+        assertFalse(result.success)
+        assertEquals("chatroom open failed", result.error)
     }
 
     @Test

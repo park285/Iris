@@ -170,6 +170,29 @@ internal class UdsImageBridgeClient(
             error("bridge protocol failed: ${e.message}")
         }
 
+    fun openChatRoom(roomId: Long): ImageBridgeResult {
+        try {
+            return parseOkResponse(
+                exchange(
+                    ImageBridgeProtocol.buildOpenChatRoomRequest(
+                        roomId = roomId,
+                        token = bridgeToken,
+                    ),
+                ),
+            )
+        } catch (e: IOException) {
+            return ImageBridgeResult(
+                success = false,
+                error = "bridge connection failed: ${e.message}",
+            )
+        } catch (e: RuntimeException) {
+            return ImageBridgeResult(
+                success = false,
+                error = "bridge protocol failed: ${e.message}",
+            )
+        }
+    }
+
     fun snapshotChatRoomMembers(
         roomId: Long,
         expectedMembers: Collection<LiveRoomMemberHint> = emptyList(),
@@ -280,6 +303,12 @@ internal class UdsImageBridgeClient(
                                 ready = capabilities.inspectChatRoom.ready,
                                 reason = capabilities.inspectChatRoom.reason,
                             ),
+                        openChatRoom =
+                            ImageBridgeCapability(
+                                supported = capabilities.openChatRoom.supported,
+                                ready = capabilities.openChatRoom.ready,
+                                reason = capabilities.openChatRoom.reason,
+                            ),
                         snapshotChatRoomMembers =
                             ImageBridgeCapability(
                                 supported = capabilities.snapshotChatRoomMembers.supported,
@@ -296,6 +325,18 @@ internal class UdsImageBridgeClient(
             response.error ?: "unknown bridge inspection error"
         }
         return response.inspectionJson ?: error("bridge inspection payload missing")
+    }
+
+    private fun parseOkResponse(response: ImageBridgeProtocol.ImageBridgeResponse): ImageBridgeResult {
+        val status = response.status
+        return if (status == ImageBridgeProtocol.STATUS_OK) {
+            ImageBridgeResult(success = true)
+        } else {
+            ImageBridgeResult(
+                success = false,
+                error = response.error ?: "unknown bridge error",
+            )
+        }
     }
 
     private fun parseMemberSnapshotResponse(response: ImageBridgeProtocol.ImageBridgeResponse): LiveRoomMemberSnapshot {
