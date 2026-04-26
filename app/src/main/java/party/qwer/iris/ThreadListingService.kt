@@ -48,8 +48,18 @@ internal class ThreadListingService(
     fun listRecentMessages(
         chatId: ChatId,
         limit: Int,
+        afterId: Long? = null,
+        beforeId: Long? = null,
+        threadId: Long? = null,
     ): RecentMessagesResponse {
-        val rows = threadQueries.listRecentMessages(chatId, limit)
+        val rows =
+            threadQueries.listRecentMessages(
+                chatId = chatId,
+                limit = limit,
+                afterId = afterId,
+                beforeId = beforeId,
+                threadId = threadId,
+            )
         val messages =
             rows.map { row ->
                 val decryptedMessage =

@@ -24,4 +24,7 @@ data class QueryRecentThreadsRequest(
 data class QueryRecentMessagesRequest(
     val chatId: Long,
     val limit: Int = 50,
+    val afterId: Long? = null,
+    val beforeId: Long? = null,
+    val threadId: Long? = null,
 )

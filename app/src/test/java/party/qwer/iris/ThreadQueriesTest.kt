@@ -138,7 +138,7 @@ class ThreadQueriesTest {
     }
 
     @Test
-    fun `listRecentMessages maps rows and clamps limit`() {
+    fun `listRecentMessages maps rows and clamps limit to 300`() {
         var capturedSql: String? = null
         val capturedArgs = mutableListOf<Array<String?>?>()
         val queries =
@@ -176,10 +176,11 @@ class ThreadQueriesTest {
         val rows = queries.listRecentMessages(ChatId(777L), 500)
 
         assertEquals(1, rows.size)
-        assertTrue(capturedSql?.contains("ORDER BY created_at DESC") == true)
+        assertTrue(capturedSql.orEmpty().contains("ORDER BY created_at DESC"))
+        assertTrue(capturedSql.orEmpty().contains("id DESC"))
         val args = capturedArgs.first()
         assertEquals("777", args?.get(0))
-        assertEquals("100", args?.get(1))
+        assertEquals("300", args?.get(1))
         val row = rows.first()
         assertEquals(123L, row.id)
         assertEquals(ChatId(777L), row.chatId)
@@ -190,5 +191,47 @@ class ThreadQueriesTest {
         assertEquals(9001L, row.threadId)
         requireNotNull(row.metadata)
         assertEquals(1, row.metadata.enc)
+    }
+
+    @Test
+    fun `listRecentMessages binds afterId and threadId filters with ascending id order`() {
+        var capturedSql: String? = null
+        var capturedArgs: Array<String?>? = null
+        var capturedMaxRows = 0
+        val queries =
+            buildThreadQueries { sql, args, maxRows ->
+                capturedSql = sql
+                capturedArgs = args
+                capturedMaxRows = maxRows
+                emptyResult()
+            }
+
+        queries.listRecentMessages(ChatId(777L), limit = 25, afterId = 100L, threadId = 9001L)
+
+        assertTrue(capturedSql.orEmpty().contains("WHERE chat_id = ?"))
+        assertTrue(capturedSql.orEmpty().contains("id > ?"))
+        assertTrue(capturedSql.orEmpty().contains("thread_id = ?"))
+        assertTrue(capturedSql.orEmpty().contains("ORDER BY id ASC"))
+        assertEquals(listOf("777", "100", "9001", "25"), capturedArgs?.toList())
+        assertEquals(25, capturedMaxRows)
+    }
+
+    @Test
+    fun `listRecentMessages binds beforeId filter with descending id order`() {
+        var capturedSql: String? = null
+        var capturedArgs: Array<String?>? = null
+        val queries =
+            buildThreadQueries { sql, args, _ ->
+                capturedSql = sql
+                capturedArgs = args
+                emptyResult()
+            }
+
+        queries.listRecentMessages(ChatId(777L), limit = 10, beforeId = 200L)
+
+        assertTrue(capturedSql.orEmpty().contains("WHERE chat_id = ?"))
+        assertTrue(capturedSql.orEmpty().contains("id < ?"))
+        assertTrue(capturedSql.orEmpty().contains("ORDER BY id DESC"))
+        assertEquals(listOf("777", "200", "10"), capturedArgs?.toList())
     }
 }

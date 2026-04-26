@@ -9,7 +9,7 @@ class ThreadQueries(
 
     companion object {
         private const val THREAD_LIST_LIMIT = 20
-        private const val RECENT_MESSAGES_MAX_LIMIT = 100
+        private const val RECENT_MESSAGES_MAX_LIMIT = 300
     }
 
     /**
@@ -66,23 +66,43 @@ class ThreadQueries(
     fun listRecentMessages(
         chatId: ChatId,
         limit: Int,
+        afterId: Long? = null,
+        beforeId: Long? = null,
+        threadId: Long? = null,
     ): List<RecentMessageRow> {
         val safeLimit = limit.coerceIn(1, RECENT_MESSAGES_MAX_LIMIT)
+        val filters = mutableListOf("chat_id = ?")
+        val bindArgs = mutableListOf<SqlArg>(SqlArg.LongVal(chatId.value))
+        if (afterId != null) {
+            filters += "id > ?"
+            bindArgs += SqlArg.LongVal(afterId)
+        }
+        if (beforeId != null) {
+            filters += "id < ?"
+            bindArgs += SqlArg.LongVal(beforeId)
+        }
+        if (threadId != null) {
+            filters += "thread_id = ?"
+            bindArgs += SqlArg.LongVal(threadId)
+        }
+        bindArgs += SqlArg.IntVal(safeLimit)
+        val orderBy =
+            when {
+                afterId != null -> "ORDER BY id ASC"
+                beforeId != null -> "ORDER BY id DESC"
+                else -> "ORDER BY created_at DESC, id DESC"
+            }
         return db.query(
             QuerySpec(
                 sql =
                     """
                     SELECT id, chat_id, user_id, message, type, created_at, thread_id, v
                     FROM chat_logs
-                    WHERE chat_id = ?
-                    ORDER BY created_at DESC
+                    WHERE ${filters.joinToString(" AND ")}
+                    $orderBy
                     LIMIT ?
                     """.trimIndent(),
-                bindArgs =
-                    listOf(
-                        SqlArg.LongVal(chatId.value),
-                        SqlArg.IntVal(safeLimit),
-                    ),
+                bindArgs = bindArgs,
                 maxRows = safeLimit,
                 mapper = { row ->
                     RecentMessageRow(

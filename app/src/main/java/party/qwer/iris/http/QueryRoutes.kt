@@ -95,7 +95,18 @@ internal fun Route.installQueryRoutes(
                 finalize = { precheck, actualBodySha256Hex -> authSupport.finalizeSignature(call, precheck, actualBodySha256Hex) },
             ) { rawBody ->
                 val request = rawBody.decodeJson(serverJson, QueryRecentMessagesRequest.serializer())
-                call.respond(availableRepo.listRecentMessages(request.chatId, request.limit))
+                if (request.afterId != null && request.beforeId != null) {
+                    invalidRequest("afterId and beforeId are mutually exclusive")
+                }
+                call.respond(
+                    availableRepo.listRecentMessages(
+                        chatId = request.chatId,
+                        limit = request.limit,
+                        afterId = request.afterId,
+                        beforeId = request.beforeId,
+                        threadId = request.threadId,
+                    ),
+                )
             }
         ) {
             return@post

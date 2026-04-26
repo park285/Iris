@@ -11,13 +11,17 @@ import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.install
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.server.plugins.statuspages.StatusPages
+import io.ktor.server.response.respond
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
+import party.qwer.iris.ApiRequestException
 import party.qwer.iris.ConfigProvider
 import party.qwer.iris.MemberRepository
 import party.qwer.iris.QueryExecutionResult
+import party.qwer.iris.model.CommonErrorResponse
 import party.qwer.iris.sha256Hex
 import party.qwer.iris.signIrisRequestWithBodyHash
 import party.qwer.iris.storage.KakaoDbSqlClient
@@ -249,6 +253,91 @@ class QueryRoutesTest {
         }
 
     @Test
+    fun `query recent messages accepts cursor fields`() =
+        testApplication {
+            var capturedSql: String? = null
+            var capturedArgs: Array<String?>? = null
+            application {
+                install(ContentNegotiation) {
+                    json(serverJson)
+                }
+                routing {
+                    installQueryRoutes(
+                        authSupport = AuthSupport(party.qwer.iris.RequestAuthenticator(), queryRouteConfig),
+                        serverJson = serverJson,
+                        memberRepo =
+                            buildQueryRouteRepo(
+                                queryRouteLegacyQuery { sql, args, _ ->
+                                    when {
+                                        sql.contains("FROM chat_logs") -> {
+                                            capturedSql = sql
+                                            capturedArgs = args
+                                            listOf(
+                                                mapOf(
+                                                    "id" to "11",
+                                                    "chat_id" to "42",
+                                                    "user_id" to "7",
+                                                    "message" to "cursor",
+                                                    "type" to "0",
+                                                    "created_at" to "1235",
+                                                    "thread_id" to "99",
+                                                    "v" to """{"enc":0}""",
+                                                ),
+                                            )
+                                        }
+                                        else -> emptyList()
+                                    }
+                                },
+                            ),
+                    )
+                }
+            }
+
+            val body = """{"chatId":42,"limit":20,"afterId":10,"threadId":99}"""
+            val response =
+                client.post("/query/recent-messages") {
+                    contentType(ContentType.Application.Json)
+                    setBody(body)
+                    applySignedHeaders("/query/recent-messages", body)
+                }
+
+            assertEquals(HttpStatusCode.OK, response.status)
+            assertTrue(capturedSql.orEmpty().contains("id > ?"))
+            assertTrue(capturedSql.orEmpty().contains("thread_id = ?"))
+            assertTrue(capturedSql.orEmpty().contains("ORDER BY id ASC"))
+            assertEquals(listOf("42", "10", "99", "20"), capturedArgs?.toList())
+        }
+
+    @Test
+    fun `query recent messages rejects both cursors`() =
+        testApplication {
+            application {
+                install(ContentNegotiation) {
+                    json(serverJson)
+                }
+                installQueryRouteStatusPages()
+                routing {
+                    installQueryRoutes(
+                        authSupport = AuthSupport(party.qwer.iris.RequestAuthenticator(), queryRouteConfig),
+                        serverJson = serverJson,
+                        memberRepo = buildQueryRouteRepo(queryRouteLegacyQuery { _, _, _ -> emptyList() }),
+                    )
+                }
+            }
+
+            val body = """{"chatId":42,"limit":20,"afterId":10,"beforeId":30}"""
+            val response =
+                client.post("/query/recent-messages") {
+                    contentType(ContentType.Application.Json)
+                    setBody(body)
+                    applySignedHeaders("/query/recent-messages", body)
+                }
+
+            assertEquals(HttpStatusCode.BadRequest, response.status)
+            assertTrue(response.bodyAsText().contains("afterId and beforeId are mutually exclusive"))
+        }
+
+    @Test
     fun `raw query endpoint is removed`() =
         testApplication {
             application {
@@ -356,6 +445,14 @@ class QueryRoutesTest {
         header("X-Iris-Nonce", nonce)
         header("X-Iris-Signature", signature)
         header("X-Iris-Body-Sha256", sha256Hex(body.toByteArray()))
+    }
+
+    private fun io.ktor.server.application.Application.installQueryRouteStatusPages() {
+        install(StatusPages) {
+            exception<ApiRequestException> { call, cause ->
+                call.respond(cause.status, CommonErrorResponse(message = cause.message))
+            }
+        }
     }
 }
 

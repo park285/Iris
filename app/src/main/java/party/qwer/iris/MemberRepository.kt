@@ -144,7 +144,17 @@ class MemberRepository internal constructor(
     fun listRecentMessages(
         chatId: Long,
         limit: Int = 50,
-    ): RecentMessagesResponse = threadListingService.listRecentMessages(ChatId(chatId), limit)
+        afterId: Long? = null,
+        beforeId: Long? = null,
+        threadId: Long? = null,
+    ): RecentMessagesResponse =
+        threadListingService.listRecentMessages(
+            chatId = ChatId(chatId),
+            limit = limit,
+            afterId = afterId,
+            beforeId = beforeId,
+            threadId = threadId,
+        )
 
     internal fun resolveNicknamesBatch(
         userIds: Collection<UserId>,
