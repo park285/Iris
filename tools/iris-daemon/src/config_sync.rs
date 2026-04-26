@@ -304,7 +304,10 @@ mod tests {
             "sha256sum {quoted_path} 2>/dev/null || toybox sha256sum {quoted_path} 2>/dev/null || true"
         );
 
-        assert_eq!(command, format!("su 0 sh -lc {}", shell_quote(&expected_inner)));
+        assert_eq!(
+            command,
+            format!("su 0 sh -lc {}", shell_quote(&expected_inner))
+        );
     }
 
     #[test]
@@ -316,6 +319,9 @@ mod tests {
             "sha256sum {quoted_path} 2>/dev/null || toybox sha256sum {quoted_path} 2>/dev/null || true"
         );
 
-        assert_eq!(command, format!("su 0 sh -lc {}", shell_quote(&expected_inner)));
+        assert_eq!(
+            command,
+            format!("su 0 sh -lc {}", shell_quote(&expected_inner))
+        );
     }
 }

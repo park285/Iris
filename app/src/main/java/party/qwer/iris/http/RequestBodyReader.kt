@@ -7,8 +7,8 @@ import io.ktor.server.request.receiveChannel
 import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readAvailable
 import party.qwer.iris.IrisLogger
-import party.qwer.iris.requestRejected
 import party.qwer.iris.config.ConfigPathPolicy
+import party.qwer.iris.requestRejected
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.nio.file.Files
@@ -238,7 +238,7 @@ internal data class RequestBodyBufferingPolicy(
                     .get(ConfigPathPolicy.resolveRequestBodySpillDirectory())
             return RequestBodyBufferingPolicy(
                 spillDirectory =
-                    implicitSpillDirectory,
+                implicitSpillDirectory,
                 implicitSpillDirectory = implicitSpillDirectory,
             )
         }

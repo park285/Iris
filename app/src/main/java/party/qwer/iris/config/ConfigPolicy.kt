@@ -258,9 +258,9 @@ internal object ConfigPolicy {
                 requiresRestart = false,
                 plan =
                     ConfigMutationPlan(
-                    candidateSnapshot = candidateState,
-                    applyImmediately = true,
-                ),
+                        candidateSnapshot = candidateState,
+                        applyImmediately = true,
+                    ),
             )
         }
 
@@ -277,9 +277,9 @@ internal object ConfigPolicy {
                 requiresRestart = requiresRestart(ConfigField.DB_POLLING_RATE),
                 plan =
                     ConfigMutationPlan(
-                    candidateSnapshot = candidateState,
-                    applyImmediately = true,
-                ),
+                        candidateSnapshot = candidateState,
+                        applyImmediately = true,
+                    ),
             )
         }
 
@@ -296,9 +296,9 @@ internal object ConfigPolicy {
                 requiresRestart = requiresRestart(ConfigField.MESSAGE_SEND_RATE),
                 plan =
                     ConfigMutationPlan(
-                    candidateSnapshot = candidateState,
-                    applyImmediately = true,
-                ),
+                        candidateSnapshot = candidateState,
+                        applyImmediately = true,
+                    ),
             )
         }
 
@@ -315,9 +315,9 @@ internal object ConfigPolicy {
                 requiresRestart = requiresRestart(ConfigField.BOT_SOCKET_PORT),
                 plan =
                     ConfigMutationPlan(
-                    candidateSnapshot = candidateState,
-                    applyImmediately = false,
-                ),
+                        candidateSnapshot = candidateState,
+                        applyImmediately = false,
+                    ),
             )
         }
 

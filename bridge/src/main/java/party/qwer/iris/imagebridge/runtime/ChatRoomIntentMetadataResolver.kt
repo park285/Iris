@@ -10,11 +10,9 @@ internal class ChatRoomIntentMetadataResolver(
         runCatching {
             val room = resolveRoom(roomId) ?: return null
             readChatRoomType(room)
-        }
-            .onFailure { error ->
-                Log.w(TAG, "failed to resolve chatroom type roomId=$roomId: ${error.message}")
-            }
-            .getOrNull()
+        }.onFailure { error ->
+            Log.w(TAG, "failed to resolve chatroom type roomId=$roomId: ${error.message}")
+        }.getOrNull()
 
     private fun readChatRoomType(room: Any): String? {
         val type =
@@ -23,8 +21,7 @@ internal class ChatRoomIntentMetadataResolver(
                     method.name == CHAT_ROOM_TYPE_METHOD &&
                         method.parameterCount == 0 &&
                         !Modifier.isStatic(method.modifiers)
-                }
-                ?.invoke(room)
+                }?.invoke(room)
                 ?: return null
 
         type.javaClass.methods
@@ -32,8 +29,7 @@ internal class ChatRoomIntentMetadataResolver(
                 method.name == CHAT_ROOM_TYPE_VALUE_METHOD &&
                     method.parameterCount == 0 &&
                     method.returnType == String::class.java
-            }
-            ?.invoke(type)
+            }?.invoke(type)
             ?.let { value ->
                 (value as? String)?.takeIf { it.isNotBlank() }?.let { return it }
             }

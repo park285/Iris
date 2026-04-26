@@ -57,17 +57,9 @@ internal object ImageBridgeServer {
             ChatRoomIntentMetadataResolver { roomId ->
                 chatRoomResolver?.resolve(roomId)
             }
-        val chatRoomOpener =
-            ChatRoomOpener(
-                context = context,
-                chatRoomTypeResolver = chatRoomIntentMetadataResolver::resolveChatRoomType,
-            )
+        val chatRoomOpener = ChatRoomOpener(context = context, chatRoomTypeResolver = chatRoomIntentMetadataResolver::resolveChatRoomType)
         val chatRoomMemberExtractor = ChatRoomMemberExtractor()
-        val verifier =
-            BridgeHookSpecVerifier(
-                registry = registry,
-                registryError = registryError,
-            )
+        val verifier = BridgeHookSpecVerifier(registry = registry, registryError = registryError)
         val initialSpecStatus = verifier.verify()
         specStatus.set(initialSpecStatus)
         if (!initialSpecStatus.ready) {
@@ -95,12 +87,7 @@ internal object ImageBridgeServer {
                 },
             )
         clientExecutor = newClientExecutor()
-        Thread(
-            {
-                runServerLoop()
-            },
-            "iris-bridge-server",
-        ).apply {
+        Thread({ runServerLoop() }, "iris-bridge-server").apply {
             isDaemon = true
             start()
         }

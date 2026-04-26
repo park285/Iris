@@ -40,9 +40,7 @@ internal class ImageBridgeRequestHandler(
 
     private fun handleSendImage(request: ImageBridgeProtocol.ImageBridgeRequest): ImageBridgeProtocol.ImageBridgeResponse {
         val health = healthProvider()
-        check(health.specStatus.ready) {
-            "bridge spec not ready"
-        }
+        check(health.specStatus.ready) { "bridge spec not ready" }
         val imageRequest =
             ImageSendRequest(
                 roomId = checkNotNull(request.roomId) { "roomId missing" },
@@ -56,9 +54,7 @@ internal class ImageBridgeRequestHandler(
                 imageCount = imageRequest.imagePaths.size,
                 threadId = imageRequest.threadId,
                 threadScope = imageRequest.threadScope,
-            )?.let { reason ->
-                error(reason)
-            }
+            )?.let(::error)
         serialExecutor.execute(imageRequest.roomId, imageRequest.threadId) {
             imageSender(imageRequest)
         }
