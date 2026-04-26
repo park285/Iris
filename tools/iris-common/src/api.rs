@@ -2,8 +2,9 @@ use crate::auth::{canonical_target, signed_headers};
 use crate::config::IrisConnection;
 use crate::models::{
     BridgeDiagnosticsResponse, HealthResponse, MemberActivityResponse, MemberListResponse,
-    RecentMessagesRequest, RecentMessagesResponse, ReplyAcceptedResponse, ReplyRequest,
-    RoomEventRecord, RoomInfoResponse, RoomListResponse, StatsResponse, ThreadListResponse,
+    RecentMessagesCursorRequest, RecentMessagesRequest, RecentMessagesResponse,
+    ReplyAcceptedResponse, ReplyRequest, RoomEventRecord, RoomInfoResponse, RoomListResponse,
+    StatsResponse, ThreadListResponse,
 };
 use anyhow::Result;
 use reqwest::Client;
@@ -146,6 +147,32 @@ impl IrisApi {
             .signed_post_json(
                 "/query/recent-messages",
                 &RecentMessagesRequest { chat_id, limit },
+            )?
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
+    }
+
+    pub async fn recent_messages_with_cursor(
+        &self,
+        chat_id: i64,
+        limit: i32,
+        after_id: Option<i64>,
+        before_id: Option<i64>,
+        thread_id: Option<i64>,
+    ) -> Result<RecentMessagesResponse> {
+        Ok(self
+            .signed_post_json(
+                "/query/recent-messages",
+                &RecentMessagesCursorRequest {
+                    chat_id,
+                    limit,
+                    after_id,
+                    before_id,
+                    thread_id,
+                },
             )?
             .send()
             .await?

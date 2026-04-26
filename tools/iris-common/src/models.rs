@@ -293,6 +293,19 @@ pub struct RecentMessagesRequest {
     pub limit: i32,
 }
 
+#[derive(Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentMessagesCursorRequest {
+    pub chat_id: i64,
+    pub limit: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<i64>,
+}
+
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct RecentMessagesResponse {
@@ -457,6 +470,25 @@ mod tests {
 
         assert_eq!(json["chatId"], 123);
         assert_eq!(json["limit"], 25);
+    }
+
+    #[test]
+    fn recent_messages_cursor_request_serializes_optional_cursor_fields() {
+        let req = RecentMessagesCursorRequest {
+            chat_id: 123,
+            limit: 25,
+            after_id: Some(10),
+            before_id: None,
+            thread_id: Some(9001),
+        };
+
+        let json = serde_json::to_value(&req).unwrap();
+
+        assert_eq!(json["chatId"], 123);
+        assert_eq!(json["limit"], 25);
+        assert_eq!(json["afterId"], 10);
+        assert!(json.get("beforeId").is_none());
+        assert_eq!(json["threadId"], 9001);
     }
 
     #[test]
