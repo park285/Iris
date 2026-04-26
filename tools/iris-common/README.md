@@ -63,11 +63,14 @@ api.room_info(chat_id).await?;                    // 방 상세 정보
 api.stats(chat_id).await?;                        // 방 통계
 api.member_activity(chat_id, member_id).await?;   // 멤버 활동 내역
 api.recent_messages(chat_id, limit).await?;       // 최근 메시지 조회
+api.recent_messages_with_cursor(chat_id, limit, Some(after_id), None, Some(thread_id)).await?;
 api.send_reply(request).await?;                   // 답장 전송
 api.list_threads(chat_id).await?;                 // 스레드 목록
 api.get_room_events(chat_id, cursor).await?;      // 방 이벤트 이력
 api.sse_request(path, query).await?;              // SSE 스트림 (raw)
 ```
+
+`recent_messages_with_cursor`는 public `RecentMessagesCursorRequest`와 같은 `after_id`, `before_id`, `thread_id` 필드를 선택적으로 전송한다. Iris 서버는 `limit`을 최대 300개로 제한한다. 커서가 없으면 최신순으로 반환하고, `after_id`는 다음 요약 구간을 `id ASC`로, `before_id`는 이전 페이지를 `id DESC`로 반환한다. `after_id`와 `before_id` 동시 지정 요청은 거부한다.
 
 **전송 계층 오버라이드**: 소비자 설정에서 `transport = "http1"`을 지정하면 H2C 대신 HTTP/1.1을 강제한다.
 

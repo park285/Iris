@@ -403,6 +403,8 @@ curl -X POST "http://<DEVICE_IP>:3000$PATH_URI" \
 | POST | `/query/recent-threads` | 최근 스레드 |
 | POST | `/query/recent-messages` | 최근 메시지 |
 
+`/query/recent-messages` 요청 본문은 `{"chatId":42,"limit":50}` 형식이다. `limit`은 최대 300개로 제한되며, 커서 조회를 위해 선택적으로 `afterId`, `beforeId`, `threadId`를 지정할 수 있다. 커서가 없으면 최신순(`created_at DESC, id DESC`)으로 반환한다. `afterId`는 요약 진행용 다음 구간을 `id ASC`로 반환하고, `beforeId`는 이전 페이지를 `id DESC`로 반환한다. `afterId`와 `beforeId`는 동시에 지정할 수 없다. 다음 클라이언트 연동 작업은 [recent messages pagination guide](RECENT_MESSAGES_PAGINATION.md)를 기준으로 진행한다.
+
 #### 설정
 
 | 메서드 | 경로 | 설명 |

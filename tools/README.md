@@ -10,6 +10,8 @@ Iris 봇 프레임워크의 호스트 측 Rust 도구 워크스페이스.
 | [iris-ctl](iris-ctl/) | 바이너리 | Iris HTTP API용 TUI 제어 클라이언트 |
 | [iris-daemon](iris-daemon/) | 바이너리 | ADB 연동 호스트 측 런타임 감시자 |
 
+`/query/recent-messages`는 `iris-common` API 클라이언트 계약을 따른다. `limit`은 최대 300개이며, 선택 필드 `afterId`/`beforeId`/`threadId`를 지원한다. `afterId`와 `beforeId`는 동시에 지정할 수 없고, 커서 없음은 최신순, `afterId`는 `id ASC`, `beforeId`는 `id DESC`로 반환한다. 자세한 내용은 [iris-common README](iris-common/README.md)를 참고할 것.
+
 ## 의존 관계
 
 ```
