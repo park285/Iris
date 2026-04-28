@@ -17,10 +17,17 @@ pub async fn run_init(cfg: &DaemonConfig) -> Result<()> {
     prepare_device(&adb, cfg).await?;
     config_sync::render_and_push(&adb, cfg).await?;
     config_sync::sync_apk_if_needed(&adb, cfg, true).await?;
-    config_sync::sync_native_lib_if_needed(&adb, cfg, false).await?;
+    maybe_sync_native_lib(&adb, cfg).await?;
     ensure_runtime_ready(&adb, cfg).await?;
 
     tracing::info!("init 완료");
+    Ok(())
+}
+
+async fn maybe_sync_native_lib(adb: &Adb, cfg: &DaemonConfig) -> Result<()> {
+    if config_sync::native_sync_enabled_from_env() {
+        config_sync::sync_native_lib_if_needed(adb, cfg, false).await?;
+    }
     Ok(())
 }
 

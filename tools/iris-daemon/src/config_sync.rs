@@ -77,8 +77,14 @@ pub async fn sync_native_lib_if_needed(
     cfg: &DaemonConfig,
     strict_source: bool,
 ) -> Result<bool> {
+    let native_core_mode = native_core_mode_from_env();
+    if !native_core_mode.sync_enabled() {
+        tracing::debug!("native core mode off — native library sync skipped");
+        return Ok(false);
+    }
+
     let native_lib_src = Path::new(&cfg.init.native_lib_src);
-    if !native_lib_source_available(native_lib_src, strict_source)? {
+    if !native_lib_source_available(native_lib_src, strict_source, native_core_mode)? {
         return Ok(false);
     }
 
@@ -96,26 +102,26 @@ pub async fn sync_native_lib_if_needed(
 
     ensure_native_lib_dest_dir(adb, &cfg.init.native_lib_dest).await?;
     adb.push(native_lib_src, &cfg.init.native_lib_dest).await?;
-    adb.shell(&build_device_chmod_command(
-        &cfg.init.native_lib_dest,
-        "644",
-    ))
-    .await
-    .with_context(|| {
-        format!(
-            "native library 권한 설정 실패: {}",
-            cfg.init.native_lib_dest
-        )
-    })?;
+    let chmod_result = adb
+        .shell(&build_device_chmod_command(
+            &cfg.init.native_lib_dest,
+            "644",
+        ))
+        .await;
+    let changed = native_chmod_result_to_changed(chmod_result, &cfg.init.native_lib_dest);
     tracing::info!(src = %native_lib_src.display(), dest = %cfg.init.native_lib_dest, "native library sync 완료");
-    Ok(true)
+    Ok(changed)
 }
 
-fn native_lib_source_available(native_lib_src: &Path, strict_source: bool) -> Result<bool> {
+fn native_lib_source_available(
+    native_lib_src: &Path,
+    strict_source: bool,
+    native_core_mode: NativeCoreMode,
+) -> Result<bool> {
     if native_lib_src.exists() {
         return Ok(true);
     }
-    if strict_source && native_required_from_env() {
+    if strict_source && native_core_mode.requires_source() {
         anyhow::bail!(
             "native library source missing: {}",
             native_lib_src.display()
@@ -137,10 +143,25 @@ async fn ensure_native_lib_dest_dir(adb: &Adb, native_lib_dest: &str) -> Result<
     Ok(())
 }
 
+fn native_chmod_result_to_changed(chmod_result: Result<String>, native_lib_dest: &str) -> bool {
+    if let Err(error) = chmod_result {
+        tracing::warn!(
+            dest = %native_lib_dest,
+            error = %error,
+            "native library chmod failed after push; restart will still proceed"
+        );
+    }
+    true
+}
+
 pub async fn check_and_sync(adb: &Adb, cfg: &DaemonConfig) -> Result<()> {
     let config_changed = sync_config_if_needed(adb, cfg).await?;
     let apk_changed = sync_apk_if_needed(adb, cfg, false).await?;
-    let native_changed = sync_native_lib_if_needed(adb, cfg, false).await?;
+    let native_changed = if native_sync_enabled_from_env() {
+        sync_native_lib_if_needed(adb, cfg, false).await?
+    } else {
+        false
+    };
     if config_changed || apk_changed || native_changed {
         tracing::info!(
             config_changed = config_changed,
@@ -277,14 +298,58 @@ fn build_root_shell_command(inner: &str) -> String {
     format!("su 0 sh -lc {}", shell_quote(inner))
 }
 
-fn native_required_from_env() -> bool {
-    std::env::var("IRIS_NATIVE_CORE")
-        .ok()
-        .is_some_and(|value| native_required_env_value(&value))
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NativeCoreMode {
+    Off,
+    Shadow,
+    On,
 }
 
-fn native_required_env_value(value: &str) -> bool {
-    value.trim() == "on"
+impl NativeCoreMode {
+    fn sync_enabled(self) -> bool {
+        self != Self::Off
+    }
+
+    fn requires_source(self) -> bool {
+        self == Self::On
+    }
+}
+
+pub fn native_sync_enabled_from_env() -> bool {
+    let raw = std::env::var("IRIS_NATIVE_CORE").ok();
+    native_sync_enabled_env_value(raw.as_deref())
+}
+
+pub fn native_required_from_env() -> bool {
+    let raw = std::env::var("IRIS_NATIVE_CORE").ok();
+    native_required_env_value(raw.as_deref())
+}
+
+fn native_core_mode_from_env() -> NativeCoreMode {
+    let raw = std::env::var("IRIS_NATIVE_CORE").ok();
+    native_core_mode_env_value(raw.as_deref())
+}
+
+fn native_core_mode_env_value(raw: Option<&str>) -> NativeCoreMode {
+    let Some(value) = raw.map(str::trim) else {
+        return NativeCoreMode::Off;
+    };
+
+    if value.eq_ignore_ascii_case("shadow") {
+        NativeCoreMode::Shadow
+    } else if value.eq_ignore_ascii_case("on") {
+        NativeCoreMode::On
+    } else {
+        NativeCoreMode::Off
+    }
+}
+
+fn native_sync_enabled_env_value(raw: Option<&str>) -> bool {
+    native_core_mode_env_value(raw).sync_enabled()
+}
+
+fn native_required_env_value(raw: Option<&str>) -> bool {
+    native_core_mode_env_value(raw).requires_source()
 }
 
 fn shell_quote(value: &str) -> String {
@@ -458,11 +523,62 @@ mod tests {
     }
 
     #[test]
-    fn native_required_env_value_accepts_only_trimmed_exact_on() {
-        assert!(native_required_env_value("on"));
-        assert!(native_required_env_value(" on "));
-        assert!(!native_required_env_value("ON"));
-        assert!(!native_required_env_value("enabled"));
-        assert!(!native_required_env_value(""));
+    fn native_mode_parser_accepts_case_insensitive_modes_and_trims() {
+        assert_eq!(native_core_mode_env_value(Some(" On ")), NativeCoreMode::On);
+        assert_eq!(
+            native_core_mode_env_value(Some("SHADOW")),
+            NativeCoreMode::Shadow
+        );
+        assert_eq!(
+            native_core_mode_env_value(Some(" off ")),
+            NativeCoreMode::Off
+        );
+    }
+
+    #[test]
+    fn malformed_blank_and_missing_native_mode_are_off_and_do_not_sync() {
+        for raw in [None, Some(""), Some("   "), Some("enabled")] {
+            assert_eq!(native_core_mode_env_value(raw), NativeCoreMode::Off);
+            assert!(!native_sync_enabled_env_value(raw));
+        }
+    }
+
+    #[test]
+    fn native_sync_enabled_for_shadow_and_on_only() {
+        assert!(!native_sync_enabled_env_value(Some("off")));
+        assert!(native_sync_enabled_env_value(Some("shadow")));
+        assert!(native_sync_enabled_env_value(Some("ON")));
+    }
+
+    #[test]
+    fn native_required_only_for_on_when_strict() {
+        assert!(native_required_env_value(Some("on")));
+        assert!(native_required_env_value(Some(" ON ")));
+        assert!(!native_required_env_value(Some("shadow")));
+        assert!(!native_required_env_value(Some("off")));
+        assert!(!native_required_env_value(None));
+    }
+
+    #[test]
+    fn missing_native_source_fails_only_for_on_when_strict() {
+        let missing_path =
+            std::env::temp_dir().join(format!("iris-daemon-missing-native-{}", std::process::id()));
+
+        assert!(native_lib_source_available(&missing_path, true, NativeCoreMode::On).is_err());
+        assert!(!native_lib_source_available(&missing_path, true, NativeCoreMode::Shadow).unwrap());
+        assert!(!native_lib_source_available(&missing_path, true, NativeCoreMode::Off).unwrap());
+        assert!(!native_lib_source_available(&missing_path, false, NativeCoreMode::On).unwrap());
+    }
+
+    #[test]
+    fn native_chmod_result_is_nonfatal_after_push() {
+        assert!(native_chmod_result_to_changed(
+            Ok(String::new()),
+            "/data/iris/lib/libiris_native_core.so",
+        ));
+        assert!(native_chmod_result_to_changed(
+            Err(anyhow::anyhow!("chmod denied")),
+            "/data/iris/lib/libiris_native_core.so",
+        ));
     }
 }

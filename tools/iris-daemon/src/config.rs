@@ -258,7 +258,10 @@ fn apply_env_overrides_from(
         config.init.native_lib_src.clone_from(native_lib_src);
     }
     if let Some(native_lib_dest) = env.get("IRIS_NATIVE_LIB_PATH") {
-        config.init.native_lib_dest.clone_from(native_lib_dest);
+        let trimmed = native_lib_dest.trim();
+        if !trimmed.is_empty() {
+            config.init.native_lib_dest = trimmed.to_string();
+        }
     }
 }
 
@@ -429,6 +432,37 @@ device = "10.0.0.2:5555"
         assert_eq!(
             config.init.native_lib_dest,
             "/data/local/tmp/libiris_native_core.so"
+        );
+    }
+
+    #[test]
+    fn env_override_trims_native_library_dest_path() {
+        let mut config = DaemonConfig::default();
+        let env = std::collections::HashMap::from([(
+            String::from("IRIS_NATIVE_LIB_PATH"),
+            String::from(" /data/custom/libiris_native_core.so "),
+        )]);
+        apply_env_overrides_from(&mut config, &env);
+
+        assert_eq!(
+            config.init.native_lib_dest,
+            "/data/custom/libiris_native_core.so"
+        );
+    }
+
+    #[test]
+    fn env_override_blank_native_library_dest_keeps_existing_path() {
+        let mut config = DaemonConfig::default();
+        config.init.native_lib_dest = "/data/existing/libiris_native_core.so".to_string();
+        let env = std::collections::HashMap::from([(
+            String::from("IRIS_NATIVE_LIB_PATH"),
+            String::from("   "),
+        )]);
+        apply_env_overrides_from(&mut config, &env);
+
+        assert_eq!(
+            config.init.native_lib_dest,
+            "/data/existing/libiris_native_core.so"
         );
     }
 }
