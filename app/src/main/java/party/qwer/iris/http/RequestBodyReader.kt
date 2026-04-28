@@ -13,6 +13,7 @@ import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.Paths
 import java.security.MessageDigest
 
 private const val STREAM_BUFFER_BYTES = 8 * 1024
@@ -189,7 +190,7 @@ private class RequestBodySink(
                 throw error
             }
             val fallbackDirectory =
-                Path.of(System.getProperty("java.io.tmpdir"), "request-bodies")
+                Paths.get(System.getProperty("java.io.tmpdir"), "request-bodies")
             IrisLogger.warn(
                 "[RequestBodyReader] Failed to prepare spill directory ${policy.spillDirectory}: ${error.message}. " +
                     "Falling back to $fallbackDirectory",
