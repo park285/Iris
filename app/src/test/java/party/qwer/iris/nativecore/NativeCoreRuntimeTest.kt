@@ -1,5 +1,12 @@
 package party.qwer.iris.nativecore
 
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -70,6 +77,29 @@ class NativeCoreRuntimeTest {
     }
 
     @Test
+    fun `decrypt sends request json with encType ciphertext and userId`() {
+        val jni = FakeJni()
+        val runtime =
+            NativeCoreRuntime.create(
+                env = mapOf("IRIS_NATIVE_CORE" to "on"),
+                loader = {},
+                jni = jni,
+            )
+
+        runtime.decryptOrFallback(encType = 7, ciphertext = "cipher-secret", userId = 123L) { "kotlin-result" }
+
+        val request = Json.decodeFromString<JsonObject>(jni.lastDecryptRequest!!.decodeToString())
+        assertEquals(setOf("items"), request.keys)
+        val items = request.getValue("items").jsonArray
+        assertEquals(1, items.size)
+        val item = items.single().jsonObject
+        assertEquals(setOf("encType", "ciphertext", "userId"), item.keys)
+        assertEquals(7, item.getValue("encType").jsonPrimitive.int)
+        assertEquals("cipher-secret", item.getValue("ciphertext").jsonPrimitive.content)
+        assertEquals(123L, item.getValue("userId").jsonPrimitive.long)
+    }
+
+    @Test
     fun `decrypt in shadow mode returns kotlin result and counts mismatch`() {
         val runtime =
             NativeCoreRuntime.create(
@@ -111,18 +141,82 @@ class NativeCoreRuntimeTest {
 
         assertEquals("kotlin-result", result)
         assertEquals(1L, runtime.diagnostics().callFailures)
+        assertEquals("native decrypt failed", runtime.diagnostics().lastError)
     }
+
+    @Test
+    fun `decrypt in on mode falls back when native response is malformed`() {
+        val runtime = runtimeWithNativeResponse("not-json")
+
+        val result = runtime.decryptOrFallback(encType = 0, ciphertext = "cipher", userId = 1L) { "kotlin-result" }
+
+        assertEquals("kotlin-result", result)
+        assertEquals(1L, runtime.diagnostics().callFailures)
+        assertEquals("native decrypt failed", runtime.diagnostics().lastError)
+    }
+
+    @Test
+    fun `decrypt in on mode falls back when native response is empty`() {
+        val runtime = runtimeWithNativeResponse("""{"items":[]}""")
+
+        val result = runtime.decryptOrFallback(encType = 0, ciphertext = "cipher", userId = 1L) { "kotlin-result" }
+
+        assertEquals("kotlin-result", result)
+        assertEquals(1L, runtime.diagnostics().callFailures)
+        assertEquals("native decrypt failed", runtime.diagnostics().lastError)
+    }
+
+    @Test
+    fun `decrypt in on mode falls back when native response reports error without leaking raw error`() {
+        val runtime =
+            runtimeWithNativeResponse(
+                """{"items":[{"ok":false,"error":"ciphertext=secret userId=123 plaintext=leak"}]}""",
+            )
+
+        val result = runtime.decryptOrFallback(encType = 0, ciphertext = "cipher", userId = 1L) { "kotlin-result" }
+        val diagnostics = runtime.diagnostics()
+
+        assertEquals("kotlin-result", result)
+        assertEquals(1L, diagnostics.callFailures)
+        assertEquals("native decrypt failed", diagnostics.lastError)
+        assertFalse(diagnostics.lastError!!.contains("secret"))
+        assertFalse(diagnostics.lastError.contains("123"))
+        assertFalse(diagnostics.lastError.contains("leak"))
+    }
+
+    @Test
+    fun `decrypt in on mode falls back when native response is missing plaintext`() {
+        val runtime = runtimeWithNativeResponse("""{"items":[{"ok":true}]}""")
+
+        val result = runtime.decryptOrFallback(encType = 0, ciphertext = "cipher", userId = 1L) { "kotlin-result" }
+
+        assertEquals("kotlin-result", result)
+        assertEquals(1L, runtime.diagnostics().callFailures)
+        assertEquals("native decrypt failed", runtime.diagnostics().lastError)
+    }
+
+    private fun runtimeWithNativeResponse(response: String): NativeCoreRuntime =
+        NativeCoreRuntime.create(
+            env = mapOf("IRIS_NATIVE_CORE" to "on"),
+            loader = {},
+            jni = FakeJni(rawDecryptResponse = response),
+        )
 
     private class FakeJni(
         private val selfTestResult: String = "iris-native-core:test",
         private val decryptResult: String = "kotlin-result",
         private val decryptError: RuntimeException? = null,
+        private val rawDecryptResponse: String? = null,
     ) : NativeCoreJniBridge {
+        var lastDecryptRequest: ByteArray? = null
+            private set
+
         override fun nativeSelfTest(): String = selfTestResult
 
         override fun decryptBatch(requestJsonBytes: ByteArray): ByteArray {
+            lastDecryptRequest = requestJsonBytes
             decryptError?.let { throw it }
-            return """{"items":[{"ok":true,"plaintext":"$decryptResult"}]}""".encodeToByteArray()
+            return (rawDecryptResponse ?: """{"items":[{"ok":true,"plaintext":"$decryptResult"}]}""").encodeToByteArray()
         }
     }
 }

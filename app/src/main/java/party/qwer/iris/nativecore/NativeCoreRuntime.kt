@@ -15,6 +15,7 @@ internal class NativeCoreRuntime private constructor(
     private val selfTestResult: String?,
     private val loadError: String?,
 ) {
+    private val nativeDecryptFailure = "native decrypt failed"
     private val json = Json { ignoreUnknownKeys = true }
     private val callFailures = AtomicLong(0)
     private val decryptMismatches = AtomicLong(0)
@@ -56,9 +57,10 @@ internal class NativeCoreRuntime private constructor(
         kotlinDecrypt: () -> String,
     ): String {
         val kotlinResult = kotlinDecrypt()
-        val nativeResult = runCatching { decryptNative(encType, ciphertext, userId) }
-            .onFailure { recordNativeFailure(it) }
-            .getOrNull()
+        val nativeResult =
+            runCatching { decryptNative(encType, ciphertext, userId) }
+                .onFailure { recordNativeFailure() }
+                .getOrNull()
         if (nativeResult != null && nativeResult != kotlinResult) {
             decryptMismatches.incrementAndGet()
             IrisLogger.warn("[NativeCore] shadow mismatch component=decrypt")
@@ -73,15 +75,15 @@ internal class NativeCoreRuntime private constructor(
         kotlinDecrypt: () -> String,
     ): String =
         runCatching { decryptNative(encType, ciphertext, userId) }
-            .getOrElse { error ->
-                recordNativeFailure(error)
+            .getOrElse {
+                recordNativeFailure()
                 kotlinDecrypt()
             }
 
-    private fun recordNativeFailure(error: Throwable) {
+    private fun recordNativeFailure() {
         callFailures.incrementAndGet()
-        lastErrorRef.set(error.message ?: error::class.java.simpleName)
-        IrisLogger.error("[NativeCore] native call failed: ${error.message}", error)
+        lastErrorRef.set(nativeDecryptFailure)
+        IrisLogger.error("[NativeCore] native call failed: $nativeDecryptFailure")
     }
 
     private fun decryptNative(
@@ -92,11 +94,11 @@ internal class NativeCoreRuntime private constructor(
         val request = DecryptBatchRequest(listOf(DecryptBatchItem(encType, ciphertext, userId)))
         val rawResponse = jni.decryptBatch(json.encodeToString(request).encodeToByteArray()).decodeToString()
         val response = json.decodeFromString<DecryptBatchResponse>(rawResponse)
-        val first = response.items.firstOrNull() ?: error("native decrypt response is empty")
+        val first = response.items.firstOrNull() ?: error(nativeDecryptFailure)
         if (!first.ok) {
-            error(first.error ?: "native decrypt failed")
+            error(nativeDecryptFailure)
         }
-        return first.plaintext ?: error("native decrypt response missing plaintext")
+        return first.plaintext ?: error(nativeDecryptFailure)
     }
 
     companion object {
