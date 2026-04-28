@@ -18,6 +18,10 @@ IRIS_CHATROOM_REFRESH_ENABLED=1
 IRIS_CHATROOM_REFRESH_INTERVAL_MS=60000
 IRIS_CHATROOM_REFRESH_OPEN_DELAY_MS=5000
 IRIS_NATIVE_CORE=on
+IRIS_NATIVE_DECRYPT=shadow
+IRIS_NATIVE_ROUTING=shadow
+IRIS_NATIVE_PARSERS=shadow
+IRIS_NATIVE_WEBHOOK_PAYLOAD=shadow
 IRIS_NATIVE_LIB_PATH=/custom/iris/lib/libiris_native_core.so
 EOF
 
@@ -97,6 +101,30 @@ fi
 
 if ! grep -Fq "IRIS_NATIVE_CORE='\"'\"'on'\"'\"'" "$command_log"; then
   echo "expected native core env passthrough not found"
+  cat "$command_log"
+  exit 1
+fi
+
+if ! grep -Fq "IRIS_NATIVE_DECRYPT='\"'\"'shadow'\"'\"'" "$command_log"; then
+  echo "expected native decrypt env passthrough not found"
+  cat "$command_log"
+  exit 1
+fi
+
+if ! grep -Fq "IRIS_NATIVE_ROUTING='\"'\"'shadow'\"'\"'" "$command_log"; then
+  echo "expected native routing env passthrough not found"
+  cat "$command_log"
+  exit 1
+fi
+
+if ! grep -Fq "IRIS_NATIVE_PARSERS='\"'\"'shadow'\"'\"'" "$command_log"; then
+  echo "expected native parsers env passthrough not found"
+  cat "$command_log"
+  exit 1
+fi
+
+if ! grep -Fq "IRIS_NATIVE_WEBHOOK_PAYLOAD='\"'\"'shadow'\"'\"'" "$command_log"; then
+  echo "expected native webhook payload env passthrough not found"
   cat "$command_log"
   exit 1
 fi
