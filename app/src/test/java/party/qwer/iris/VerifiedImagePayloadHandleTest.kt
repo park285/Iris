@@ -71,7 +71,8 @@ class VerifiedImagePayloadHandleTest {
         val policy = VerifiedImageHandleStagingPolicy()
 
         assertEquals(
-            java.nio.file.Path.of(ConfigPathPolicy.resolveVerifiedImageSpillDirectory()),
+            java.nio.file.Path
+                .of(ConfigPathPolicy.resolveVerifiedImageSpillDirectory()),
             policy.spillDirectory,
         )
     }

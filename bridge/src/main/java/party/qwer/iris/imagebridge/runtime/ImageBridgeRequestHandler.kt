@@ -40,9 +40,7 @@ internal class ImageBridgeRequestHandler(
 
     private fun handleSendImage(request: ImageBridgeProtocol.ImageBridgeRequest): ImageBridgeProtocol.ImageBridgeResponse {
         val health = healthProvider()
-        check(health.specStatus.ready) {
-            "bridge spec not ready"
-        }
+        check(health.specStatus.ready) { "bridge spec not ready" }
         val imageRequest =
             ImageSendRequest(
                 roomId = checkNotNull(request.roomId) { "roomId missing" },

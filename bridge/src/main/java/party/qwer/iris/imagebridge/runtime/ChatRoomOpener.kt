@@ -17,9 +17,10 @@ internal class ChatRoomOpener(
 
     fun open(roomId: Long) {
         require(roomId > 0L) { "roomId must be positive" }
-        val task = Runnable {
-            appContext.startActivity(buildChatRoomIntent(roomId))
-        }
+        val task =
+            Runnable {
+                appContext.startActivity(buildChatRoomIntent(roomId))
+            }
 
         if (Looper.myLooper() == Looper.getMainLooper()) {
             task.run()

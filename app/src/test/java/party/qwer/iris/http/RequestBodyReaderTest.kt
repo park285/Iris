@@ -349,7 +349,7 @@ class RequestBodyReaderTest {
                                                     "IRIS_REQUEST_BODY_MAX_IN_MEMORY_BYTES" to "64",
                                                 ),
                                         ).copy(
-                                            spillStorageFactory = ::FailingOpenSpillStorage,
+                                            spillStorageFactory = ::failingOpenSpillStorage,
                                         ),
                             )
                         }
@@ -551,7 +551,7 @@ private class FailingSpillStorage(
     }
 }
 
-private fun FailingOpenSpillStorage(path: Path): RequestBodyStorage {
+private fun failingOpenSpillStorage(path: Path): RequestBodyStorage {
     Files.deleteIfExists(path)
     throw IllegalStateException("spill open failed")
 }

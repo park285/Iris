@@ -1,8 +1,8 @@
 package party.qwer.iris
 
-import party.qwer.iris.storage.ChatId
 import party.qwer.iris.model.RoomListResponse
 import party.qwer.iris.model.RoomSummary
+import party.qwer.iris.storage.ChatId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse

@@ -113,8 +113,7 @@ internal class AndroidSqliteDriver(
         override fun isNull(columnIndex: Int): Boolean = cursor.isNull(columnIndex)
     }
 
-    private fun compileStatement(sql: String): BindableSqliteStatement =
-        AndroidBindableSqliteStatement(database.compileStatement(sql))
+    private fun compileStatement(sql: String): BindableSqliteStatement = AndroidBindableSqliteStatement(database.compileStatement(sql))
 
     private class AndroidBindableSqliteStatement(
         private val delegate: android.database.sqlite.SQLiteStatement,

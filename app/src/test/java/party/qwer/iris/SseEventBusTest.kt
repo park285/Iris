@@ -7,9 +7,9 @@ import party.qwer.iris.http.SseEventEnvelope
 import party.qwer.iris.http.SseSubscriberPolicy
 import party.qwer.iris.http.initialSseFrames
 import party.qwer.iris.persistence.IrisDatabaseSchema
-import party.qwer.iris.persistence.SseEventStore
 import party.qwer.iris.persistence.JdbcSqliteHelper
 import party.qwer.iris.persistence.SqliteSseEventStore
+import party.qwer.iris.persistence.SseEventStore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith

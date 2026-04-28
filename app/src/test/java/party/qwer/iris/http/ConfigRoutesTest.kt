@@ -149,11 +149,21 @@ class ConfigRoutesTest {
                 assertEquals("true", payload.getValue("persisted").toString())
                 assertEquals(
                     "https://example.com/webhook",
-                    payload.getValue("user").jsonObject.getValue("web_endpoint").toString().trim('"'),
+                    payload
+                        .getValue("user")
+                        .jsonObject
+                        .getValue("web_endpoint")
+                        .toString()
+                        .trim('"'),
                 )
                 assertEquals(
                     "https://example.com/webhook",
-                    payload.getValue("runtimeApplied").jsonObject.getValue("web_endpoint").toString().trim('"'),
+                    payload
+                        .getValue("runtimeApplied")
+                        .jsonObject
+                        .getValue("web_endpoint")
+                        .toString()
+                        .trim('"'),
                 )
             } finally {
                 configPath.deleteIfExists()

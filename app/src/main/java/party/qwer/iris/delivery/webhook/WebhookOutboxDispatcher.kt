@@ -19,7 +19,6 @@ import kotlinx.coroutines.withTimeout
 import okhttp3.Request
 import party.qwer.iris.ConfigManager
 import party.qwer.iris.ConfigProvider
-import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
 import party.qwer.iris.IrisLogger
 import party.qwer.iris.http.RuntimeBootstrapState
 import party.qwer.iris.persistence.ClaimTransitionResult

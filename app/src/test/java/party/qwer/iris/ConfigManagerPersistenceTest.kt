@@ -157,7 +157,9 @@ class ConfigManagerPersistenceTest {
             applyConfigUpdate(
                 configManager = manager,
                 name = "sendrate",
-                request = party.qwer.iris.model.ConfigRequest(rate = 25),
+                request =
+                    party.qwer.iris.model
+                        .ConfigRequest(rate = 25),
             )
 
         assertFalse(outcome.persisted)
@@ -180,7 +182,9 @@ class ConfigManagerPersistenceTest {
             applyConfigUpdate(
                 configManager = manager,
                 name = "botport",
-                request = party.qwer.iris.model.ConfigRequest(port = 4000),
+                request =
+                    party.qwer.iris.model
+                        .ConfigRequest(port = 4000),
             )
 
         assertFalse(outcome.persisted)
@@ -201,7 +205,9 @@ class ConfigManagerPersistenceTest {
             applyConfigUpdate(
                 configManager = manager,
                 name = "sendrate",
-                request = party.qwer.iris.model.ConfigRequest(rate = unchangedRate),
+                request =
+                    party.qwer.iris.model
+                        .ConfigRequest(rate = unchangedRate),
             )
 
         assertTrue(outcome.persisted)
@@ -229,7 +235,9 @@ class ConfigManagerPersistenceTest {
             applyConfigUpdate(
                 configManager = manager,
                 name = "sendrate",
-                request = party.qwer.iris.model.ConfigRequest(rate = unchangedRate),
+                request =
+                    party.qwer.iris.model
+                        .ConfigRequest(rate = unchangedRate),
             )
 
         val persistedText = configPath.readText()
@@ -255,7 +263,9 @@ class ConfigManagerPersistenceTest {
             applyConfigUpdate(
                 configManager = manager,
                 name = "sendrate",
-                request = party.qwer.iris.model.ConfigRequest(rate = unchangedRate),
+                request =
+                    party.qwer.iris.model
+                        .ConfigRequest(rate = unchangedRate),
             )
 
         assertFalse(outcome.persisted)

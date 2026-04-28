@@ -95,12 +95,7 @@ internal object ImageBridgeServer {
                 },
             )
         clientExecutor = newClientExecutor()
-        Thread(
-            {
-                runServerLoop()
-            },
-            "iris-bridge-server",
-        ).apply {
+        Thread({ runServerLoop() }, "iris-bridge-server").apply {
             isDaemon = true
             start()
         }
@@ -155,23 +150,16 @@ internal object ImageBridgeServer {
         val executor = clientExecutor
         val handler = requestHandler
         if (executor == null || handler == null) {
-            runCatching {
-                writeFrame(client.outputStream, failureResponse("sender not initialized"))
-            }
+            runCatching { writeFrame(client.outputStream, failureResponse("sender not initialized")) }
             runCatching { client.close() }
             return
         }
-        val peerUid =
-            runCatching {
-                client.peerCredentials.uid
-            }.getOrNull()
+        val peerUid = runCatching { client.peerCredentials.uid }.getOrNull()
         try {
             peerIdentityValidator.validate(peerUid)
         } catch (error: IllegalArgumentException) {
             Log.e(TAG, "unauthorized bridge client uid=$peerUid")
-            runCatching {
-                writeFrame(client.outputStream, failureResponse(error.message ?: "unauthorized bridge client"))
-            }
+            runCatching { writeFrame(client.outputStream, failureResponse(error.message ?: "unauthorized bridge client")) }
             runCatching { client.close() }
             return
         }
@@ -182,9 +170,7 @@ internal object ImageBridgeServer {
             }
         } catch (e: RejectedExecutionException) {
             Log.e(TAG, "client dispatch rejected", e)
-            runCatching {
-                writeFrame(client.outputStream, failureResponse("bridge shutting down"))
-            }
+            runCatching { writeFrame(client.outputStream, failureResponse("bridge shutting down")) }
             runCatching { client.close() }
         }
     }

@@ -473,6 +473,5 @@ class SseEventBus(
         }
     }
 
-    private fun closedSubscriberChannel(): Channel<SseEventEnvelope> =
-        Channel<SseEventEnvelope>(0).also { it.close() }
+    private fun closedSubscriberChannel(): Channel<SseEventEnvelope> = Channel<SseEventEnvelope>(0).also { it.close() }
 }
