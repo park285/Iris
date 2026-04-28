@@ -10,7 +10,6 @@ internal data class ImageSendRequest(
     val threadScope: Int?,
     val requestId: String?,
 )
-
 internal class ImageBridgeRequestHandler(
     private val imageSender: (ImageSendRequest) -> Unit,
     private val healthProvider: () -> ImageBridgeHealthSnapshot,
@@ -62,7 +61,6 @@ internal class ImageBridgeRequestHandler(
         }
         return successResponse()
     }
-
     private fun handleInspectChatRoom(request: ImageBridgeProtocol.ImageBridgeRequest): ImageBridgeProtocol.ImageBridgeResponse {
         val roomId = checkNotNull(request.roomId) { "roomId missing" }
         val inspector = checkNotNull(chatRoomInspector) { "chatroom inspection unavailable" }
@@ -71,7 +69,6 @@ internal class ImageBridgeRequestHandler(
             inspectionJson = inspector(roomId),
         )
     }
-
     private fun handleOpenChatRoom(request: ImageBridgeProtocol.ImageBridgeRequest): ImageBridgeProtocol.ImageBridgeResponse {
         val roomId = checkNotNull(request.roomId) { "roomId missing" }
         val opener = checkNotNull(chatRoomOpener) { "chatroom opener unavailable" }
@@ -80,7 +77,6 @@ internal class ImageBridgeRequestHandler(
             status = ImageBridgeProtocol.STATUS_OK,
         )
     }
-
     private fun handleSnapshotChatRoomMembers(request: ImageBridgeProtocol.ImageBridgeRequest): ImageBridgeProtocol.ImageBridgeResponse {
         val roomId = checkNotNull(request.roomId) { "roomId missing" }
         val provider = checkNotNull(chatRoomMemberSnapshotProvider) { "chatroom member snapshot unavailable" }
