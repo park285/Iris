@@ -232,7 +232,7 @@ class CommandIngressServiceTest {
             val event = eventStore.insertedEvents.last { it.eventType == "nickname_change" }
             assertTrue(event.payload.contains("\"oldNickname\":\"Old Name\""))
             assertTrue(event.payload.contains("\"newNickname\":\"New Name\""))
-            runBlocking { ingress.closeSuspend() }
+            ingress.closeSuspend()
         }
 
     @Test
@@ -283,7 +283,7 @@ class CommandIngressServiceTest {
             val event = eventStore.insertedEvents.single { it.eventType == "nickname_change" }
             assertTrue(event.payload.contains("\"oldNickname\":\"Old Name\""))
             assertTrue(event.payload.contains("\"newNickname\":\"New Name\""))
-            runBlocking { ingress.closeSuspend() }
+            ingress.closeSuspend()
         }
 
     @Test
@@ -322,7 +322,7 @@ class CommandIngressServiceTest {
             runCurrent()
 
             assertEquals(0, eventStore.insertedEvents.count { it.eventType == "nickname_change" })
-            runBlocking { ingress.closeSuspend() }
+            ingress.closeSuspend()
         }
 
     @Test
@@ -362,7 +362,7 @@ class CommandIngressServiceTest {
 
             assertEquals(1, routingGateway.commands.size)
             assertEquals(11L, ingress.lastObservedLogId())
-            runBlocking { ingress.closeSuspend() }
+            ingress.closeSuspend()
         }
 
     @Test
@@ -410,7 +410,7 @@ class CommandIngressServiceTest {
             val event = eventStore.insertedEvents.last { it.eventType == "nickname_change" }
             assertTrue(event.payload.contains("\"oldNickname\":\"Old Name\""))
             assertTrue(event.payload.contains("\"newNickname\":\"New Name\""))
-            runBlocking { ingress.closeSuspend() }
+            ingress.closeSuspend()
         }
 
     @Test
@@ -457,7 +457,7 @@ class CommandIngressServiceTest {
             runCurrent()
 
             assertEquals(0, eventStore.insertedEvents.count { it.eventType == "nickname_change" })
-            runBlocking { ingress.closeSuspend() }
+            ingress.closeSuspend()
         }
 
     @Test
@@ -501,7 +501,7 @@ class CommandIngressServiceTest {
             val event = eventStore.insertedEvents.single { it.eventType == "nickname_change" }
             assertTrue(event.payload.contains("\"oldNickname\":\"Old Name\""))
             assertTrue(event.payload.contains("\"newNickname\":\"New Name\""))
-            runBlocking { ingress.closeSuspend() }
+            ingress.closeSuspend()
         }
 
     @Test
@@ -549,7 +549,7 @@ class CommandIngressServiceTest {
             val event = eventStore.insertedEvents.single { it.eventType == "nickname_change" }
             assertTrue(event.payload.contains("\"oldNickname\":\"Old Name\""))
             assertTrue(event.payload.contains("\"newNickname\":\"New Name\""))
-            runBlocking { ingress.closeSuspend() }
+            ingress.closeSuspend()
         }
 
     @Test
@@ -582,7 +582,7 @@ class CommandIngressServiceTest {
             runCurrent()
 
             assertTrue(markDirtyCalls.count { it == 100L } >= 4)
-            runBlocking { ingress.closeSuspend() }
+            ingress.closeSuspend()
         }
 
     @Test
@@ -615,7 +615,7 @@ class CommandIngressServiceTest {
             runCurrent()
 
             assertTrue(markDirtyCalls.count { it == 100L } >= 4)
-            runBlocking { ingress.closeSuspend() }
+            ingress.closeSuspend()
         }
 
     @Test
@@ -699,7 +699,7 @@ class CommandIngressServiceTest {
 
             assertEquals(2, routingGateway.commands.size)
             assertEquals(12L, ingress.lastObservedLogId())
-            runBlocking { ingress.closeSuspend() }
+            ingress.closeSuspend()
         }
 
     @Test
@@ -732,7 +732,7 @@ class CommandIngressServiceTest {
             ingress.checkChange()
             assertEquals(2, db.pollCalls)
             assertEquals(11L, db.lastPolledAfterLogId)
-            runBlocking { ingress.closeSuspend() }
+            ingress.closeSuspend()
         }
 
     @Test
@@ -766,7 +766,7 @@ class CommandIngressServiceTest {
             ingress.checkChange()
 
             assertEquals(1, db.pollCalls)
-            runBlocking { ingress.closeSuspend() }
+            ingress.closeSuspend()
         }
 
     @Test
@@ -829,7 +829,7 @@ class CommandIngressServiceTest {
                 ),
                 ingress.progressSnapshot(),
             )
-            runBlocking { ingress.closeSuspend() }
+            ingress.closeSuspend()
         }
 
     @Test
@@ -894,7 +894,7 @@ class CommandIngressServiceTest {
             assertEquals(12L, ingress.lastObservedLogId())
             assertEquals(listOf("chat_logs" to 11L, "chat_logs" to 12L), journal.advanceCalls.takeLast(2))
             assertEquals(1, routeCalls[12L]?.get())
-            runBlocking { ingress.closeSuspend() }
+            ingress.closeSuspend()
         }
 
     @Test
@@ -942,7 +942,7 @@ class CommandIngressServiceTest {
             assertEquals("2", imageCmd.messageType)
             assertEquals("cmd-log-123", imageCmd.threadId)
             assertEquals(2, imageCmd.threadScope)
-            runBlocking { ingress.closeSuspend() }
+            ingress.closeSuspend()
         }
 
     @Test
