@@ -2,11 +2,14 @@ package party.qwer.iris.delivery.webhook
 
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import party.qwer.iris.CommandParser
 import party.qwer.iris.ConfigProvider
 import party.qwer.iris.PathUtils
 import party.qwer.iris.model.StoredWebhookOutboxEntry
 import party.qwer.iris.model.WebhookOutboxFileState
 import party.qwer.iris.model.WebhookOutboxStatus
+import party.qwer.iris.nativecore.NativeCoreHolder
+import party.qwer.iris.nativecore.NativeIngressPlan
 import java.io.Closeable
 import java.io.File
 import java.nio.file.Files
@@ -259,13 +262,29 @@ internal data class ResolvedWebhookDelivery(
     val payloadJson: String,
 )
 
+internal fun resolveWebhookDeliveryPlansBatch(
+    commands: List<RoutingCommand>,
+    config: ConfigProvider,
+): List<ResolvedWebhookDelivery?> {
+    if (commands.isEmpty()) return emptyList()
+    val plans =
+        NativeCoreHolder.current().planIngressBatchOrFallback(
+            commands = commands,
+            commandRoutePrefixes = config.commandRoutePrefixes(),
+            imageMessageTypeRoutes = config.imageMessageTypeRoutes(),
+        ) {
+            commands.map { command -> resolveWebhookDeliveryPlanKotlin(command, config) }
+        }
+    return commands.zip(plans).map { (command, plan) ->
+        plan.toResolvedWebhookDelivery(command, config)
+    }
+}
+
 internal fun resolveWebhookDelivery(
     command: RoutingCommand,
     config: ConfigProvider,
 ): ResolvedWebhookDelivery? {
-    val parsedCommand =
-        party.qwer.iris.CommandParser
-            .parse(command.text)
+    val parsedCommand = CommandParser.parse(command.text)
     val targetRoute =
         resolveWebhookRoute(parsedCommand, config)
             ?: resolveEventRoute(command.messageType)
@@ -279,6 +298,42 @@ internal fun resolveWebhookDelivery(
         route = targetRoute,
         messageId = messageId,
         payloadJson = buildWebhookPayload(normalizedCommand, targetRoute, messageId),
+    )
+}
+
+private fun resolveWebhookDeliveryPlanKotlin(
+    command: RoutingCommand,
+    config: ConfigProvider,
+): NativeIngressPlan {
+    val parsedCommand = CommandParser.parseKotlin(command.text)
+    val targetRoute =
+        resolveWebhookRouteKotlin(parsedCommand, config)
+            ?: resolveEventRouteKotlin(command.messageType)
+            ?: resolveImageRouteKotlin(command.messageType, config)
+            ?: return NativeIngressPlan(parsedCommand = parsedCommand)
+    val normalizedCommand = command.copy(text = parsedCommand.normalizedText)
+    val messageId = buildRoutingMessageId(normalizedCommand, targetRoute)
+    return NativeIngressPlan(
+        parsedCommand = parsedCommand,
+        targetRoute = targetRoute,
+        messageId = messageId,
+        payloadJson = buildWebhookPayloadKotlin(normalizedCommand, targetRoute, messageId),
+    )
+}
+
+private fun NativeIngressPlan.toResolvedWebhookDelivery(
+    command: RoutingCommand,
+    config: ConfigProvider,
+): ResolvedWebhookDelivery? {
+    val route = targetRoute ?: return null
+    if (config.webhookEndpointFor(route).isBlank()) return null
+    val normalizedCommand = command.copy(text = parsedCommand.normalizedText)
+    val resolvedMessageId = messageId ?: buildRoutingMessageId(normalizedCommand, route)
+    return ResolvedWebhookDelivery(
+        roomId = normalizedCommand.room.toLongOrNull() ?: -1L,
+        route = route,
+        messageId = resolvedMessageId,
+        payloadJson = payloadJson ?: buildWebhookPayloadKotlin(normalizedCommand, route, resolvedMessageId),
     )
 }
 

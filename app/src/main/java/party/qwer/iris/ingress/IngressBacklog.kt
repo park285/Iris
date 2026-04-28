@@ -90,6 +90,22 @@ internal class IngressBacklog(
             }
         }
 
+    fun takeBatch(partitionIndex: Int): List<ChatLogDispatch> =
+        synchronized(lock) {
+            blockedDispatches[partitionIndex]?.let { blocked ->
+                blockedDispatches[partitionIndex] = null
+                activeDispatchCount += 1
+                return listOf(blocked)
+            }
+
+            val batch = mutableListOf<ChatLogDispatch>()
+            while (pendingDispatches[partitionIndex].isNotEmpty()) {
+                batch += pendingDispatches[partitionIndex].removeFirst()
+            }
+            activeDispatchCount += batch.size
+            batch
+        }
+
     fun complete(
         partitionIndex: Int,
         dispatch: ChatLogDispatch,
@@ -113,6 +129,46 @@ internal class IngressBacklog(
                     DispatchContinuation(shouldContinue = false)
                 }
             }
+        }
+
+    fun completeBatch(
+        partitionIndex: Int,
+        dispatches: List<ChatLogDispatch>,
+        outcomes: List<DispatchOutcome>,
+        onAdvanceCommittedLogId: (Long) -> Unit,
+    ): DispatchContinuation =
+        synchronized(lock) {
+            activeDispatchCount -= dispatches.size
+            var shouldContinue = true
+            var processedCount = 0
+
+            for ((index, outcome) in outcomes.withIndex()) {
+                val dispatch = dispatches.getOrNull(index) ?: break
+                processedCount = index + 1
+                when (outcome) {
+                    DispatchOutcome.COMPLETED -> {
+                        completedLogIds += dispatch.logId
+                    }
+
+                    DispatchOutcome.RETRY_LATER -> {
+                        blockedDispatches[partitionIndex] = dispatch
+                        shouldContinue = false
+                        break
+                    }
+                }
+            }
+
+            requeueFrontLocked(partitionIndex, dispatches.drop(processedCount))
+            advanceCommittedPrefixLocked(onAdvanceCommittedLogId)
+            DispatchContinuation(
+                shouldContinue = shouldContinue && processedCount == dispatches.size,
+                signalPartitions =
+                    if (shouldContinue && processedCount == dispatches.size) {
+                        scheduleReadyPartitionsLocked()
+                    } else {
+                        emptySet()
+                    },
+            )
         }
 
     fun snapshot(
@@ -156,6 +212,15 @@ internal class IngressBacklog(
         }
         bufferedDispatches.addAll(deferred)
         return signaledPartitions
+    }
+
+    private fun requeueFrontLocked(
+        partitionIndex: Int,
+        dispatches: List<ChatLogDispatch>,
+    ) {
+        for (index in dispatches.indices.reversed()) {
+            pendingDispatches[partitionIndex].addFirst(dispatches[index])
+        }
     }
 
     private fun advanceCommittedPrefixLocked(onAdvanceCommittedLogId: (Long) -> Unit) {

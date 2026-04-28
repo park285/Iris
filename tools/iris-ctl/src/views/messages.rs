@@ -141,10 +141,9 @@ impl MessagesView {
         let rows = self.visible_rows();
         if let Some(VisibleRow::ThreadHeader { thread_id, .. }) =
             self.state.selected().and_then(|i| rows.get(i))
+            && !self.expanded_threads.insert(*thread_id)
         {
-            if !self.expanded_threads.insert(*thread_id) {
-                self.expanded_threads.remove(thread_id);
-            }
+            self.expanded_threads.remove(thread_id);
         }
     }
 }

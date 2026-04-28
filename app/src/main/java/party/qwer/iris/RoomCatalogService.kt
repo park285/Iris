@@ -14,8 +14,9 @@ internal class RoomCatalogService(
 ) {
     fun listRooms(): RoomListResponse {
         val roomRows = roomDirectory.listAllRooms()
+        val parsedRoomTitles = metadata.parseRoomTitles(roomRows.map { row -> row.meta })
         val rooms =
-            roomRows.map { row ->
+            roomRows.mapIndexed { index, row ->
                 RoomSummary(
                     chatId = row.id.value,
                     type = row.type,
@@ -28,6 +29,7 @@ internal class RoomCatalogService(
                                 roomType = row.type,
                                 meta = row.meta,
                                 members = row.members,
+                                parsedRoomTitle = parsedRoomTitles.getOrNull(index),
                             ),
                     linkUrl = row.linkUrl,
                     memberLimit = row.memberLimit,

@@ -20,7 +20,7 @@ iris-common  <─── iris-ctl
 
 ## 요구 사항
 
-- Rust 1.85.0 이상 (edition 2024)
+- Rust 1.95.0 이상 (edition 2024)
 - `unsafe` 코드 전역 금지 (`unsafe_code = "forbid"`)
 
 ## 빌드

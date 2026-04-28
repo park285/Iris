@@ -370,6 +370,48 @@ class NativeCoreRuntimeTest {
     }
 
     @Test
+    fun `parser batch in on mode uses one jni call for many room titles`() {
+        val jni =
+            FakeJni(
+                rawParserResponse =
+                    """
+                    {
+                      "items": [
+                        {"kind":"roomTitle","ok":true,"fallback":false,"roomTitle":"native-a"},
+                        {"kind":"roomTitle","ok":true,"fallback":false,"roomTitle":null},
+                        {"kind":"roomTitle","ok":true,"fallback":false,"roomTitle":"native-c"}
+                      ]
+                    }
+                    """.trimIndent(),
+            )
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_PARSERS" to "on",
+                    ),
+                loader = {},
+                jni = jni,
+            )
+
+        val result =
+            runtime.parseRoomTitlesOrFallback(listOf("meta-a", null, "meta-c")) {
+                listOf("kotlin-a", null, "kotlin-c")
+            }
+        val parserStats = runtime.diagnostics().componentStats.getValue("parsers")
+        val request = Json.decodeFromString<JsonObject>(jni.lastParserRequest!!.decodeToString())
+
+        assertEquals(listOf("native-a", null, "native-c"), result)
+        assertEquals(1, jni.parserCalls)
+        assertEquals(3, request.getValue("items").jsonArray.size)
+        assertEquals(1L, parserStats.jniCalls)
+        assertEquals(3L, parserStats.items)
+        assertTrue(parserStats.totalNativeMicros > 0L)
+    }
+
+    @Test
     fun `webhook payload component on returns native payload`() {
         val runtime =
             NativeCoreRuntime.create(
@@ -439,6 +481,198 @@ class NativeCoreRuntimeTest {
     }
 
     @Test
+    fun `ingress batch component on plans route and payload with one jni call for many commands`() {
+        val jni =
+            FakeJni(
+                rawIngressResponse =
+                    """
+                    {
+                      "items": [
+                        {
+                          "ok": true,
+                          "kind": "WEBHOOK",
+                          "normalizedText": "!native-a",
+                          "targetRoute": "default",
+                          "messageId": "kakao-log-101-default",
+                          "payloadJson": "{\"route\":\"default\",\"messageId\":\"kakao-log-101-default\"}"
+                        },
+                        {
+                          "ok": true,
+                          "kind": "NONE",
+                          "normalizedText": "photo",
+                          "imageRoute": "chatbotgo",
+                          "targetRoute": "chatbotgo",
+                          "messageId": "kakao-log-102-chatbotgo",
+                          "payloadJson": "{\"route\":\"chatbotgo\",\"messageId\":\"kakao-log-102-chatbotgo\"}"
+                        }
+                      ]
+                    }
+                    """.trimIndent(),
+            )
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_ROUTING" to "on",
+                        "IRIS_NATIVE_WEBHOOK_PAYLOAD" to "on",
+                    ),
+                loader = {},
+                jni = jni,
+            )
+
+        val result =
+            runtime.planIngressBatchOrFallback(
+                commands =
+                    listOf(
+                        sampleRoutingCommand().copy(text = "!kotlin-a", sourceLogId = 101L),
+                        sampleRoutingCommand().copy(text = "photo", sourceLogId = 102L, messageType = "2"),
+                    ),
+                commandRoutePrefixes = mapOf("default" to listOf("!")),
+                imageMessageTypeRoutes = mapOf("chatbotgo" to listOf("2")),
+            ) {
+                error("kotlin fallback should not run")
+            }
+        val diagnostics = runtime.diagnostics()
+        val routingStats = diagnostics.componentStats.getValue("routing")
+        val payloadStats = diagnostics.componentStats.getValue("webhookPayload")
+        val request = Json.decodeFromString<JsonObject>(jni.lastIngressRequest!!.decodeToString())
+
+        assertEquals(1, jni.ingressCalls)
+        assertEquals(2, request.getValue("items").jsonArray.size)
+        assertEquals(ParsedCommand(CommandKind.WEBHOOK, "!native-a"), result[0].parsedCommand)
+        assertEquals("default", result[0].targetRoute)
+        assertEquals("kakao-log-101-default", result[0].messageId)
+        assertEquals("chatbotgo", result[1].targetRoute)
+        assertEquals(1L, routingStats.jniCalls)
+        assertEquals(2L, routingStats.items)
+        assertEquals(1L, payloadStats.jniCalls)
+        assertEquals(2L, payloadStats.items)
+        assertTrue(routingStats.totalNativeMicros > 0L)
+        assertTrue(payloadStats.totalNativeMicros > 0L)
+    }
+
+    @Test
+    fun `routing on with webhook payload off uses routing batch and kotlin payload without ingress`() {
+        val jni =
+            FakeJni(
+                rawRoutingResponse =
+                    """{"items":[{"ok":true,"kind":"WEBHOOK","normalizedText":"!native","webhookRoute":"native","targetRoute":"native"}]}""",
+            )
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_ROUTING" to "on",
+                        "IRIS_NATIVE_WEBHOOK_PAYLOAD" to "off",
+                    ),
+                loader = {},
+                jni = jni,
+            )
+
+        val result =
+            runtime.planIngressBatchOrFallback(
+                commands = listOf(sampleRoutingCommand()),
+                commandRoutePrefixes = mapOf("native" to listOf("!")),
+                imageMessageTypeRoutes = emptyMap(),
+            ) {
+                error("full kotlin planner should not run when native routing succeeds")
+            }
+
+        assertEquals("native", result.single().targetRoute)
+        assertEquals("kakao-log-100-native", result.single().messageId)
+        assertTrue(result.single().payloadJson!!.contains("!native"))
+        assertEquals(1, jni.routingCalls)
+        assertEquals(0, jni.webhookPayloadCalls)
+        assertEquals(0, jni.ingressCalls)
+    }
+
+    @Test
+    fun `routing shadow with webhook payload off still compares routing batch`() {
+        val jni =
+            FakeJni(
+                rawRoutingResponse =
+                    """{"items":[{"ok":true,"kind":"WEBHOOK","normalizedText":"!native","webhookRoute":"native","targetRoute":"native"}]}""",
+            )
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_ROUTING" to "shadow",
+                        "IRIS_NATIVE_WEBHOOK_PAYLOAD" to "off",
+                    ),
+                loader = {},
+                jni = jni,
+            )
+
+        val result =
+            runtime.planIngressBatchOrFallback(
+                commands = listOf(sampleRoutingCommand()),
+                commandRoutePrefixes = mapOf("native" to listOf("!")),
+                imageMessageTypeRoutes = emptyMap(),
+            ) {
+                listOf(
+                    NativeIngressPlan(
+                        parsedCommand = ParsedCommand(CommandKind.WEBHOOK, "!kotlin"),
+                        targetRoute = "default",
+                        messageId = "msg-kotlin",
+                        payloadJson = """{"route":"default","messageId":"msg-kotlin"}""",
+                    ),
+                )
+            }
+
+        assertEquals("default", result.single().targetRoute)
+        assertEquals(1, jni.routingCalls)
+        assertEquals(0, jni.webhookPayloadCalls)
+        assertEquals(0, jni.ingressCalls)
+        assertEquals(1L, runtime.diagnostics().shadowMismatches.getValue("routing"))
+    }
+
+    @Test
+    fun `webhook payload shadow with routing off still compares payload batch`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_ROUTING" to "off",
+                        "IRIS_NATIVE_WEBHOOK_PAYLOAD" to "shadow",
+                    ),
+                loader = {},
+                jni = FakeJni(),
+            )
+
+        val result =
+            runtime.planIngressBatchOrFallback(
+                commands = listOf(sampleRoutingCommand()),
+                commandRoutePrefixes = emptyMap(),
+                imageMessageTypeRoutes = emptyMap(),
+            ) {
+                listOf(
+                    NativeIngressPlan(
+                        parsedCommand = ParsedCommand(CommandKind.WEBHOOK, "!ping"),
+                        targetRoute = "default",
+                        messageId = "msg-kotlin",
+                        payloadJson = """{"route":"default","messageId":"msg-kotlin"}""",
+                    ),
+                )
+            }
+
+        val diagnostics = runtime.diagnostics()
+
+        assertEquals("""{"route":"default","messageId":"msg-kotlin"}""", result.single().payloadJson)
+        assertEquals(0, diagnostics.componentStats.getValue("routing").jniCalls)
+        assertEquals(1L, diagnostics.componentStats.getValue("webhookPayload").jniCalls)
+        assertEquals(1L, diagnostics.shadowMismatches.getValue("webhookPayload"))
+    }
+
+    @Test
     fun `decrypt batch in on mode uses one jni call for many items and records item stats`() {
         val jni = FakeJni(decryptResults = listOf("rust-a", "rust-b", "rust-c"))
         val runtime =
@@ -468,6 +702,9 @@ class NativeCoreRuntimeTest {
         assertEquals(1L, decryptStats.jniCalls)
         assertEquals(3L, decryptStats.items)
         assertEquals(0L, decryptStats.fallbacks)
+        assertTrue(decryptStats.totalNativeMicros > 0L)
+        assertTrue(decryptStats.maxNativeMicros > 0L)
+        assertTrue(decryptStats.averageNativeMicros > 0L)
         assertEquals(0L, diagnostics.callFailures)
     }
 
@@ -649,6 +886,7 @@ class NativeCoreRuntimeTest {
         private val rawRoutingResponse: String? = null,
         private val rawParserResponse: String? = null,
         private val rawWebhookPayloadResponse: String? = null,
+        private val rawIngressResponse: String? = null,
     ) : NativeCoreJniBridge {
         var lastDecryptRequest: ByteArray? = null
             private set
@@ -658,6 +896,8 @@ class NativeCoreRuntimeTest {
             private set
         var lastWebhookPayloadRequest: ByteArray? = null
             private set
+        var lastIngressRequest: ByteArray? = null
+            private set
         var decryptCalls = 0
             private set
         var routingCalls = 0
@@ -665,6 +905,8 @@ class NativeCoreRuntimeTest {
         var parserCalls = 0
             private set
         var webhookPayloadCalls = 0
+            private set
+        var ingressCalls = 0
             private set
 
         override fun nativeSelfTest(): String = selfTestResult
@@ -700,6 +942,15 @@ class NativeCoreRuntimeTest {
             return (
                 rawWebhookPayloadResponse
                     ?: """{"items":[{"ok":true,"payloadJson":"{\"route\":\"native\"}"}]}"""
+            ).encodeToByteArray()
+        }
+
+        override fun ingressBatch(requestJsonBytes: ByteArray): ByteArray {
+            ingressCalls += 1
+            lastIngressRequest = requestJsonBytes
+            return (
+                rawIngressResponse
+                    ?: """{"items":[{"ok":true,"kind":"NONE","normalizedText":""}]}"""
             ).encodeToByteArray()
         }
 

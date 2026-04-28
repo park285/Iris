@@ -72,7 +72,7 @@ struct RoutingBatchResult {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum CommandKind {
+pub(crate) enum CommandKind {
     None,
     Comment,
     Webhook,
@@ -84,8 +84,18 @@ struct ParsedCommand {
     normalized_text: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct RoutingDecision {
+    pub(crate) kind: CommandKind,
+    pub(crate) normalized_text: String,
+    pub(crate) webhook_route: Option<String>,
+    pub(crate) event_route: Option<String>,
+    pub(crate) image_route: Option<String>,
+    pub(crate) target_route: Option<String>,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-struct RouteList {
+pub(crate) struct RouteList {
     entries: Vec<RouteEntry>,
 }
 
@@ -147,7 +157,7 @@ impl RouteList {
         Ok(RouteEntry { route, values })
     }
 
-    fn is_empty(&self) -> bool {
+    const fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
@@ -215,24 +225,21 @@ pub fn routing_batch_json(request_bytes: &[u8]) -> NativeCoreResult<Vec<u8>> {
                     .image_message_type_routes
                     .as_ref()
                     .unwrap_or(&image_routes);
-                let parsed_command = parse_command(&item.text);
-                let webhook_route = resolve_webhook_route(&parsed_command, item_command_routes);
-                let event_route = resolve_event_route(item.message_type.as_deref());
-                let image_route =
-                    resolve_image_route(item.message_type.as_deref(), item_image_routes);
-                let target_route = webhook_route
-                    .clone()
-                    .or_else(|| event_route.clone())
-                    .or_else(|| image_route.clone());
+                let decision = route_command(
+                    &item.text,
+                    item.message_type.as_deref(),
+                    item_command_routes,
+                    item_image_routes,
+                );
 
                 RoutingBatchResult {
                     ok: true,
-                    kind: parsed_command.kind,
-                    normalized_text: parsed_command.normalized_text,
-                    webhook_route,
-                    event_route,
-                    image_route,
-                    target_route,
+                    kind: decision.kind,
+                    normalized_text: decision.normalized_text,
+                    webhook_route: decision.webhook_route,
+                    event_route: decision.event_route,
+                    image_route: decision.image_route,
+                    target_route: decision.target_route,
                     error: None,
                 }
             })
@@ -240,6 +247,31 @@ pub fn routing_batch_json(request_bytes: &[u8]) -> NativeCoreResult<Vec<u8>> {
     };
     serde_json::to_vec(&response)
         .map_err(|error| NativeCoreError::InvalidResponse(error.to_string()))
+}
+
+pub(crate) fn route_command(
+    text: &str,
+    message_type: Option<&str>,
+    command_route_prefixes: &RouteList,
+    image_message_type_routes: &RouteList,
+) -> RoutingDecision {
+    let parsed_command = parse_command(text);
+    let webhook_route = resolve_webhook_route(&parsed_command, command_route_prefixes);
+    let event_route = resolve_event_route(message_type);
+    let image_route = resolve_image_route(message_type, image_message_type_routes);
+    let target_route = webhook_route
+        .clone()
+        .or_else(|| event_route.clone())
+        .or_else(|| image_route.clone());
+
+    RoutingDecision {
+        kind: parsed_command.kind,
+        normalized_text: parsed_command.normalized_text,
+        webhook_route,
+        event_route,
+        image_route,
+        target_route,
+    }
 }
 
 fn parse_command(message: &str) -> ParsedCommand {

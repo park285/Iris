@@ -26,6 +26,7 @@ import party.qwer.iris.delivery.webhook.RoutingCommand
 import party.qwer.iris.delivery.webhook.RoutingGateway
 import party.qwer.iris.delivery.webhook.RoutingResult
 import party.qwer.iris.isOwnBotMessage
+import party.qwer.iris.nativecore.NativeCoreHolder
 import party.qwer.iris.persistence.CheckpointJournal
 import party.qwer.iris.persistence.MemberIdentityStateStore
 import party.qwer.iris.resolveObservedThreadMetadata
@@ -52,6 +53,38 @@ internal class CommandIngressService(
     private data class NicknameRecheckKey(
         val chatId: Long,
         val userId: Long,
+    )
+
+    private data class BufferedDispatchCandidate(
+        val logEntry: KakaoDB.ChatLogEntry,
+        val decryptedMessage: String?,
+        val decryptedAttachment: String?,
+        val parseMessage: String?,
+    )
+
+    private sealed class PreparedDispatch {
+        abstract val dispatch: ChatLogDispatch
+        abstract val observation: PreparedObservation?
+        abstract val observeLogEntry: Boolean
+
+        data class Completed(
+            override val dispatch: ChatLogDispatch,
+            override val observation: PreparedObservation? = null,
+            override val observeLogEntry: Boolean = observation != null,
+        ) : PreparedDispatch()
+
+        data class Routeable(
+            override val dispatch: ChatLogDispatch,
+            override val observation: PreparedObservation,
+            override val observeLogEntry: Boolean = true,
+            val parsedCommand: ParsedCommand,
+            val routingCommand: RoutingCommand,
+        ) : PreparedDispatch()
+    }
+
+    private data class PreparedObservation(
+        val origin: String,
+        val parsedCommand: ParsedCommand,
     )
 
     private val dispatchScopeJob = SupervisorJob()
@@ -188,15 +221,40 @@ internal class CommandIngressService(
 
     private fun bufferPolledLogs(newLogs: List<KakaoDB.ChatLogEntry>) {
         val decryptedFields = decryptPolledLogFields(newLogs)
-        for (logEntry in newLogs) {
+        val candidates =
+            newLogs.map { logEntry ->
+                val fields = decryptedFields[logEntry.id].orEmpty()
+                val decryptedMessage = fields["message"]
+                BufferedDispatchCandidate(
+                    logEntry = logEntry,
+                    decryptedMessage = decryptedMessage,
+                    decryptedAttachment = fields["attachment"],
+                    parseMessage =
+                        when {
+                            decryptedMessage != null -> decryptedMessage
+                            shouldDecryptValue(logEntry.message) -> null
+                            else -> logEntry.message
+                        },
+                )
+            }
+        val parsedCommands = parseBufferedCommands(candidates.mapNotNull { it.parseMessage })
+        var parsedCommandIndex = 0
+        for (candidate in candidates) {
+            val logEntry = candidate.logEntry
             onMarkDirty(logEntry.chatId)
-            val fields = decryptedFields[logEntry.id].orEmpty()
+            val parsedCommand =
+                if (candidate.parseMessage != null) {
+                    parsedCommands.getOrNull(parsedCommandIndex++)
+                } else {
+                    null
+                }
             if (
                 !bufferDispatch(
                     ChatLogDispatch(
                         logEntry = logEntry,
-                        decryptedMessage = fields["message"],
-                        decryptedAttachment = fields["attachment"],
+                        decryptedMessage = candidate.decryptedMessage,
+                        decryptedAttachment = candidate.decryptedAttachment,
+                        parsedCommand = parsedCommand,
                     ),
                 )
             ) {
@@ -204,6 +262,11 @@ internal class CommandIngressService(
             }
         }
     }
+
+    private fun parseBufferedCommands(messages: List<String>): List<ParsedCommand> =
+        NativeCoreHolder.current().parseCommandBatchOrFallback(messages) {
+            messages.map { message -> CommandParser.parseKotlin(message) }
+        }
 
     private fun decryptPolledLogFields(newLogs: List<KakaoDB.ChatLogEntry>): Map<Long, Map<String, String>> {
         val candidates = mutableListOf<Triple<Long, String, KakaoDecryptBatchItem>>()
@@ -278,13 +341,16 @@ internal class CommandIngressService(
 
     private fun drainDispatchQueue(partitionIndex: Int) {
         while (true) {
-            val dispatch = backlog.takeNext(partitionIndex) ?: return
-            val outcome = processLogEntry(dispatch)
+            val dispatches = backlog.takeBatch(partitionIndex)
+            if (dispatches.isEmpty()) {
+                return
+            }
+            val outcomes = processLogEntries(dispatches)
             val continuation =
-                backlog.complete(
+                backlog.completeBatch(
                     partitionIndex = partitionIndex,
-                    dispatch = dispatch,
-                    outcome = outcome,
+                    dispatches = dispatches,
+                    outcomes = outcomes,
                     onAdvanceCommittedLogId = ::advanceCommittedLogId,
                 )
             signalDispatches(continuation.signalPartitions)
@@ -294,28 +360,71 @@ internal class CommandIngressService(
         }
     }
 
-    private fun processLogEntry(dispatch: ChatLogDispatch): DispatchOutcome {
-        val logEntry = dispatch.logEntry
-        observeNicknameChange(logEntry)
-        val metadata = parseMetadata(logEntry) ?: return DispatchOutcome.COMPLETED
-        val decryptedMessage = dispatch.decryptedMessage ?: decryptMessage(logEntry.message, metadata.enc, logEntry.userId)
-        val parsedCommand = CommandParser.parse(decryptedMessage)
+    private fun processLogEntries(dispatches: List<ChatLogDispatch>): List<DispatchOutcome> {
+        val batchCommandFingerprints = linkedSetOf<CommandFingerprint>()
+        val preparedDispatches = dispatches.map { dispatch -> prepareLogEntry(dispatch, batchCommandFingerprints) }
+        val routeableDispatches = preparedDispatches.filterIsInstance<PreparedDispatch.Routeable>()
+        val routeResults =
+            if (routeableDispatches.isEmpty()) {
+                emptyList()
+            } else {
+                routingGateway.routeBatch(routeableDispatches.map { it.routingCommand })
+            }
 
-        logObservedEntry(logEntry, metadata.origin, parsedCommand)
-        tryTimestampCorrelation(logEntry)
+        val outcomes = mutableListOf<DispatchOutcome>()
+        var routeResultIndex = 0
+        for (prepared in preparedDispatches) {
+            when (prepared) {
+                is PreparedDispatch.Completed -> {
+                    completePreparedObservation(prepared)
+                    outcomes += DispatchOutcome.COMPLETED
+                }
+
+                is PreparedDispatch.Routeable -> {
+                    val routeResult = routeResults.getOrNull(routeResultIndex) ?: RoutingResult.RETRY_LATER
+                    routeResultIndex += 1
+                    val outcome = completeRouteResult(prepared, routeResult)
+                    outcomes += outcome
+                    if (outcome == DispatchOutcome.RETRY_LATER) {
+                        break
+                    }
+                }
+            }
+        }
+        return outcomes
+    }
+
+    private fun processLogEntry(dispatch: ChatLogDispatch): DispatchOutcome = processLogEntries(listOf(dispatch)).singleOrNull() ?: DispatchOutcome.RETRY_LATER
+
+    private fun prepareLogEntry(
+        dispatch: ChatLogDispatch,
+        batchCommandFingerprints: MutableSet<CommandFingerprint>,
+    ): PreparedDispatch {
+        val logEntry = dispatch.logEntry
+        val metadata = parseMetadata(logEntry) ?: return PreparedDispatch.Completed(dispatch, observeLogEntry = true)
+        val decryptedMessage = dispatch.decryptedMessage ?: decryptMessage(logEntry.message, metadata.enc, logEntry.userId)
+        val parsedCommand = dispatch.parsedCommand ?: CommandParser.parse(decryptedMessage)
+        val observation = PreparedObservation(origin = metadata.origin, parsedCommand = parsedCommand)
+
         if (shouldSkipOrigin(metadata.origin, parsedCommand)) {
             IrisLogger.debug(
                 "[CommandIngressService] Skipping origin=${metadata.origin} for logId=${logEntry.id}, " +
                     "chatId=${logEntry.chatId}, userId=${logEntry.userId}",
             )
-            return DispatchOutcome.COMPLETED
+            return PreparedDispatch.Completed(dispatch, observation)
         }
 
-        if (!shouldRouteCommand(logEntry, parsedCommand, metadata.origin)) {
-            return DispatchOutcome.COMPLETED
+        if (!shouldRouteCommand(logEntry, parsedCommand, metadata.origin, batchCommandFingerprints)) {
+            return PreparedDispatch.Completed(dispatch, observation)
         }
+        batchCommandFingerprints += commandFingerprint(logEntry, parsedCommand.normalizedText)
 
-        return routeCommand(dispatch, parsedCommand, metadata.enc)
+        return PreparedDispatch.Routeable(
+            dispatch = dispatch,
+            observation = observation,
+            parsedCommand = parsedCommand,
+            routingCommand = buildRoutingCommand(dispatch, parsedCommand, metadata.enc),
+        )
     }
 
     private fun observeNicknameChange(logEntry: KakaoDB.ChatLogEntry) {
@@ -507,6 +616,7 @@ internal class CommandIngressService(
         logEntry: KakaoDB.ChatLogEntry,
         parsedCommand: ParsedCommand,
         origin: String,
+        batchCommandFingerprints: Set<CommandFingerprint> = emptySet(),
     ): Boolean {
         val isImageMessage = logEntry.messageType?.trim() == IMAGE_MESSAGE_TYPE
         if (parsedCommand.kind != CommandKind.WEBHOOK && !isImageMessage) {
@@ -520,7 +630,8 @@ internal class CommandIngressService(
             return false
         }
 
-        if (isDuplicateCommand(logEntry, parsedCommand.normalizedText)) {
+        val fingerprint = commandFingerprint(logEntry, parsedCommand.normalizedText)
+        if (isDuplicateCommand(fingerprint) || batchCommandFingerprints.contains(fingerprint)) {
             IrisLogger.debug(
                 "[CommandIngressService] Skipping duplicate command logId=${logEntry.id}, " +
                     "chatId=${logEntry.chatId}, origin=$origin",
@@ -531,11 +642,11 @@ internal class CommandIngressService(
         return true
     }
 
-    private fun routeCommand(
+    private fun buildRoutingCommand(
         dispatch: ChatLogDispatch,
         parsedCommand: ParsedCommand,
         enc: Int,
-    ): DispatchOutcome {
+    ): RoutingCommand {
         val logEntry = dispatch.logEntry
         val threadMetadata = resolveObservedThreadMetadata(logEntry, enc)
         val roomMetadata = roomMetadataResolver.resolve(logEntry.chatId)
@@ -567,12 +678,20 @@ internal class CommandIngressService(
                         ?: logEntry.attachment?.takeIf { it.isNotBlank() }?.let { decryptMessage(it, enc, logEntry.userId) },
                 senderRole = senderRole,
             )
+        return routingCommand
+    }
 
-        return when (routingGateway.route(routingCommand)) {
+    private fun completeRouteResult(
+        prepared: PreparedDispatch.Routeable,
+        result: RoutingResult,
+    ): DispatchOutcome {
+        val logEntry = prepared.dispatch.logEntry
+        return when (result) {
             RoutingResult.ACCEPTED,
             RoutingResult.SKIPPED,
             -> {
-                rememberCommandFingerprint(logEntry, parsedCommand.normalizedText)
+                completePreparedObservation(prepared)
+                rememberCommandFingerprint(logEntry, prepared.parsedCommand.normalizedText)
                 DispatchOutcome.COMPLETED
             }
 
@@ -586,12 +705,24 @@ internal class CommandIngressService(
         }
     }
 
+    private fun completePreparedObservation(prepared: PreparedDispatch) {
+        val logEntry = prepared.dispatch.logEntry
+        if (prepared.observeLogEntry) {
+            observeNicknameChange(logEntry)
+        }
+        val observation = prepared.observation ?: return
+        logObservedEntry(logEntry, observation.origin, observation.parsedCommand)
+        tryTimestampCorrelation(logEntry)
+    }
+
     private fun isDuplicateCommand(
         logEntry: KakaoDB.ChatLogEntry,
         decryptedMessage: String,
-    ): Boolean =
+    ): Boolean = isDuplicateCommand(commandFingerprint(logEntry, decryptedMessage))
+
+    private fun isDuplicateCommand(fingerprint: CommandFingerprint): Boolean =
         synchronized(recentCommandFingerprints) {
-            recentCommandFingerprints.containsKey(commandFingerprint(logEntry, decryptedMessage))
+            recentCommandFingerprints.containsKey(fingerprint)
         }
 
     private fun rememberCommandFingerprint(

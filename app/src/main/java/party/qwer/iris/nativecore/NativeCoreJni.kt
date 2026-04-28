@@ -10,6 +10,8 @@ internal interface NativeCoreJniBridge {
     fun parserBatch(requestJsonBytes: ByteArray): ByteArray = error("native parsers unsupported")
 
     fun webhookPayloadBatch(requestJsonBytes: ByteArray): ByteArray = error("native webhook payload unsupported")
+
+    fun ingressBatch(requestJsonBytes: ByteArray): ByteArray = error("native ingress unsupported")
 }
 
 internal object NativeCoreJni : NativeCoreJniBridge {
@@ -22,4 +24,6 @@ internal object NativeCoreJni : NativeCoreJniBridge {
     external override fun parserBatch(requestJsonBytes: ByteArray): ByteArray
 
     external override fun webhookPayloadBatch(requestJsonBytes: ByteArray): ByteArray
+
+    external override fun ingressBatch(requestJsonBytes: ByteArray): ByteArray
 }

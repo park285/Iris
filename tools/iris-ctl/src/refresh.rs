@@ -80,12 +80,11 @@ pub(crate) fn event_history_target_chat_id(rooms_view: &views::rooms::RoomsView)
 }
 
 pub(crate) async fn apply_pending_thread_fetch(iris: &api::TuiApi, app: &mut app::App) {
-    if let Some(chat_id) = app.pending_thread_fetch.take() {
-        if let Ok(thread_list) = iris.list_threads(chat_id).await {
-            if let Some(modal) = &mut app.reply_modal {
-                modal.set_thread_suggestions(thread_list.threads);
-            }
-        }
+    if let Some(chat_id) = app.pending_thread_fetch.take()
+        && let Ok(thread_list) = iris.list_threads(chat_id).await
+        && let Some(modal) = &mut app.reply_modal
+    {
+        modal.set_thread_suggestions(thread_list.threads);
     }
 }
 

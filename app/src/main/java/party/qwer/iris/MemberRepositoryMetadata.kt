@@ -30,6 +30,8 @@ internal class MemberRepositoryMetadata(
 
     fun parseRoomTitle(meta: String?): String? = roomMetaParser.parseRoomTitle(meta)
 
+    fun parseRoomTitles(metas: List<String?>): List<String?> = roomMetaParser.parseRoomTitles(metas)
+
     fun parseNotices(meta: String?): List<NoticeInfo> = roomMetaParser.parseNotices(meta)
 
     fun resolveNonOpenRoomName(
@@ -37,5 +39,6 @@ internal class MemberRepositoryMetadata(
         roomType: String?,
         meta: String?,
         members: String?,
-    ): String? = nonOpenRoomNameResolver.resolve(chatId, roomType, meta, members)
+        parsedRoomTitle: String? = null,
+    ): String? = nonOpenRoomNameResolver.resolve(chatId, roomType, meta, members, parsedRoomTitle)
 }

@@ -196,7 +196,7 @@ class CommandIngressServiceTest {
             val jni = FakeNativeCoreJni(listOf("!first", "not command", "plain-attachment"))
             val runtime =
                 NativeCoreRuntime.create(
-                    env = mapOf("IRIS_NATIVE_CORE" to "on"),
+                    env = mapOf("IRIS_NATIVE_CORE" to "on", "IRIS_NATIVE_ROUTING" to "on"),
                     loader = {},
                     jni = jni,
                 )
@@ -235,6 +235,8 @@ class CommandIngressServiceTest {
 
                 assertEquals(1, jni.decryptCalls)
                 assertEquals(3, jni.lastDecryptItemCount)
+                assertEquals(1, jni.routingCalls)
+                assertEquals(2, jni.lastRoutingItemCount)
                 assertEquals(listOf("!first", "not command"), gateway.commands.map { it.text })
                 assertEquals("plain-attachment", gateway.commands[1].attachment)
                 val decryptStats =
@@ -766,6 +768,99 @@ class CommandIngressServiceTest {
         }
 
     @Test
+    fun `dispatch partition routes pending commands through one routeBatch call`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val gateway = FakeRoutingGateway(result = RoutingResult.ACCEPTED)
+            val ingress =
+                CommandIngressService(
+                    db =
+                        FakeChatLogRepository(
+                            latestLogId = 10L,
+                            polledLogs =
+                                listOf(
+                                    webhookChatLogEntry(id = 11L, chatId = 100L, message = "!first"),
+                                    webhookChatLogEntry(id = 12L, chatId = 100L, message = "!second"),
+                                ),
+                        ),
+                    config = config,
+                    checkpointJournal = FakeCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
+                    routingGateway = gateway,
+                    dispatchDispatcher = dispatcher,
+                    partitioningPolicy = IngressPartitioningPolicy(partitionCount = 1, partitionQueueCapacity = 8),
+                    onMarkDirty = {},
+                )
+
+            ingress.checkChange()
+            ingress.checkChange()
+            runCurrent()
+
+            assertEquals(1, gateway.routeBatchCalls)
+            assertEquals(listOf(11L, 12L), gateway.commandBatches.single().map { it.sourceLogId })
+            assertEquals(listOf(11L, 12L), gateway.commands.map { it.sourceLogId })
+            assertEquals(12L, ingress.lastObservedLogId())
+            ingress.closeSuspend()
+        }
+
+    @Test
+    fun `routeBatch retry leaves tail pending for the next drain`() =
+        runTest {
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val gateway =
+                FakeRoutingGateway().apply {
+                    batchResults = listOf(RoutingResult.ACCEPTED, RoutingResult.RETRY_LATER)
+                }
+            val ingress =
+                CommandIngressService(
+                    db =
+                        FakeChatLogRepository(
+                            latestLogId = 10L,
+                            polledLogs =
+                                listOf(
+                                    webhookChatLogEntry(id = 11L, chatId = 100L, message = "!first"),
+                                    webhookChatLogEntry(id = 12L, chatId = 100L, message = "!retry"),
+                                    webhookChatLogEntry(id = 13L, chatId = 100L, message = "!tail"),
+                                ),
+                        ),
+                    config = config,
+                    checkpointJournal = FakeCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
+                    routingGateway = gateway,
+                    dispatchDispatcher = dispatcher,
+                    partitioningPolicy = IngressPartitioningPolicy(partitionCount = 1, partitionQueueCapacity = 8),
+                    onMarkDirty = {},
+                )
+
+            ingress.checkChange()
+            ingress.checkChange()
+            runCurrent()
+
+            assertEquals(1, gateway.routeBatchCalls)
+            assertEquals(listOf(11L, 12L, 13L), gateway.commandBatches.single().map { it.sourceLogId })
+            assertEquals(listOf(11L, 12L), gateway.commands.map { it.sourceLogId })
+            assertEquals(
+                IngressProgressSnapshot(
+                    lastPolledLogId = 13L,
+                    lastBufferedLogId = 13L,
+                    lastCommittedLogId = 11L,
+                    bufferedCount = 2,
+                    blockedPartitionCount = 1,
+                    activeDispatchCount = 0,
+                    pendingByPartition = listOf(1),
+                    blockedLogIds = listOf(12L),
+                ),
+                ingress.progressSnapshot(),
+            )
+
+            gateway.batchResults = listOf(RoutingResult.ACCEPTED)
+            ingress.checkChange()
+            runCurrent()
+
+            assertEquals(listOf(11L, 12L, 12L, 13L), gateway.commands.map { it.sourceLogId })
+            assertEquals(13L, ingress.lastObservedLogId())
+            ingress.closeSuspend()
+        }
+
+    @Test
     fun `partitioned dispatch keeps polling lane non blocking while a route is busy`() =
         runTest {
             val db =
@@ -1172,13 +1267,41 @@ private class FakeCheckpointJournal(
 }
 
 private class FakeRoutingGateway(
-    private val result: RoutingResult = RoutingResult.ACCEPTED,
+    var result: RoutingResult = RoutingResult.ACCEPTED,
 ) : RoutingGateway {
     val commands = mutableListOf<RoutingCommand>()
+    val commandBatches = mutableListOf<List<RoutingCommand>>()
+    var routeBatchCalls = 0
+    var batchResults: List<RoutingResult>? = null
 
     override fun route(command: RoutingCommand): RoutingResult {
         commands += command
         return result
+    }
+
+    override fun routeBatch(commands: List<RoutingCommand>): List<RoutingResult> {
+        routeBatchCalls += 1
+        commandBatches += commands
+        val configuredResults = batchResults
+        if (configuredResults != null) {
+            val results = configuredResults.take(commands.size)
+            commands.take(results.size).forEachIndexed { index, command ->
+                this.commands += command
+                if (results[index] == RoutingResult.RETRY_LATER) {
+                    return results.take(index + 1)
+                }
+            }
+            return results
+        }
+        val results = mutableListOf<RoutingResult>()
+        for (command in commands) {
+            val routed = route(command)
+            results += routed
+            if (routed == RoutingResult.RETRY_LATER) {
+                break
+            }
+        }
+        return results
     }
 
     override fun close() {}
@@ -1190,6 +1313,10 @@ private class FakeNativeCoreJni(
     var decryptCalls = 0
         private set
     var lastDecryptItemCount = 0
+        private set
+    var routingCalls = 0
+        private set
+    var lastRoutingItemCount = 0
         private set
 
     override fun nativeSelfTest(): String = "iris-native-core:test"
@@ -1203,7 +1330,29 @@ private class FakeNativeCoreJni(
             }
         return """{"items":[$items]}""".encodeToByteArray()
     }
+
+    override fun routingBatch(requestJsonBytes: ByteArray): ByteArray {
+        routingCalls++
+        val messages = Regex(""""text":"(.*?)"""").findAll(requestJsonBytes.decodeToString()).map { it.groupValues[1] }.toList()
+        lastRoutingItemCount = messages.size
+        val items =
+            messages.joinToString(separator = ",") { rawMessage ->
+                val message = rawMessage.replace("\\\"", "\"")
+                val kind =
+                    when {
+                        message.startsWith("//") -> "COMMENT"
+                        message.startsWith("!") || message.startsWith("/") -> "WEBHOOK"
+                        else -> "NONE"
+                    }
+                """{"ok":true,"kind":"$kind","normalizedText":"${message.jsonEscaped()}"}"""
+            }
+        return """{"items":[$items]}""".encodeToByteArray()
+    }
 }
+
+private fun String.jsonEscaped(): String =
+    replace("\\", "\\\\")
+        .replace("\"", "\\\"")
 
 private fun webhookChatLogEntry(
     id: Long,

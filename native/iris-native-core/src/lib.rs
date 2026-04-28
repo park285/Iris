@@ -1,6 +1,7 @@
 pub mod decrypt;
 pub mod errors;
 pub mod ffi;
+pub mod ingress;
 pub mod parsers;
 pub mod routing;
 pub mod webhook;

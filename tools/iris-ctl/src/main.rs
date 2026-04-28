@@ -68,10 +68,10 @@ async fn main() -> Result<()> {
                 handle_sse_event(&mut app, &mut sse_closed, sse);
             }
             reply_result = reply_rx.recv() => {
-                if let Some(result) = reply_result {
-                    if let Some(modal) = &mut app.reply_modal {
-                        modal.set_result(result);
-                    }
+                if let Some(result) = reply_result
+                    && let Some(modal) = &mut app.reply_modal
+                {
+                    modal.set_result(result);
                 }
             }
             _ = poll_tick.tick() => {

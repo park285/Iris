@@ -35,7 +35,7 @@ pub async fn send_transition_alert(cfg: &DaemonConfig, transition: &Transition) 
     send_alert_request(&client, &cfg.alert.webhook_url, transition, &payload).await;
 }
 
-fn should_send_alert(cfg: &DaemonConfig) -> bool {
+const fn should_send_alert(cfg: &DaemonConfig) -> bool {
     cfg.alert.enabled && !cfg.alert.webhook_url.is_empty()
 }
 

@@ -28,7 +28,7 @@ internal fun resolveWebhookRoute(
         resolveWebhookRouteKotlin(parsedCommand, config)
     }
 
-private fun resolveWebhookRouteKotlin(
+internal fun resolveWebhookRouteKotlin(
     parsedCommand: ParsedCommand,
     config: party.qwer.iris.ConfigProvider?,
 ): String? {
@@ -56,7 +56,7 @@ internal fun resolveEventRoute(messageType: String?): String? =
         resolveEventRouteKotlin(messageType)
     }
 
-private fun resolveEventRouteKotlin(messageType: String?): String? {
+internal fun resolveEventRouteKotlin(messageType: String?): String? {
     val normalizedType = messageType?.trim().orEmpty()
     if (normalizedType.isEmpty()) return null
 
@@ -80,7 +80,7 @@ internal fun resolveImageRoute(
         resolveImageRouteKotlin(messageType, config)
     }
 
-private fun resolveImageRouteKotlin(
+internal fun resolveImageRouteKotlin(
     messageType: String?,
     config: party.qwer.iris.ConfigProvider?,
 ): String? {

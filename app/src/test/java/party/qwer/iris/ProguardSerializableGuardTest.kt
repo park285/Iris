@@ -51,6 +51,7 @@ class ProguardSerializableGuardTest {
                 "NativeCoreConfigModels.kt",
                 "NativeCoreDiagnostics.kt",
                 "NativeDecryptModels.kt",
+                "NativeIngressModels.kt",
                 "NativeParserModels.kt",
                 "NativeRoutingModels.kt",
                 "NativeWebhookModels.kt",

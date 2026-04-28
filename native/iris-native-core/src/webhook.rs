@@ -55,7 +55,7 @@ pub fn webhook_payload_batch_json(request_bytes: &[u8]) -> NativeCoreResult<Vec<
         .map_err(|error| NativeCoreError::InvalidResponse(error.to_string()))
 }
 
-fn build_webhook_payload(
+pub(crate) fn build_webhook_payload(
     command: &Value,
     route: &str,
     message_id: &str,
@@ -114,10 +114,10 @@ fn insert_optional_string(
     source_key: &str,
     target_key: &str,
 ) -> NativeCoreResult<()> {
-    if let Some(value) = optional_string(source, source_key)? {
-        if !value.trim().is_empty() {
-            target.insert(target_key.to_owned(), Value::String(value.to_owned()));
-        }
+    if let Some(value) = optional_string(source, source_key)?
+        && !value.trim().is_empty()
+    {
+        target.insert(target_key.to_owned(), Value::String(value.to_owned()));
     }
     Ok(())
 }

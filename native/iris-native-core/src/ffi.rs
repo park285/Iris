@@ -61,6 +61,16 @@ pub extern "system" fn Java_party_qwer_iris_nativecore_NativeCoreJni_webhookPayl
     json_batch_response(&env, &request, crate::webhook::webhook_payload_batch_json)
 }
 
+#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_party_qwer_iris_nativecore_NativeCoreJni_ingressBatch(
+    env: JNIEnv<'_>,
+    _receiver: JObject<'_>,
+    request: JByteArray<'_>,
+) -> jbyteArray {
+    json_batch_response(&env, &request, crate::ingress::ingress_batch_json)
+}
+
 fn json_batch_response(
     env: &JNIEnv<'_>,
     request: &JByteArray<'_>,

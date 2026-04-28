@@ -128,7 +128,7 @@ fn probe_state(report: &health::HealthReport) -> ProbeState {
 
 async fn maybe_sync_config(cfg: &DaemonConfig, adb: &Adb, sm: &StateMachine, cycle_count: u32) {
     let should_sync = cfg.watch.config_check_every > 0
-        && cycle_count % cfg.watch.config_check_every == 0
+        && cycle_count.is_multiple_of(cfg.watch.config_check_every)
         && sm.state == State::Healthy;
     if should_sync && let Err(error) = config_sync::check_and_sync(adb, cfg).await {
         tracing::warn!(error = %error, "config drift check 실패");

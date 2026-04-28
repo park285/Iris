@@ -19,20 +19,6 @@ import okhttp3.Dispatcher
 import party.qwer.iris.CommandParser
 import party.qwer.iris.ConfigProvider
 import party.qwer.iris.IrisLogger
-import party.qwer.iris.delivery.webhook.DeliveryRetrySchedule
-import party.qwer.iris.delivery.webhook.RoutingCommand
-import party.qwer.iris.delivery.webhook.RoutingResult
-import party.qwer.iris.delivery.webhook.WebhookDelivery
-import party.qwer.iris.delivery.webhook.WebhookDeliveryClient
-import party.qwer.iris.delivery.webhook.WebhookHttpClientFactory
-import party.qwer.iris.delivery.webhook.WebhookRequestFactory
-import party.qwer.iris.delivery.webhook.WebhookTransport
-import party.qwer.iris.delivery.webhook.buildWebhookPayload
-import party.qwer.iris.delivery.webhook.nextBackoffDelayMs
-import party.qwer.iris.delivery.webhook.nextDeliveryRetrySchedule
-import party.qwer.iris.delivery.webhook.resolveImageRoute
-import party.qwer.iris.delivery.webhook.resolveWebhookRoute
-import party.qwer.iris.delivery.webhook.resolveWebhookTransport
 import java.io.Closeable
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -137,6 +123,38 @@ class H2cDispatcher internal constructor(
         }
 
         return RoutingResult.ACCEPTED
+    }
+
+    fun routeBatch(commands: List<RoutingCommand>): List<RoutingResult> {
+        if (commands.isEmpty()) return emptyList()
+        if (!started) {
+            return listOf(RoutingResult.RETRY_LATER)
+        }
+
+        val resolvedDeliveries = resolveWebhookDeliveryPlansBatch(commands, config)
+        val results = mutableListOf<RoutingResult>()
+        for (resolved in resolvedDeliveries) {
+            if (resolved == null) {
+                results += RoutingResult.SKIPPED
+                continue
+            }
+            val webhookUrl = config.webhookEndpointFor(resolved.route).takeIf { it.isNotBlank() }
+            if (webhookUrl.isNullOrBlank()) {
+                IrisLogger.error("[H2cDispatcher] No webhook URL configured for route: ${resolved.route}")
+                results += RoutingResult.SKIPPED
+                continue
+            }
+            val delivery = buildQueuedDelivery(resolved, webhookUrl)
+            if (!registerDelivery(delivery)) {
+                IrisLogger.error(
+                    "[H2cDispatcher] Failed to enqueue delivery: route=${resolved.route}, messageId=${resolved.messageId}",
+                )
+                results += RoutingResult.RETRY_LATER
+                break
+            }
+            results += RoutingResult.ACCEPTED
+        }
+        return results
     }
 
     override fun close() {
@@ -371,6 +389,18 @@ class H2cDispatcher internal constructor(
             attempt = 0,
         )
     }
+
+    private fun buildQueuedDelivery(
+        delivery: ResolvedWebhookDelivery,
+        webhookUrl: String,
+    ): QueuedDelivery =
+        QueuedDelivery(
+            url = webhookUrl,
+            messageId = delivery.messageId,
+            route = delivery.route,
+            payloadJson = delivery.payloadJson,
+            attempt = 0,
+        )
 
     private enum class DeliveryOutcome {
         SUCCESS,

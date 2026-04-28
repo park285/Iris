@@ -19,7 +19,7 @@ object CommandParser {
             parseKotlin(message)
         }
 
-    private fun parseKotlin(message: String): ParsedCommand {
+    internal fun parseKotlin(message: String): ParsedCommand {
         val normalizedText = message.trimStart()
         val kind =
             when {

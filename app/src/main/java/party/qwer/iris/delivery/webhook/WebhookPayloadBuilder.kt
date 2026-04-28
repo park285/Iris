@@ -13,7 +13,7 @@ internal fun buildWebhookPayload(
         buildWebhookPayloadKotlin(command, route, messageId)
     }
 
-private fun buildWebhookPayloadKotlin(
+internal fun buildWebhookPayloadKotlin(
     command: RoutingCommand,
     route: String,
     messageId: String,

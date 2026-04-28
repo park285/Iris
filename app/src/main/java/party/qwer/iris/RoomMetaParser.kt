@@ -18,6 +18,11 @@ internal class RoomMetaParser(
             parseRoomTitleKotlin(meta)
         }
 
+    fun parseRoomTitles(metas: List<String?>): List<String?> =
+        NativeCoreHolder.current().parseRoomTitlesOrFallback(metas) {
+            metas.map { meta -> parseRoomTitleKotlin(meta) }
+        }
+
     private fun parseRoomTitleKotlin(meta: String?): String? {
         if (meta.isNullOrBlank()) return null
         return try {

@@ -195,12 +195,9 @@ fn try_parse_room_title(meta: &str) -> Result<Option<String>, ()> {
             None => None,
         };
 
-        if type_value == Some(3) {
-            if let Some(content) = content {
-                if !content.is_empty() {
-                    return Ok(Some(content));
-                }
-            }
+        match (type_value, content) {
+            (Some(3), Some(content)) if !content.is_empty() => return Ok(Some(content)),
+            _ => {}
         }
     }
 

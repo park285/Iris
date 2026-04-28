@@ -21,8 +21,9 @@ internal class NonOpenRoomNameResolver(
         roomType: String?,
         meta: String?,
         members: String?,
+        parsedRoomTitle: String? = null,
     ): String? {
-        val titleFromMeta = roomMetaParser.parseRoomTitle(meta)
+        val titleFromMeta = parsedRoomTitle ?: roomMetaParser.parseRoomTitle(meta)
         if (!titleFromMeta.isNullOrBlank()) {
             return titleFromMeta
         }
