@@ -375,6 +375,7 @@ private data class AppRuntimeStartupAssembly(
                     cancelSnapshotScope = snapshotScope::cancel,
                     shutdownReplyService = { runBlocking { replyService.shutdownSuspend() } },
                     stopBridgeHealthCache = bridgeHealthCache::stop,
+                    resetNativeCore = { NativeCoreHolder.resetForTest() },
                     persistConfig = {
                         if (!configManager.saveConfigNow()) {
                             IrisLogger.error("[AppRuntime] Failed to save config during shutdown")

@@ -138,6 +138,7 @@ class AppRuntimeWiringTest {
                         cancelSnapshotScope = { calls += "snapshotScope" },
                         shutdownReplyService = { calls += "replyService" },
                         stopBridgeHealthCache = { calls += "bridgeHealthCache" },
+                        resetNativeCore = { calls += "nativeCore" },
                         persistConfig = { calls += "persistConfig" },
                         flushCheckpointJournal = { calls += "flushCheckpoint" },
                         closeSnapshotStateStore = { calls += "closeSnapshotStateStore" },
@@ -154,6 +155,9 @@ class AppRuntimeWiringTest {
         assertTrue(calls.indexOf("closePersistenceDriver") < calls.indexOf("closeKakaoDb"))
         assertTrue(calls.indexOf("ingress") < calls.indexOf("sseEventBus"))
         assertNotNull(plan.firstOrNull { it.name == "flushCheckpointJournal" })
+        assertTrue(calls.indexOf("bridgeHealthCache") < calls.indexOf("nativeCore"))
+        assertTrue(calls.indexOf("nativeCore") < calls.indexOf("persistConfig"))
+        assertNotNull(plan.firstOrNull { it.name == "resetNativeCore" })
     }
 
     @Test

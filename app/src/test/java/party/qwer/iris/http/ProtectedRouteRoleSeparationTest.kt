@@ -4,6 +4,7 @@ import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -24,6 +25,7 @@ import party.qwer.iris.ReplyAdmissionResult
 import party.qwer.iris.model.ImageBridgeHealthResult
 import party.qwer.iris.model.ReplyLifecycleState
 import party.qwer.iris.model.ReplyStatusSnapshot
+import party.qwer.iris.nativecore.NativeCoreDiagnostics
 import party.qwer.iris.sha256Hex
 import party.qwer.iris.signIrisRequestWithBodyHash
 import party.qwer.iris.storage.KakaoDbSqlClient
@@ -35,6 +37,8 @@ import party.qwer.iris.storage.ThreadQueries
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class ProtectedRouteRoleSeparationTest {
     private val serverJson =
@@ -165,6 +169,15 @@ class ProtectedRouteRoleSeparationTest {
                                 restartCount = 0,
                             )
                         },
+                        nativeCoreDiagnosticsProvider = {
+                            NativeCoreDiagnostics(
+                                mode = "shadow",
+                                loaded = false,
+                                libraryPath = "/data/iris/lib/libiris_native_core.so",
+                                selfTestOk = false,
+                                lastError = "missing library",
+                            )
+                        },
                         chatRoomIntrospectProvider = { """{"chatId":$it}""" },
                         chatRoomOpenProvider = { ImageBridgeResult(success = true) },
                         memberNicknameDiagnosticsProvider = { chatId -> MemberNicknameDiagnostics(chatId = chatId) },
@@ -179,6 +192,22 @@ class ProtectedRouteRoleSeparationTest {
             val inboundResponse =
                 client.get("/diagnostics/bridge") {
                     applySignedHeaders(path = "/diagnostics/bridge", method = "GET", secret = roleSeparatedConfig.inboundSigningSecret)
+                }
+            val controlNativeResponse =
+                client.get("/diagnostics/native-core") {
+                    applySignedHeaders(
+                        path = "/diagnostics/native-core",
+                        method = "GET",
+                        secret = roleSeparatedConfig.botControlToken,
+                    )
+                }
+            val inboundNativeResponse =
+                client.get("/diagnostics/native-core") {
+                    applySignedHeaders(
+                        path = "/diagnostics/native-core",
+                        method = "GET",
+                        secret = roleSeparatedConfig.inboundSigningSecret,
+                    )
                 }
             val controlChatroomResponse =
                 client.get("/diagnostics/chatroom-fields/123") {
@@ -231,6 +260,15 @@ class ProtectedRouteRoleSeparationTest {
 
             assertEquals(HttpStatusCode.OK, controlResponse.status)
             assertEquals(HttpStatusCode.Unauthorized, inboundResponse.status)
+            assertEquals(HttpStatusCode.OK, controlNativeResponse.status)
+            assertEquals(HttpStatusCode.Unauthorized, inboundNativeResponse.status)
+            controlNativeResponse.bodyAsText().also { body ->
+                assertTrue(body.contains(""""mode":"shadow""""))
+                assertTrue(body.contains(""""loaded":false"""))
+                assertFalse(body.contains("token"))
+                assertFalse(body.contains("secret"))
+                assertFalse(body.contains("payload"))
+            }
             assertEquals(HttpStatusCode.OK, controlChatroomResponse.status)
             assertEquals(HttpStatusCode.Unauthorized, inboundChatroomResponse.status)
             assertEquals(HttpStatusCode.OK, controlMembersResponse.status)
