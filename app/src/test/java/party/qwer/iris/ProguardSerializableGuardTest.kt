@@ -4,11 +4,12 @@ import java.io.File
 import kotlin.test.Test
 import kotlin.test.fail
 
-// 이 테스트는 소스 트리를 스캔하여 model 패키지 밖의 serializable 사용을 차단합니다.
+// 이 테스트는 소스 트리를 스캔하여 R8 keep 규칙 밖의 serializable 사용을 차단합니다.
 class ProguardSerializableGuardTest {
     private val allowedPaths =
         setOf(
             "app/src/main/java/party/qwer/iris/model/",
+            "app/src/main/java/party/qwer/iris/nativecore/",
             "app/src/main/java/party/qwer/iris/util/",
         )
 
@@ -34,7 +35,7 @@ class ProguardSerializableGuardTest {
             fail(
                 "Found @Serializable outside allowed packages (proguard-rules.pro won't keep these):\n" +
                     violations.joinToString("\n") { "  - $it" } +
-                    "\n\nMove to party.qwer.iris.model or update proguard-rules.pro.",
+                    "\n\nMove to a package covered by proguard-rules.pro or update the keep rules.",
             )
         }
     }

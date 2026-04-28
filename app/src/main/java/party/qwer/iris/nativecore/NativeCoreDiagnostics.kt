@@ -15,7 +15,7 @@ internal data class NativeCoreDiagnostics(
     val lastError: String? = null,
 ) {
     fun readinessFailureReason(): String? =
-        when (mode) {
+        when (mode.trim().lowercase()) {
             "on" ->
                 when {
                     !loaded -> "native core not loaded"

@@ -10,7 +10,7 @@
 }
 
 # ── kotlinx.serialization ─────────────────────────────────────────────────
-# 운영 규칙: @Serializable DTO는 party.qwer.iris.model 패키지에만 둘 것.
+# 운영 규칙: @Serializable DTO는 아래 keep 범위에만 둘 것.
 # 이 범위 밖에 추가하면 R8이 serializer를 제거하여 release에서 크래시 발생.
 # ProguardSerializableGuardTest가 이를 검증함.
 -keepattributes *Annotation*, InnerClasses
@@ -27,8 +27,22 @@
     ** valueOf(java.lang.String);
 }
 
+-keep,includedescriptorclasses class party.qwer.iris.nativecore.**$$serializer { *; }
+-keepclassmembers class party.qwer.iris.nativecore.** {
+    *** Companion;
+    *** INSTANCE;
+    kotlinx.serialization.KSerializer serializer(...);
+}
+-keepclassmembers enum party.qwer.iris.nativecore.** {
+    **[] values();
+    ** valueOf(java.lang.String);
+}
+
 # @SerialName 어노테이션이 제거되면 JSON 역직렬화 실패
 -keep @kotlinx.serialization.Serializable class party.qwer.iris.model.** {
+    *;
+}
+-keep @kotlinx.serialization.Serializable class party.qwer.iris.nativecore.** {
     *;
 }
 
