@@ -10,6 +10,7 @@ internal data class ImageSendRequest(
     val threadScope: Int?,
     val requestId: String?,
 )
+
 internal class ImageBridgeRequestHandler(
     private val imageSender: (ImageSendRequest) -> Unit,
     private val healthProvider: () -> ImageBridgeHealthSnapshot,
@@ -59,8 +60,9 @@ internal class ImageBridgeRequestHandler(
         serialExecutor.execute(imageRequest.roomId, imageRequest.threadId) {
             imageSender(imageRequest)
         }
-        return successResponse()
+        return ImageBridgeProtocol.buildSuccessResponse()
     }
+
     private fun handleInspectChatRoom(request: ImageBridgeProtocol.ImageBridgeRequest): ImageBridgeProtocol.ImageBridgeResponse {
         val roomId = checkNotNull(request.roomId) { "roomId missing" }
         val inspector = checkNotNull(chatRoomInspector) { "chatroom inspection unavailable" }
@@ -69,6 +71,7 @@ internal class ImageBridgeRequestHandler(
             inspectionJson = inspector(roomId),
         )
     }
+
     private fun handleOpenChatRoom(request: ImageBridgeProtocol.ImageBridgeRequest): ImageBridgeProtocol.ImageBridgeResponse {
         val roomId = checkNotNull(request.roomId) { "roomId missing" }
         val opener = checkNotNull(chatRoomOpener) { "chatroom opener unavailable" }
@@ -77,6 +80,7 @@ internal class ImageBridgeRequestHandler(
             status = ImageBridgeProtocol.STATUS_OK,
         )
     }
+
     private fun handleSnapshotChatRoomMembers(request: ImageBridgeProtocol.ImageBridgeRequest): ImageBridgeProtocol.ImageBridgeResponse {
         val roomId = checkNotNull(request.roomId) { "roomId missing" }
         val provider = checkNotNull(chatRoomMemberSnapshotProvider) { "chatroom member snapshot unavailable" }
@@ -110,8 +114,6 @@ internal class ImageBridgeRequestHandler(
 
     companion object {
         private const val TAG = "IrisBridge"
-
-        fun successResponse(): ImageBridgeProtocol.ImageBridgeResponse = ImageBridgeProtocol.buildSuccessResponse()
 
         fun failureResponse(error: String): ImageBridgeProtocol.ImageBridgeResponse = ImageBridgeProtocol.buildFailureResponse(error)
     }
