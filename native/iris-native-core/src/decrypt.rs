@@ -188,6 +188,7 @@ pub fn decrypt_batch_json(request_bytes: &[u8]) -> NativeCoreResult<Vec<u8>> {
 }
 
 pub fn decrypt(enc_type: i32, ciphertext_b64: &str, user_id: i64) -> NativeCoreResult<String> {
+    let salt = gen_salt(user_id, enc_type)?;
     let ciphertext = STANDARD
         .decode(ciphertext_b64.as_bytes())
         .map_err(|error| NativeCoreError::Decrypt(format!("base64 decode failed: {error}")))?;
@@ -195,15 +196,13 @@ pub fn decrypt(enc_type: i32, ciphertext_b64: &str, user_id: i64) -> NativeCoreR
         return Ok(ciphertext_b64.to_owned());
     }
 
-    let salt = gen_salt(user_id, enc_type)?;
     let key = derive_key(&KEY_BYTES, &salt, 2, 32);
     let padded = Aes256CbcDec::new((&key[..]).into(), (&IV_BYTES).into())
         .decrypt_padded_vec_mut::<NoPadding>(&ciphertext)
         .map_err(|_| NativeCoreError::Decrypt("aes decrypt failed".to_owned()))?;
     let plaintext = strip_pkcs7_padding(&padded)?;
 
-    String::from_utf8(plaintext.to_vec())
-        .map_err(|error| NativeCoreError::Decrypt(format!("utf-8 decode failed: {error}")))
+    Ok(String::from_utf8_lossy(plaintext).into_owned())
 }
 
 fn strip_pkcs7_padding(padded: &[u8]) -> NativeCoreResult<&[u8]> {
@@ -379,6 +378,83 @@ mod tests {
         0x0f, 0x08, 0x01, 0x00, 0x19, 0x47, 0x25, 0xdc, 0x15, 0xf5, 0x17, 0xe0, 0xe1, 0x15, 0x0c,
         0x35,
     ];
+
+    #[test]
+    fn decrypts_kotlin_golden_vectors() {
+        struct Vector {
+            enc_type: i32,
+            ciphertext: &'static str,
+            user_id: i64,
+            plaintext: &'static str,
+        }
+
+        let vectors = [
+            Vector {
+                enc_type: 0,
+                ciphertext: "yHgMBsdh5jVM5F5yZrpRvQ==",
+                user_id: 987_654_321,
+                plaintext: "gold-enc0",
+            },
+            Vector {
+                enc_type: 7,
+                ciphertext: "sz79gq/IBJ0h2Otfh1iN4A==",
+                user_id: 24_680,
+                plaintext: "gold-enc7",
+            },
+            Vector {
+                enc_type: 15,
+                ciphertext: "39E06m2SB6FDFNspm/797A==",
+                user_id: 112_233,
+                plaintext: "gold-isabel",
+            },
+            Vector {
+                enc_type: 30,
+                ciphertext: "6GOqrRjE1TS6VfXwuoLFaQ==",
+                user_id: 13_579,
+                plaintext: "gold-incept",
+            },
+            Vector {
+                enc_type: 31,
+                ciphertext: "jx0sAUYx3c1Zm5VqqjSK4g==",
+                user_id: 97_531,
+                plaintext: "gold-veil",
+            },
+            Vector {
+                enc_type: 999,
+                ciphertext: "57G2PGQPgHI6jBcKqoWVVA==",
+                user_id: 0,
+                plaintext: "gold-zero-user",
+            },
+            Vector {
+                enc_type: 0,
+                ciphertext: "NBuaqVdjnFwoZQeNY/MbWA==",
+                user_id: 1_234_567_890_123_456_789,
+                plaintext: "gold-long-user",
+            },
+        ];
+
+        for vector in vectors {
+            let plaintext = decrypt(vector.enc_type, vector.ciphertext, vector.user_id)
+                .expect("golden vector should decrypt");
+
+            assert_eq!(vector.plaintext, plaintext);
+        }
+    }
+
+    #[test]
+    fn decrypt_rejects_unsupported_empty_ciphertext_for_positive_user() {
+        let error = decrypt(999, "", 1).expect_err("unsupported encType should fail before empty");
+
+        assert!(error.to_string().contains("Unsupported encoding type 999"));
+    }
+
+    #[test]
+    fn decrypt_decodes_malformed_utf8_lossy_like_kotlin() {
+        let plaintext =
+            decrypt(0, "oh7g/yY2MWT/ipvEMCOy9Q==", 42).expect("padding should be valid");
+
+        assert_eq!("\u{fffd}\u{fffd}A", plaintext);
+    }
 
     #[test]
     fn decrypt_round_trips_short_plaintext() {
