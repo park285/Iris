@@ -172,6 +172,44 @@ class HealthRoutesTest {
     }
 
     @Test
+    fun `readiness ignores failed native core in shadow mode`() {
+        val reason =
+            readinessFailureReason(
+                bridgeHealth = null,
+                configReadiness = RuntimeConfigReadiness.allConfigured(bridgeRequired = false),
+                nativeCoreDiagnostics =
+                    party.qwer.iris.nativecore.NativeCoreDiagnostics(
+                        mode = "shadow",
+                        loaded = false,
+                        libraryPath = "/data/iris/lib/libiris_native_core.so",
+                        selfTestOk = false,
+                        lastError = "missing library",
+                    ),
+            )
+
+        assertNull(reason)
+    }
+
+    @Test
+    fun `readiness fails when native core is on and not loaded`() {
+        val reason =
+            readinessFailureReason(
+                bridgeHealth = null,
+                configReadiness = RuntimeConfigReadiness.allConfigured(bridgeRequired = false),
+                nativeCoreDiagnostics =
+                    party.qwer.iris.nativecore.NativeCoreDiagnostics(
+                        mode = "on",
+                        loaded = false,
+                        libraryPath = "/data/iris/lib/libiris_native_core.so",
+                        selfTestOk = false,
+                        lastError = "missing library",
+                    ),
+            )
+
+        assertEquals("native core not ready: native core not loaded", reason)
+    }
+
+    @Test
     fun `ready ignores snapshot chatroom members capability when hooks are ready`() {
         val reason =
             readinessFailureReason(

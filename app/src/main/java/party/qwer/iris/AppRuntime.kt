@@ -8,6 +8,8 @@ import kotlinx.coroutines.withContext
 import party.qwer.iris.delivery.webhook.WebhookOutboxDispatcher
 import party.qwer.iris.http.ReplyImageIngressPolicy
 import party.qwer.iris.http.SseSubscriberPolicy
+import party.qwer.iris.nativecore.NativeCoreHolder
+import party.qwer.iris.nativecore.NativeCoreRuntime
 import party.qwer.iris.persistence.CheckpointJournal
 import party.qwer.iris.persistence.LiveRoomMemberPlanStore
 import party.qwer.iris.persistence.MemberIdentityStateStore
@@ -135,6 +137,9 @@ internal class AppRuntime(
 
     private fun assembleStartup(): AppRuntimeStartupAssembly {
         val rollback = StartupRollback()
+        val nativeCoreRuntime = NativeCoreRuntime.create()
+        NativeCoreHolder.install(nativeCoreRuntime)
+        rollback.defer { NativeCoreHolder.resetForTest() }
         val configManager = ConfigManager()
         rollback.defer {
             if (!configManager.saveConfigNow()) {
@@ -268,6 +273,7 @@ internal class AppRuntime(
                         replyImageIngressPolicy = replyImageIngressPolicy,
                         bridgeHealthProvider = bridgeHealthCache::current,
                         configReadinessProvider = configManager::runtimeConfigReadiness,
+                        nativeCoreDiagnosticsProvider = nativeCoreRuntime::diagnostics,
                         replyStatusProvider = replyService::replyStatusOrNull,
                         memberRepo = memberRepo,
                         sseEventBus = sseEventBus,

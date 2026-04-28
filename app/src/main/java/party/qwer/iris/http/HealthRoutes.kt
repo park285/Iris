@@ -15,6 +15,7 @@ import party.qwer.iris.invalidRequest
 import party.qwer.iris.model.ChatRoomOpenResponse
 import party.qwer.iris.model.CommonErrorResponse
 import party.qwer.iris.model.ImageBridgeHealthResult
+import party.qwer.iris.nativecore.NativeCoreDiagnostics
 
 private const val HEALTH_OK_JSON = """{"status":"ok"}"""
 private const val READY_OK_JSON = """{"status":"ready"}"""
@@ -88,6 +89,7 @@ internal fun isBridgeReady(health: ImageBridgeHealthResult): Boolean {
 internal fun readinessFailureReason(
     bridgeHealth: ImageBridgeHealthResult?,
     configReadiness: RuntimeConfigReadiness? = null,
+    nativeCoreDiagnostics: NativeCoreDiagnostics? = null,
 ): String? {
     when (val bootstrapState = configReadiness?.bootstrapState()) {
         null,
@@ -97,6 +99,9 @@ internal fun readinessFailureReason(
         is RuntimeBootstrapState.Blocked -> {
             return "config not ready: ${bootstrapState.reason}"
         }
+    }
+    nativeCoreDiagnostics?.readinessFailureReason()?.let { reason ->
+        return "native core not ready: $reason"
     }
     val bridgeRequired = configReadiness?.bridgeRequired == true
     if (bridgeRequired && bridgeHealth != null && !isBridgeReady(bridgeHealth)) {
@@ -114,6 +119,7 @@ internal fun Route.installHealthRoutes(
     authSupport: AuthSupport,
     bridgeHealthProvider: (() -> ImageBridgeHealthResult?)?,
     configReadinessProvider: (() -> RuntimeConfigReadiness)? = null,
+    nativeCoreDiagnosticsProvider: (() -> NativeCoreDiagnostics)? = null,
     chatRoomIntrospectProvider: ((Long) -> String)?,
     chatRoomOpenProvider: ((Long) -> ImageBridgeResult)? = null,
     memberNicknameDiagnosticsProvider: ((Long) -> MemberNicknameDiagnostics?)? = null,
@@ -124,7 +130,12 @@ internal fun Route.installHealthRoutes(
     }
     get("/ready") {
         val bridgeHealth = bridgeHealthProvider?.invoke()
-        val failureReason = readinessFailureReason(bridgeHealth, configReadinessProvider?.invoke())
+        val failureReason =
+            readinessFailureReason(
+                bridgeHealth = bridgeHealth,
+                configReadiness = configReadinessProvider?.invoke(),
+                nativeCoreDiagnostics = nativeCoreDiagnosticsProvider?.invoke(),
+            )
         if (failureReason == null) {
             call.respondText(READY_OK_JSON, ContentType.Application.Json)
         } else {
@@ -141,6 +152,11 @@ internal fun Route.installHealthRoutes(
         if (!authSupport.requireBotControlSignature(call, method = "GET")) return@get
         val bridgeHealth = bridgeHealthProvider?.invoke() ?: invalidRequest("bridge health unavailable")
         call.respond(bridgeHealth)
+    }
+    get("/diagnostics/native-core") {
+        if (!authSupport.requireBotControlSignature(call, method = "GET")) return@get
+        val diagnostics = nativeCoreDiagnosticsProvider?.invoke() ?: invalidRequest("native core diagnostics unavailable")
+        call.respond(diagnostics)
     }
     get("/diagnostics/chatroom-fields/{chatId}") {
         if (!authSupport.requireBotControlSignature(call, method = "GET")) return@get

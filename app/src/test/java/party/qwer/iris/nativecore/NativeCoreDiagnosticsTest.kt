@@ -2,9 +2,22 @@ package party.qwer.iris.nativecore
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 
 class NativeCoreDiagnosticsTest {
+    @Test
+    fun `off diagnostics has no readiness failure`() {
+        val diagnostics =
+            NativeCoreDiagnostics(
+                mode = "off",
+                loaded = false,
+                libraryPath = "/data/iris/lib/libiris_native_core.so",
+            )
+
+        assertNull(diagnostics.readinessFailureReason())
+    }
+
     @Test
     fun `on mode requires native core to be loaded`() {
         val diagnostics =
@@ -55,5 +68,14 @@ class NativeCoreDiagnosticsTest {
             )
 
         assertNull(diagnostics.readinessFailureReason())
+    }
+
+    @Test
+    fun `diagnostics carries no secret fields`() {
+        val propertyNames = NativeCoreDiagnostics::class.java.declaredFields.map { it.name }.toSet()
+
+        assertFalse("token" in propertyNames)
+        assertFalse("secret" in propertyNames)
+        assertFalse("payload" in propertyNames)
     }
 }
