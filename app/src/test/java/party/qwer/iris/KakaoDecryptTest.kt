@@ -1,5 +1,8 @@
 package party.qwer.iris
 
+import party.qwer.iris.nativecore.NativeCoreHolder
+import party.qwer.iris.nativecore.NativeCoreJniBridge
+import party.qwer.iris.nativecore.NativeCoreRuntime
 import java.util.Base64
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
@@ -48,12 +51,62 @@ class KakaoDecryptTest {
 
     @Test
     fun `decrypt still uses kotlin path when native core is off`() {
-        party.qwer.iris.nativecore.NativeCoreHolder.resetForTest()
+        NativeCoreHolder.resetForTest()
         val ciphertext = encrypt(encType = 0, plaintext = "native-off", userId = 123L)
 
         val result = KakaoDecrypt.decrypt(encType = 0, b64_ciphertext = ciphertext, user_id = 123L)
 
         assertEquals("native-off", result)
+    }
+
+    @Test
+    fun `decrypt in native on mode returns native result through holder routing`() {
+        val jni = FakeNativeCoreJni(decryptResult = "native-sentinel")
+        val runtime =
+            NativeCoreRuntime.create(
+                env = mapOf("IRIS_NATIVE_CORE" to "on"),
+                loader = {},
+                jni = jni,
+            )
+        val ciphertext = encrypt(encType = 0, plaintext = "kotlin-on", userId = 123L)
+
+        try {
+            NativeCoreHolder.install(runtime)
+
+            val result = KakaoDecrypt.decrypt(encType = 0, b64_ciphertext = ciphertext, user_id = 123L)
+
+            assertEquals("native-sentinel", result)
+            assertEquals(1, jni.decryptCalls)
+            assertEquals(0L, runtime.diagnostics().callFailures)
+        } finally {
+            NativeCoreHolder.resetForTest()
+        }
+    }
+
+    @Test
+    fun `decrypt in native shadow mode returns kotlin result while recording native mismatch`() {
+        val jni = FakeNativeCoreJni(decryptResult = "native-shadow")
+        val runtime =
+            NativeCoreRuntime.create(
+                env = mapOf("IRIS_NATIVE_CORE" to "shadow"),
+                loader = {},
+                jni = jni,
+            )
+        val ciphertext = encrypt(encType = 0, plaintext = "kotlin-shadow", userId = 123L)
+
+        try {
+            NativeCoreHolder.install(runtime)
+
+            val result = KakaoDecrypt.decrypt(encType = 0, b64_ciphertext = ciphertext, user_id = 123L)
+            val diagnostics = runtime.diagnostics()
+
+            assertEquals("kotlin-shadow", result)
+            assertEquals(1, jni.decryptCalls)
+            assertEquals(1L, diagnostics.shadowMismatches["decrypt"])
+            assertEquals(0L, diagnostics.callFailures)
+        } finally {
+            NativeCoreHolder.resetForTest()
+        }
     }
 
     @Test
@@ -226,6 +279,20 @@ class KakaoDecryptTest {
         }
 
     private fun encryptSample(userId: Long): String = encrypt(encType = 0, plaintext = "test", userId = userId)
+
+    private class FakeNativeCoreJni(
+        private val decryptResult: String,
+    ) : NativeCoreJniBridge {
+        var decryptCalls = 0
+            private set
+
+        override fun nativeSelfTest(): String = "iris-native-core:test"
+
+        override fun decryptBatch(requestJsonBytes: ByteArray): ByteArray {
+            decryptCalls += 1
+            return """{"items":[{"ok":true,"plaintext":"$decryptResult"}]}""".encodeToByteArray()
+        }
+    }
 
     private fun encrypt(
         encType: Int,
