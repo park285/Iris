@@ -8,6 +8,9 @@ IRIS_PROCESS_KEYWORD="app_process"
 IRIS_APK_URL="https://github.com/park285/Iris/releases/latest/download/Iris.apk"
 IRIS_APK_PATH="/data/local/tmp/Iris.apk"
 IRIS_APK_LOCAL_FILE="Iris.apk"
+IRIS_NATIVE_CORE="${IRIS_NATIVE_CORE:-off}"
+IRIS_NATIVE_LIB_PATH="${IRIS_NATIVE_LIB_PATH:-/data/iris/lib/libiris_native_core.so}"
+IRIS_NATIVE_LIB_LOCAL_FILE="${IRIS_NATIVE_LIB_LOCAL_FILE:-output/libiris_native_core.so}"
 IRIS_SHA256_URL="${IRIS_APK_URL}.SHA256"
 IRIS_ENV_FILE="${IRIS_ENV_FILE:-}"
 IRIS_CONFIG_PATH="${IRIS_CONFIG_PATH:-/data/local/tmp/config.json}"
@@ -211,6 +214,8 @@ build_remote_runtime_command() {
     env_assign IRIS_CHATROOM_REFRESH_ENABLED "$IRIS_CHATROOM_REFRESH_ENABLED"
     env_assign IRIS_CHATROOM_REFRESH_INTERVAL_MS "$IRIS_CHATROOM_REFRESH_INTERVAL_MS"
     env_assign IRIS_CHATROOM_REFRESH_OPEN_DELAY_MS "$IRIS_CHATROOM_REFRESH_OPEN_DELAY_MS"
+    env_assign IRIS_NATIVE_CORE "$IRIS_NATIVE_CORE"
+    env_assign IRIS_NATIVE_LIB_PATH "$IRIS_NATIVE_LIB_PATH"
     env_assign CLASSPATH "$IRIS_APK_PATH"
     printf 'app_process / party.qwer.iris.Main%s' "$redirect_suffix"
   }
@@ -343,6 +348,17 @@ iris_install() {
 
   echo "Pushing Iris.apk to device..."
   "${ADB_CMD[@]}" push "$IRIS_APK_LOCAL_FILE" "$IRIS_APK_PATH"
+
+  if [[ -f "$IRIS_NATIVE_LIB_LOCAL_FILE" ]]; then
+    local native_dir
+    native_dir="${IRIS_NATIVE_LIB_PATH%/*}"
+    echo "Pushing native library to device: $IRIS_NATIVE_LIB_PATH"
+    "${ADB_CMD[@]}" shell "mkdir -p $native_dir"
+    "${ADB_CMD[@]}" push "$IRIS_NATIVE_LIB_LOCAL_FILE" "$IRIS_NATIVE_LIB_PATH"
+    "${ADB_CMD[@]}" shell "chmod 644 $IRIS_NATIVE_LIB_PATH"
+  else
+    echo "Skipping native library push; local file not found: $IRIS_NATIVE_LIB_LOCAL_FILE"
+  fi
 
   echo "Verifying installation..."
   if "${ADB_CMD[@]}" shell "ls $IRIS_APK_PATH" >/dev/null 2>&1; then

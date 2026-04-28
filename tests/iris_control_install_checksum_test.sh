@@ -5,6 +5,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
+: >"$tmpdir/iris.env"
 
 apk_sha256="1e10ba560383b17472b4cf72fef8f9e76c66815a3e6ae8c5a9b0c5e696b0bdf8"
 
@@ -72,7 +73,9 @@ chmod +x "$tmpdir/sha256sum"
 set +e
 success_output="$(
   PATH="$tmpdir:$PATH" \
+  IRIS_ENV_FILE="$tmpdir/iris.env" \
   IRIS_ADB_DEVICE="127.0.0.1:5555" \
+  IRIS_NATIVE_LIB_LOCAL_FILE="$tmpdir/missing-libiris_native_core.so" \
   "$repo_root/iris_control" install 2>&1
 )"
 success_status=$?
@@ -94,7 +97,9 @@ set +e
 failure_output="$(
   GOOD_CHECKSUM=0 \
   PATH="$tmpdir:$PATH" \
+  IRIS_ENV_FILE="$tmpdir/iris.env" \
   IRIS_ADB_DEVICE="127.0.0.1:5555" \
+  IRIS_NATIVE_LIB_LOCAL_FILE="$tmpdir/missing-libiris_native_core.so" \
   "$repo_root/iris_control" install 2>&1
 )"
 failure_status=$?

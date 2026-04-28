@@ -17,6 +17,8 @@ IRIS_BIND_HOST=0.0.0.0
 IRIS_CHATROOM_REFRESH_ENABLED=1
 IRIS_CHATROOM_REFRESH_INTERVAL_MS=60000
 IRIS_CHATROOM_REFRESH_OPEN_DELAY_MS=5000
+IRIS_NATIVE_CORE=on
+IRIS_NATIVE_LIB_PATH=/custom/iris/lib/libiris_native_core.so
 EOF
 
 cat >"$tmpdir/adb" <<'EOF'
@@ -89,6 +91,24 @@ fi
 
 if ! grep -Fq "IRIS_CHATROOM_REFRESH_OPEN_DELAY_MS='\"'\"'5000'\"'\"'" "$command_log"; then
   echo "expected chatroom refresh open delay passthrough not found"
+  cat "$command_log"
+  exit 1
+fi
+
+if ! grep -Fq "IRIS_NATIVE_CORE='\"'\"'on'\"'\"'" "$command_log"; then
+  echo "expected native core env passthrough not found"
+  cat "$command_log"
+  exit 1
+fi
+
+if ! grep -Fq "IRIS_NATIVE_LIB_PATH='\"'\"'/custom/iris/lib/libiris_native_core.so'\"'\"'" "$command_log"; then
+  echo "expected native lib path passthrough not found"
+  cat "$command_log"
+  exit 1
+fi
+
+if [[ "$(grep -o "IRIS_NATIVE_LIB_PATH=.*CLASSPATH=" "$command_log")" != *"IRIS_NATIVE_LIB_PATH="*"CLASSPATH="* ]]; then
+  echo "expected native lib path env before CLASSPATH"
   cat "$command_log"
   exit 1
 fi
