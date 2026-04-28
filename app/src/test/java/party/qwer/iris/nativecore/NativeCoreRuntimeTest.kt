@@ -7,6 +7,9 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
+import party.qwer.iris.CommandKind
+import party.qwer.iris.ParsedCommand
+import party.qwer.iris.delivery.webhook.RoutingCommand
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -155,6 +158,349 @@ class NativeCoreRuntimeTest {
     }
 
     @Test
+    fun `diagnostics include all component modes and zeroed stats`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env = mapOf("IRIS_NATIVE_CORE" to "on"),
+                loader = {},
+                jni = FakeJni(),
+            )
+
+        val diagnostics = runtime.diagnostics()
+
+        assertEquals(listOf("decrypt"), diagnostics.enabledComponents)
+        assertEquals(setOf("decrypt", "routing", "parsers", "webhookPayload"), diagnostics.componentStats.keys)
+        assertEquals("on", diagnostics.componentStats.getValue("decrypt").mode)
+        assertEquals("off", diagnostics.componentStats.getValue("routing").mode)
+        assertEquals("off", diagnostics.componentStats.getValue("parsers").mode)
+        assertEquals("off", diagnostics.componentStats.getValue("webhookPayload").mode)
+        assertEquals(0L, diagnostics.componentStats.getValue("decrypt").jniCalls)
+        assertEquals(0L, diagnostics.componentStats.getValue("decrypt").items)
+        assertEquals(0L, diagnostics.componentStats.getValue("decrypt").fallbacks)
+    }
+
+    @Test
+    fun `decrypt component off skips native even when global mode is on`() {
+        val jni = FakeJni(decryptResult = "rust-result")
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                    ),
+                loader = {},
+                jni = jni,
+            )
+
+        val result = runtime.decryptOrFallback(encType = 0, ciphertext = "cipher", userId = 1L) { "kotlin-result" }
+        val diagnostics = runtime.diagnostics()
+
+        assertEquals("kotlin-result", result)
+        assertNull(jni.lastDecryptRequest)
+        assertEquals(emptyList(), diagnostics.enabledComponents)
+        assertEquals("off", diagnostics.componentStats.getValue("decrypt").mode)
+    }
+
+    @Test
+    fun `routing component on returns native parsed command and records stats`() {
+        val jni =
+            FakeJni(
+                rawRoutingResponse =
+                    """{"items":[{"ok":true,"kind":"WEBHOOK","normalizedText":"!native","webhookRoute":"native","targetRoute":"native"}]}""",
+            )
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_ROUTING" to "on",
+                    ),
+                loader = {},
+                jni = jni,
+            )
+
+        val result =
+            runtime.parseCommandOrFallback("!kotlin") {
+                ParsedCommand(CommandKind.NONE, "!kotlin")
+            }
+        val routingStats = runtime.diagnostics().componentStats.getValue("routing")
+
+        assertEquals(ParsedCommand(CommandKind.WEBHOOK, "!native"), result)
+        assertEquals(1, jni.routingCalls)
+        assertEquals(1L, routingStats.jniCalls)
+        assertEquals(1L, routingStats.items)
+        assertEquals(0L, routingStats.fallbacks)
+    }
+
+    @Test
+    fun `routing component shadow returns kotlin decision and records mismatch`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_ROUTING" to "shadow",
+                    ),
+                loader = {},
+                jni =
+                    FakeJni(
+                        rawRoutingResponse = """{"items":[{"ok":true,"kind":"NONE","normalizedText":"","eventRoute":"native-route"}]}""",
+                    ),
+            )
+
+        val result = runtime.resolveEventRouteOrFallback("nickname_change") { "kotlin-route" }
+        val diagnostics = runtime.diagnostics()
+        val routingStats = diagnostics.componentStats.getValue("routing")
+
+        assertEquals("kotlin-route", result)
+        assertEquals(1L, diagnostics.shadowMismatches["routing"])
+        assertEquals(1L, routingStats.shadowMismatches)
+        assertEquals(1L, routingStats.jniCalls)
+    }
+
+    @Test
+    fun `routing component shadow compares only requested command parse output`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_ROUTING" to "shadow",
+                    ),
+                loader = {},
+                jni =
+                    FakeJni(
+                        rawRoutingResponse =
+                            """{"items":[{"ok":true,"kind":"WEBHOOK","normalizedText":"!ping","webhookRoute":"default","targetRoute":"default"}]}""",
+                    ),
+            )
+
+        val result =
+            runtime.parseCommandOrFallback("!ping") {
+                ParsedCommand(CommandKind.WEBHOOK, "!ping")
+            }
+        val diagnostics = runtime.diagnostics()
+        val routingStats = diagnostics.componentStats.getValue("routing")
+
+        assertEquals(ParsedCommand(CommandKind.WEBHOOK, "!ping"), result)
+        assertEquals(0L, diagnostics.shadowMismatches.getValue("routing"))
+        assertEquals(0L, routingStats.shadowMismatches)
+        assertEquals(1L, routingStats.jniCalls)
+    }
+
+    @Test
+    fun `parser component on falls back when native requests fallback`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_PARSERS" to "on",
+                    ),
+                loader = {},
+                jni =
+                    FakeJni(
+                        rawParserResponse = """{"items":[{"kind":"roomTitle","ok":true,"fallback":true,"roomTitle":"native-title"}]}""",
+                    ),
+            )
+
+        val result = runtime.parseRoomTitleOrFallback("{broken") { "kotlin-title" }
+        val parserStats = runtime.diagnostics().componentStats.getValue("parsers")
+
+        assertEquals("kotlin-title", result)
+        assertEquals(1L, parserStats.jniCalls)
+        assertEquals(1L, parserStats.items)
+        assertEquals(1L, parserStats.fallbacks)
+    }
+
+    @Test
+    fun `parser component shadow records native fallback by parser variant`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_PARSERS" to "shadow",
+                    ),
+                loader = {},
+                jni =
+                    FakeJni(
+                        rawParserResponse = """{"items":[{"kind":"roomTitle","ok":true,"fallback":true,"roomTitle":null}]}""",
+                    ),
+            )
+
+        val result = runtime.parseRoomTitleOrFallback("{broken") { null }
+        val parserStats = runtime.diagnostics().componentStats.getValue("parsers")
+
+        assertNull(result)
+        assertEquals(1L, parserStats.fallbacks)
+        assertEquals(1L, parserStats.fallbacksByKey.getValue("roomTitle"))
+        assertEquals(0L, parserStats.shadowMismatches)
+    }
+
+    @Test
+    fun `parser component shadow records mismatch by parser variant`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_PARSERS" to "shadow",
+                    ),
+                loader = {},
+                jni =
+                    FakeJni(
+                        rawParserResponse = """{"items":[{"kind":"roomTitle","ok":true,"fallback":false,"roomTitle":"native-title"}]}""",
+                    ),
+            )
+
+        val result = runtime.parseRoomTitleOrFallback("""[{"type":3,"content":"kotlin-title"}]""") { "kotlin-title" }
+        val parserStats = runtime.diagnostics().componentStats.getValue("parsers")
+
+        assertEquals("kotlin-title", result)
+        assertEquals(1L, parserStats.shadowMismatches)
+        assertEquals(1L, parserStats.shadowMismatchesByKey.getValue("roomTitle"))
+    }
+
+    @Test
+    fun `webhook payload component on returns native payload`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_WEBHOOK_PAYLOAD" to "on",
+                    ),
+                loader = {},
+                jni =
+                    FakeJni(
+                        rawWebhookPayloadResponse =
+                            """{"items":[{"ok":true,"payloadJson":"{\"route\":\"native\",\"messageId\":\"msg-1\"}"}]}""",
+                    ),
+            )
+
+        val result =
+            runtime.buildWebhookPayloadOrFallback(
+                command = sampleRoutingCommand(),
+                route = "default",
+                messageId = "msg-1",
+            ) {
+                """{"route":"kotlin","messageId":"msg-1"}"""
+            }
+        val webhookStats = runtime.diagnostics().componentStats.getValue("webhookPayload")
+
+        assertEquals("""{"route":"native","messageId":"msg-1"}""", result)
+        assertEquals(1L, webhookStats.jniCalls)
+        assertEquals(1L, webhookStats.items)
+        assertEquals(0L, webhookStats.fallbacks)
+    }
+
+    @Test
+    fun `webhook payload component shadow compares json semantically`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_WEBHOOK_PAYLOAD" to "shadow",
+                    ),
+                loader = {},
+                jni =
+                    FakeJni(
+                        rawWebhookPayloadResponse =
+                            """{"items":[{"ok":true,"payloadJson":"{\"messageId\":\"msg-1\",\"route\":\"default\"}"}]}""",
+                    ),
+            )
+
+        val result =
+            runtime.buildWebhookPayloadOrFallback(
+                command = sampleRoutingCommand(),
+                route = "default",
+                messageId = "msg-1",
+            ) {
+                """{"route":"default","messageId":"msg-1"}"""
+            }
+        val diagnostics = runtime.diagnostics()
+        val webhookStats = diagnostics.componentStats.getValue("webhookPayload")
+
+        assertEquals("""{"route":"default","messageId":"msg-1"}""", result)
+        assertEquals(0L, diagnostics.shadowMismatches.getValue("webhookPayload"))
+        assertEquals(0L, webhookStats.shadowMismatches)
+        assertEquals(1L, webhookStats.jniCalls)
+    }
+
+    @Test
+    fun `decrypt batch in on mode uses one jni call for many items and records item stats`() {
+        val jni = FakeJni(decryptResults = listOf("rust-a", "rust-b", "rust-c"))
+        val runtime =
+            NativeCoreRuntime.create(
+                env = mapOf("IRIS_NATIVE_CORE" to "on"),
+                loader = {},
+                jni = jni,
+            )
+
+        val result =
+            runtime.decryptBatchOrFallback(
+                items =
+                    listOf(
+                        NativeDecryptBatchItem(encType = 1, ciphertext = "cipher-a", userId = 10L),
+                        NativeDecryptBatchItem(encType = 2, ciphertext = "cipher-b", userId = 20L),
+                        NativeDecryptBatchItem(encType = 3, ciphertext = "cipher-c", userId = 30L),
+                    ),
+                kotlinDecryptBatch = { listOf("kotlin-a", "kotlin-b", "kotlin-c") },
+            )
+        val diagnostics = runtime.diagnostics()
+        val decryptStats = diagnostics.componentStats.getValue("decrypt")
+        val request = Json.decodeFromString<JsonObject>(jni.lastDecryptRequest!!.decodeToString())
+
+        assertEquals(listOf("rust-a", "rust-b", "rust-c"), result)
+        assertEquals(1, jni.decryptCalls)
+        assertEquals(3, request.getValue("items").jsonArray.size)
+        assertEquals(1L, decryptStats.jniCalls)
+        assertEquals(3L, decryptStats.items)
+        assertEquals(0L, decryptStats.fallbacks)
+        assertEquals(0L, diagnostics.callFailures)
+    }
+
+    @Test
+    fun `decrypt batch in shadow mode returns kotlin results and counts each mismatch`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env = mapOf("IRIS_NATIVE_CORE" to "shadow"),
+                loader = {},
+                jni = FakeJni(decryptResults = listOf("rust-a", "same", "rust-c")),
+            )
+
+        val result =
+            runtime.decryptBatchOrFallback(
+                items =
+                    listOf(
+                        NativeDecryptBatchItem(encType = 1, ciphertext = "cipher-a", userId = 10L),
+                        NativeDecryptBatchItem(encType = 2, ciphertext = "cipher-b", userId = 20L),
+                        NativeDecryptBatchItem(encType = 3, ciphertext = "cipher-c", userId = 30L),
+                    ),
+                kotlinDecryptBatch = { listOf("kotlin-a", "same", "kotlin-c") },
+            )
+        val diagnostics = runtime.diagnostics()
+        val decryptStats = diagnostics.componentStats.getValue("decrypt")
+
+        assertEquals(listOf("kotlin-a", "same", "kotlin-c"), result)
+        assertEquals(2L, diagnostics.shadowMismatches["decrypt"])
+        assertEquals(2L, decryptStats.shadowMismatches)
+        assertEquals(1L, decryptStats.jniCalls)
+        assertEquals(3L, decryptStats.items)
+    }
+
+    @Test
     fun `decrypt in shadow mode returns kotlin result and counts mismatch`() {
         val runtime =
             NativeCoreRuntime.create(
@@ -240,6 +586,34 @@ class NativeCoreRuntimeTest {
     }
 
     @Test
+    fun `decrypt batch in on mode falls back for partial item error and records fallback items`() {
+        val runtime =
+            runtimeWithNativeResponse(
+                """{"items":[{"ok":true,"plaintext":"rust-a"},{"ok":false,"error":"ciphertext=secret"}]}""",
+            )
+
+        val result =
+            runtime.decryptBatchOrFallback(
+                items =
+                    listOf(
+                        NativeDecryptBatchItem(encType = 0, ciphertext = "cipher-a", userId = 1L),
+                        NativeDecryptBatchItem(encType = 0, ciphertext = "cipher-b", userId = 2L),
+                    ),
+                kotlinDecryptBatch = { listOf("kotlin-a", "kotlin-b") },
+            )
+        val diagnostics = runtime.diagnostics()
+        val decryptStats = diagnostics.componentStats.getValue("decrypt")
+
+        assertEquals(listOf("kotlin-a", "kotlin-b"), result)
+        assertEquals(1L, diagnostics.callFailures)
+        assertEquals(1L, decryptStats.jniCalls)
+        assertEquals(2L, decryptStats.items)
+        assertEquals(2L, decryptStats.fallbacks)
+        assertEquals("native decrypt failed", decryptStats.lastError)
+        assertEquals("native decrypt failed", diagnostics.lastError)
+    }
+
+    @Test
     fun `decrypt in on mode falls back when native response is missing plaintext`() {
         val runtime = runtimeWithNativeResponse("""{"items":[{"ok":true}]}""")
 
@@ -257,21 +631,86 @@ class NativeCoreRuntimeTest {
             jni = FakeJni(rawDecryptResponse = response),
         )
 
+    private fun sampleRoutingCommand(): RoutingCommand =
+        RoutingCommand(
+            text = "!ping",
+            room = "room",
+            sender = "sender",
+            userId = "42",
+            sourceLogId = 100L,
+        )
+
     private class FakeJni(
         private val selfTestResult: String = "iris-native-core:test",
         private val decryptResult: String = "kotlin-result",
+        private val decryptResults: List<String>? = null,
         private val decryptError: RuntimeException? = null,
         private val rawDecryptResponse: String? = null,
+        private val rawRoutingResponse: String? = null,
+        private val rawParserResponse: String? = null,
+        private val rawWebhookPayloadResponse: String? = null,
     ) : NativeCoreJniBridge {
         var lastDecryptRequest: ByteArray? = null
+            private set
+        var lastRoutingRequest: ByteArray? = null
+            private set
+        var lastParserRequest: ByteArray? = null
+            private set
+        var lastWebhookPayloadRequest: ByteArray? = null
+            private set
+        var decryptCalls = 0
+            private set
+        var routingCalls = 0
+            private set
+        var parserCalls = 0
+            private set
+        var webhookPayloadCalls = 0
             private set
 
         override fun nativeSelfTest(): String = selfTestResult
 
         override fun decryptBatch(requestJsonBytes: ByteArray): ByteArray {
+            decryptCalls += 1
             lastDecryptRequest = requestJsonBytes
             decryptError?.let { throw it }
-            return (rawDecryptResponse ?: """{"items":[{"ok":true,"plaintext":"$decryptResult"}]}""").encodeToByteArray()
+            return (rawDecryptResponse ?: successResponse(requestJsonBytes)).encodeToByteArray()
+        }
+
+        override fun routingBatch(requestJsonBytes: ByteArray): ByteArray {
+            routingCalls += 1
+            lastRoutingRequest = requestJsonBytes
+            return (
+                rawRoutingResponse
+                    ?: """{"items":[{"ok":true,"kind":"NONE","normalizedText":""}]}"""
+            ).encodeToByteArray()
+        }
+
+        override fun parserBatch(requestJsonBytes: ByteArray): ByteArray {
+            parserCalls += 1
+            lastParserRequest = requestJsonBytes
+            return (
+                rawParserResponse
+                    ?: """{"items":[{"kind":"roomTitle","ok":true,"roomTitle":"native-title"}]}"""
+            ).encodeToByteArray()
+        }
+
+        override fun webhookPayloadBatch(requestJsonBytes: ByteArray): ByteArray {
+            webhookPayloadCalls += 1
+            lastWebhookPayloadRequest = requestJsonBytes
+            return (
+                rawWebhookPayloadResponse
+                    ?: """{"items":[{"ok":true,"payloadJson":"{\"route\":\"native\"}"}]}"""
+            ).encodeToByteArray()
+        }
+
+        private fun successResponse(requestJsonBytes: ByteArray): String {
+            val itemCount = Regex(""""encType"""").findAll(requestJsonBytes.decodeToString()).count().coerceAtLeast(1)
+            val results = decryptResults ?: List(itemCount) { decryptResult }
+            val items =
+                results.joinToString(separator = ",") { result ->
+                    """{"ok":true,"plaintext":"$result"}"""
+                }
+            return """{"items":[$items]}"""
         }
     }
 }

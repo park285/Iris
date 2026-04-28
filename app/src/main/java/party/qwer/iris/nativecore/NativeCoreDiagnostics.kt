@@ -12,17 +12,33 @@ internal data class NativeCoreDiagnostics(
     val selfTestOk: Boolean = false,
     val callFailures: Long = 0,
     val shadowMismatches: Map<String, Long> = emptyMap(),
+    val componentStats: Map<String, NativeCoreComponentDiagnostics> = emptyMap(),
     val lastError: String? = null,
 ) {
-    fun readinessFailureReason(): String? =
-        when (mode.trim().lowercase()) {
-            "on" ->
-                when {
-                    !loaded -> "native core not loaded"
-                    !selfTestOk -> "native core self-test failed"
-                    else -> null
-                }
-
+    fun readinessFailureReason(): String? {
+        val requiresNative =
+            if (componentStats.isEmpty()) {
+                mode.trim().lowercase() == "on"
+            } else {
+                componentStats.values.any { it.mode.trim().lowercase() == "on" }
+            }
+        if (!requiresNative) return null
+        return when {
+            !loaded -> "native core not loaded"
+            !selfTestOk -> "native core self-test failed"
             else -> null
         }
+    }
 }
+
+@Serializable
+internal data class NativeCoreComponentDiagnostics(
+    val mode: String,
+    val jniCalls: Long = 0,
+    val items: Long = 0,
+    val fallbacks: Long = 0,
+    val shadowMismatches: Long = 0,
+    val fallbacksByKey: Map<String, Long> = emptyMap(),
+    val shadowMismatchesByKey: Map<String, Long> = emptyMap(),
+    val lastError: String? = null,
+)

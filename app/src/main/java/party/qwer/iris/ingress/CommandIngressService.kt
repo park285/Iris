@@ -19,6 +19,7 @@ import party.qwer.iris.CommandParser
 import party.qwer.iris.IrisLogger
 import party.qwer.iris.KakaoDB
 import party.qwer.iris.KakaoDecrypt
+import party.qwer.iris.KakaoDecryptBatchItem
 import party.qwer.iris.MemberRepository
 import party.qwer.iris.ParsedCommand
 import party.qwer.iris.delivery.webhook.RoutingCommand
@@ -186,12 +187,63 @@ internal class CommandIngressService(
     }
 
     private fun bufferPolledLogs(newLogs: List<KakaoDB.ChatLogEntry>) {
+        val decryptedFields = decryptPolledLogFields(newLogs)
         for (logEntry in newLogs) {
             onMarkDirty(logEntry.chatId)
-            if (!bufferDispatch(ChatLogDispatch(logEntry))) {
+            val fields = decryptedFields[logEntry.id].orEmpty()
+            if (
+                !bufferDispatch(
+                    ChatLogDispatch(
+                        logEntry = logEntry,
+                        decryptedMessage = fields["message"],
+                        decryptedAttachment = fields["attachment"],
+                    ),
+                )
+            ) {
                 break
             }
         }
+    }
+
+    private fun decryptPolledLogFields(newLogs: List<KakaoDB.ChatLogEntry>): Map<Long, Map<String, String>> {
+        val candidates = mutableListOf<Triple<Long, String, KakaoDecryptBatchItem>>()
+        for (logEntry in newLogs) {
+            val metadata = parseMetadataForBatch(logEntry) ?: continue
+            if (shouldDecryptValue(logEntry.message)) {
+                candidates +=
+                    Triple(
+                        logEntry.id,
+                        "message",
+                        KakaoDecryptBatchItem(metadata.enc, logEntry.message, logEntry.userId),
+                    )
+            }
+            val attachment = logEntry.attachment
+            if (attachment != null && attachment.isNotBlank() && shouldDecryptValue(attachment)) {
+                candidates +=
+                    Triple(
+                        logEntry.id,
+                        "attachment",
+                        KakaoDecryptBatchItem(metadata.enc, attachment, logEntry.userId),
+                    )
+            }
+        }
+        if (candidates.isEmpty()) return emptyMap()
+
+        val decryptedValues =
+            runCatching {
+                KakaoDecrypt.decryptBatch(candidates.map { it.third })
+            }.getOrElse { error ->
+                IrisLogger.debugLazy { "[CommandIngressService] Failed to batch decrypt polled logs: ${error.message}" }
+                return emptyMap()
+            }
+        if (decryptedValues.size != candidates.size) return emptyMap()
+
+        val result = linkedMapOf<Long, MutableMap<String, String>>()
+        candidates.zip(decryptedValues).forEach { (candidate, decryptedValue) ->
+            val (logId, fieldName) = candidate
+            result.getOrPut(logId) { linkedMapOf() }[fieldName] = decryptedValue
+        }
+        return result
     }
 
     private fun remainingBufferCapacity(): Int = backlog.remainingCapacity()
@@ -227,7 +279,7 @@ internal class CommandIngressService(
     private fun drainDispatchQueue(partitionIndex: Int) {
         while (true) {
             val dispatch = backlog.takeNext(partitionIndex) ?: return
-            val outcome = processLogEntry(dispatch.logEntry)
+            val outcome = processLogEntry(dispatch)
             val continuation =
                 backlog.complete(
                     partitionIndex = partitionIndex,
@@ -242,10 +294,11 @@ internal class CommandIngressService(
         }
     }
 
-    private fun processLogEntry(logEntry: KakaoDB.ChatLogEntry): DispatchOutcome {
+    private fun processLogEntry(dispatch: ChatLogDispatch): DispatchOutcome {
+        val logEntry = dispatch.logEntry
         observeNicknameChange(logEntry)
         val metadata = parseMetadata(logEntry) ?: return DispatchOutcome.COMPLETED
-        val decryptedMessage = decryptMessage(logEntry.message, metadata.enc, logEntry.userId)
+        val decryptedMessage = dispatch.decryptedMessage ?: decryptMessage(logEntry.message, metadata.enc, logEntry.userId)
         val parsedCommand = CommandParser.parse(decryptedMessage)
 
         logObservedEntry(logEntry, metadata.origin, parsedCommand)
@@ -262,7 +315,7 @@ internal class CommandIngressService(
             return DispatchOutcome.COMPLETED
         }
 
-        return routeCommand(logEntry, parsedCommand, metadata.enc)
+        return routeCommand(dispatch, parsedCommand, metadata.enc)
     }
 
     private fun observeNicknameChange(logEntry: KakaoDB.ChatLogEntry) {
@@ -402,6 +455,16 @@ internal class CommandIngressService(
             null
         }
 
+    private fun parseMetadataForBatch(logEntry: KakaoDB.ChatLogEntry): ParsedLogMetadata? =
+        runCatching {
+            JSONObject(logEntry.metadata)
+        }.map { metadata ->
+            ParsedLogMetadata(
+                enc = metadata.optInt("enc", 0),
+                origin = metadata.optString("origin"),
+            )
+        }.getOrNull()
+
     private fun decryptMessage(
         encryptedMessage: String,
         enc: Int,
@@ -418,6 +481,8 @@ internal class CommandIngressService(
             encryptedMessage
         }
     }
+
+    private fun shouldDecryptValue(value: String): Boolean = value.isNotEmpty() && value != "{}"
 
     private fun logObservedEntry(
         logEntry: KakaoDB.ChatLogEntry,
@@ -467,10 +532,11 @@ internal class CommandIngressService(
     }
 
     private fun routeCommand(
-        logEntry: KakaoDB.ChatLogEntry,
+        dispatch: ChatLogDispatch,
         parsedCommand: ParsedCommand,
         enc: Int,
     ): DispatchOutcome {
+        val logEntry = dispatch.logEntry
         val threadMetadata = resolveObservedThreadMetadata(logEntry, enc)
         val roomMetadata = roomMetadataResolver.resolve(logEntry.chatId)
         val senderRole =
@@ -496,7 +562,9 @@ internal class CommandIngressService(
                 threadId = threadMetadata?.threadId,
                 threadScope = threadMetadata?.threadScope,
                 messageType = logEntry.messageType?.trim()?.takeIf { it.isNotEmpty() },
-                attachment = logEntry.attachment?.takeIf { it.isNotBlank() }?.let { decryptMessage(it, enc, logEntry.userId) },
+                attachment =
+                    dispatch.decryptedAttachment
+                        ?: logEntry.attachment?.takeIf { it.isNotBlank() }?.let { decryptMessage(it, enc, logEntry.userId) },
                 senderRole = senderRole,
             )
 

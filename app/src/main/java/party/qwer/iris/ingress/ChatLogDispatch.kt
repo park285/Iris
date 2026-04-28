@@ -4,6 +4,8 @@ import party.qwer.iris.KakaoDB
 
 internal data class ChatLogDispatch(
     val logEntry: KakaoDB.ChatLogEntry,
+    val decryptedMessage: String? = null,
+    val decryptedAttachment: String? = null,
 ) {
     val logId: Long
         get() = logEntry.id

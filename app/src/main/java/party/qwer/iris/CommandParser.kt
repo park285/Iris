@@ -1,5 +1,7 @@
 package party.qwer.iris
 
+import party.qwer.iris.nativecore.NativeCoreHolder
+
 enum class CommandKind {
     NONE,
     COMMENT,
@@ -12,7 +14,12 @@ data class ParsedCommand(
 )
 
 object CommandParser {
-    fun parse(message: String): ParsedCommand {
+    fun parse(message: String): ParsedCommand =
+        NativeCoreHolder.current().parseCommandOrFallback(message) {
+            parseKotlin(message)
+        }
+
+    private fun parseKotlin(message: String): ParsedCommand {
         val normalizedText = message.trimStart()
         val kind =
             when {

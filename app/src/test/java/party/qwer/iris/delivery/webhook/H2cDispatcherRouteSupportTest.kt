@@ -4,8 +4,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import party.qwer.iris.CHATBOTGO_ROUTE
 import party.qwer.iris.CommandParser
 import party.qwer.iris.DEFAULT_COMMAND_ROUTE_PREFIXES
-import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
 import party.qwer.iris.DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES
+import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
 import party.qwer.iris.SETTLEMENT_ROUTE
 import kotlin.test.Test
 import kotlin.test.assertEquals

@@ -1,5 +1,8 @@
 package party.qwer.iris
 
+import party.qwer.iris.nativecore.NativeCoreHolder
+import party.qwer.iris.nativecore.NativeCoreJniBridge
+import party.qwer.iris.nativecore.NativeCoreRuntime
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -55,5 +58,60 @@ class ChatLogDecryptorTest {
         val result = decryptRow(row, noopConfig)
 
         assertEquals(row, result)
+    }
+
+    @Test
+    fun `message and attachment fields decrypt through one native batch`() {
+        val jni = FakeNativeCoreJni(listOf("plain-message", "plain-attachment"))
+        val runtime =
+            NativeCoreRuntime.create(
+                env = mapOf("IRIS_NATIVE_CORE" to "on"),
+                loader = {},
+                jni = jni,
+            )
+        val row =
+            mapOf(
+                "v" to """{"enc":0}""",
+                "user_id" to "123",
+                "message" to "encrypted-message",
+                "attachment" to "encrypted-attachment",
+            )
+
+        try {
+            NativeCoreHolder.install(runtime)
+
+            val result = decryptRow(row, noopConfig)
+
+            assertEquals("plain-message", result["message"])
+            assertEquals("plain-attachment", result["attachment"])
+            assertEquals(1, jni.decryptCalls)
+            val decryptStats =
+                runtime
+                    .diagnostics()
+                    .componentStats
+                    .getValue("decrypt")
+            assertEquals(1L, decryptStats.jniCalls)
+            assertEquals(2L, decryptStats.items)
+        } finally {
+            NativeCoreHolder.resetForTest()
+        }
+    }
+
+    private class FakeNativeCoreJni(
+        private val decryptResults: List<String>,
+    ) : NativeCoreJniBridge {
+        var decryptCalls = 0
+            private set
+
+        override fun nativeSelfTest(): String = "iris-native-core:test"
+
+        override fun decryptBatch(requestJsonBytes: ByteArray): ByteArray {
+            decryptCalls += 1
+            val items =
+                decryptResults.joinToString(separator = ",") { result ->
+                    """{"ok":true,"plaintext":"$result"}"""
+                }
+            return """{"items":[$items]}""".encodeToByteArray()
+        }
     }
 }

@@ -1,6 +1,7 @@
 package party.qwer.iris
 
 import party.qwer.iris.nativecore.NativeCoreHolder
+import party.qwer.iris.nativecore.NativeDecryptBatchItem
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.Arrays
@@ -325,14 +326,25 @@ class KakaoDecrypt {
             encType: Int,
             b64_ciphertext: String,
             user_id: Long,
-        ): String =
-            NativeCoreHolder.current().decryptOrFallback(
-                encType = encType,
-                ciphertext = b64_ciphertext,
-                userId = user_id,
-            ) {
-                decryptKotlin(encType, b64_ciphertext, user_id)
-            }
+        ): String = decryptBatch(listOf(KakaoDecryptBatchItem(encType, b64_ciphertext, user_id))).single()
+
+        @Throws(Exception::class)
+        internal fun decryptBatch(items: List<KakaoDecryptBatchItem>): List<String> =
+            NativeCoreHolder.current().decryptBatchOrFallback(
+                items =
+                    items.map { item ->
+                        NativeDecryptBatchItem(
+                            encType = item.encType,
+                            ciphertext = item.b64Ciphertext,
+                            userId = item.userId,
+                        )
+                    },
+                kotlinDecryptBatch = {
+                    items.map { item ->
+                        decryptKotlin(item.encType, item.b64Ciphertext, item.userId)
+                    }
+                },
+            )
 
         @Throws(Exception::class)
         private fun decryptKotlin(
@@ -376,3 +388,9 @@ class KakaoDecrypt {
         }
     }
 }
+
+internal data class KakaoDecryptBatchItem(
+    val encType: Int,
+    val b64Ciphertext: String,
+    val userId: Long,
+)

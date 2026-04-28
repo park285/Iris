@@ -79,6 +79,31 @@ private fun decryptRowValues(
     botId: Long,
     keysToDecrypt: Array<String>,
 ): MutableMap<String, String?> {
+    val candidates =
+        keysToDecrypt.mapNotNull { key ->
+            if (!row.containsKey(key)) return@mapNotNull null
+            val encryptedValue = row[key] ?: return@mapNotNull null
+            if (encryptedValue == "{}" || encryptedValue == "[]") return@mapNotNull null
+            key to encryptedValue
+        }
+    if (candidates.isEmpty()) return row
+
+    val batchResult =
+        runCatching {
+            KakaoDecrypt.decryptBatch(
+                candidates.map { (_, encryptedValue) ->
+                    KakaoDecryptBatchItem(enc, encryptedValue, botId)
+                },
+            )
+        }.getOrNull()
+
+    if (batchResult != null && batchResult.size == candidates.size) {
+        candidates.zip(batchResult).forEach { (candidate, decryptedValue) ->
+            row[candidate.first] = decryptedValue
+        }
+        return row
+    }
+
     for (key in keysToDecrypt) {
         if (!row.containsKey(key)) continue
         val encryptedValue = row[key] ?: continue

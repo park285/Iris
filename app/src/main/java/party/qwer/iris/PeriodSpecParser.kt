@@ -1,11 +1,17 @@
 package party.qwer.iris
 
 import party.qwer.iris.model.PeriodSpec
+import party.qwer.iris.nativecore.NativeCoreHolder
 
 internal class PeriodSpecParser(
     private val defaultDays: Long = 7L,
 ) {
     fun parse(period: String?): PeriodSpec =
+        NativeCoreHolder.current().parsePeriodSpecOrFallback(period, defaultDays) {
+            parseKotlin(period)
+        }
+
+    private fun parseKotlin(period: String?): PeriodSpec =
         when {
             period == "all" -> PeriodSpec.All
             period != null && period.endsWith("d") ->

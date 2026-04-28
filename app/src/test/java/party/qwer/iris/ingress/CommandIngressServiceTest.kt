@@ -16,6 +16,9 @@ import party.qwer.iris.delivery.webhook.RoutingCommand
 import party.qwer.iris.delivery.webhook.RoutingGateway
 import party.qwer.iris.delivery.webhook.RoutingResult
 import party.qwer.iris.model.RoomEventRecord
+import party.qwer.iris.nativecore.NativeCoreHolder
+import party.qwer.iris.nativecore.NativeCoreJniBridge
+import party.qwer.iris.nativecore.NativeCoreRuntime
 import party.qwer.iris.persistence.BatchedCheckpointJournal
 import party.qwer.iris.persistence.CheckpointJournal
 import party.qwer.iris.persistence.InMemoryMemberIdentityStateStore
@@ -186,6 +189,66 @@ class CommandIngressServiceTest {
         assertEquals(listOf("chat_logs" to 11L), journal.advanceCalls)
         runBlocking { ingress.closeSuspend() }
     }
+
+    @Test
+    fun `checkChange batch decrypts polled message fields before dispatch`() =
+        runTest {
+            val jni = FakeNativeCoreJni(listOf("!first", "not command", "plain-attachment"))
+            val runtime =
+                NativeCoreRuntime.create(
+                    env = mapOf("IRIS_NATIVE_CORE" to "on"),
+                    loader = {},
+                    jni = jni,
+                )
+            val gateway = FakeRoutingGateway()
+            val ingress =
+                CommandIngressService(
+                    db =
+                        FakeChatLogRepository(
+                            latestLogId = 10L,
+                            polledLogs =
+                                listOf(
+                                    webhookChatLogEntry(id = 11L, chatId = 100L, message = "encrypted-first"),
+                                    webhookChatLogEntry(
+                                        id = 12L,
+                                        chatId = 100L,
+                                        message = "encrypted-image",
+                                    ).copy(
+                                        messageType = "2",
+                                        attachment = "encrypted-attachment",
+                                    ),
+                                ),
+                        ),
+                    config = config,
+                    checkpointJournal = FakeCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
+                    routingGateway = gateway,
+                    dispatchDispatcher = StandardTestDispatcher(testScheduler),
+                    onMarkDirty = {},
+                )
+
+            try {
+                NativeCoreHolder.install(runtime)
+
+                ingress.checkChange()
+                ingress.checkChange()
+                runCurrent()
+
+                assertEquals(1, jni.decryptCalls)
+                assertEquals(3, jni.lastDecryptItemCount)
+                assertEquals(listOf("!first", "not command"), gateway.commands.map { it.text })
+                assertEquals("plain-attachment", gateway.commands[1].attachment)
+                val decryptStats =
+                    runtime
+                        .diagnostics()
+                        .componentStats
+                        .getValue("decrypt")
+                assertEquals(1L, decryptStats.jniCalls)
+                assertEquals(3L, decryptStats.items)
+            } finally {
+                ingress.closeSuspend()
+                NativeCoreHolder.resetForTest()
+            }
+        }
 
     @Test
     fun `non command message can emit nickname change from ingress`() =
@@ -1119,6 +1182,27 @@ private class FakeRoutingGateway(
     }
 
     override fun close() {}
+}
+
+private class FakeNativeCoreJni(
+    private val decryptResults: List<String>,
+) : NativeCoreJniBridge {
+    var decryptCalls = 0
+        private set
+    var lastDecryptItemCount = 0
+        private set
+
+    override fun nativeSelfTest(): String = "iris-native-core:test"
+
+    override fun decryptBatch(requestJsonBytes: ByteArray): ByteArray {
+        decryptCalls++
+        lastDecryptItemCount = Regex(""""encType"""").findAll(requestJsonBytes.decodeToString()).count()
+        val items =
+            decryptResults.joinToString(separator = ",") { result ->
+                """{"ok":true,"plaintext":"$result"}"""
+            }
+        return """{"items":[$items]}""".encodeToByteArray()
+    }
 }
 
 private fun webhookChatLogEntry(

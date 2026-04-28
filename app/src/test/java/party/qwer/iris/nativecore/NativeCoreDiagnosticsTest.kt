@@ -1,5 +1,10 @@
 package party.qwer.iris.nativecore
 
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -68,6 +73,89 @@ class NativeCoreDiagnosticsTest {
             )
 
         assertNull(diagnostics.readinessFailureReason())
+    }
+
+    @Test
+    fun `component on mode blocks readiness when native core is unavailable`() {
+        val diagnostics =
+            NativeCoreDiagnostics(
+                mode = "shadow",
+                loaded = false,
+                libraryPath = "/data/iris/lib/libiris_native_core.so",
+                selfTestOk = false,
+                componentStats =
+                    mapOf(
+                        "routing" to NativeCoreComponentDiagnostics(mode = "on"),
+                        "decrypt" to NativeCoreComponentDiagnostics(mode = "shadow"),
+                    ),
+            )
+
+        assertEquals("native core not loaded", diagnostics.readinessFailureReason())
+    }
+
+    @Test
+    fun `component stats serialize additively with counters and last error`() {
+        val diagnostics =
+            NativeCoreDiagnostics(
+                mode = "on",
+                loaded = true,
+                libraryPath = "/data/iris/lib/libiris_native_core.so",
+                version = "iris-native-core:test",
+                enabledComponents = listOf("decrypt"),
+                selfTestOk = true,
+                callFailures = 1,
+                shadowMismatches = mapOf("decrypt" to 2),
+                componentStats =
+                    mapOf(
+                        "decrypt" to
+                            NativeCoreComponentDiagnostics(
+                                mode = "on",
+                                jniCalls = 3,
+                                items = 7,
+                                fallbacks = 4,
+                                shadowMismatches = 2,
+                                fallbacksByKey = mapOf("roomTitle" to 1),
+                                shadowMismatchesByKey = mapOf("periodSpec" to 2),
+                                lastError = "native decrypt failed",
+                            ),
+                    ),
+            )
+
+        val json = Json.encodeToString(diagnostics)
+        val root = Json.parseToJsonElement(json).jsonObject
+        val decryptStats =
+            root
+                .getValue("componentStats")
+                .jsonObject
+                .getValue("decrypt")
+                .jsonObject
+
+        assertEquals("on", decryptStats.getValue("mode").jsonPrimitive.content)
+        assertEquals(3L, decryptStats.getValue("jniCalls").jsonPrimitive.long)
+        assertEquals(7L, decryptStats.getValue("items").jsonPrimitive.long)
+        assertEquals(4L, decryptStats.getValue("fallbacks").jsonPrimitive.long)
+        assertEquals(2L, decryptStats.getValue("shadowMismatches").jsonPrimitive.long)
+        assertEquals(
+            1L,
+            decryptStats
+                .getValue("fallbacksByKey")
+                .jsonObject
+                .getValue("roomTitle")
+                .jsonPrimitive
+                .long,
+        )
+        assertEquals(
+            2L,
+            decryptStats
+                .getValue("shadowMismatchesByKey")
+                .jsonObject
+                .getValue("periodSpec")
+                .jsonPrimitive
+                .long,
+        )
+        assertEquals("native decrypt failed", decryptStats.getValue("lastError").jsonPrimitive.content)
+        assertEquals("on", root.getValue("mode").jsonPrimitive.content)
+        assertEquals(1L, root.getValue("callFailures").jsonPrimitive.long)
     }
 
     @Test

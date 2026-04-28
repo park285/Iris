@@ -2,8 +2,18 @@ package party.qwer.iris.delivery.webhook
 
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import party.qwer.iris.nativecore.NativeCoreHolder
 
 internal fun buildWebhookPayload(
+    command: RoutingCommand,
+    route: String,
+    messageId: String,
+): String =
+    NativeCoreHolder.current().buildWebhookPayloadOrFallback(command, route, messageId) {
+        buildWebhookPayloadKotlin(command, route, messageId)
+    }
+
+private fun buildWebhookPayloadKotlin(
     command: RoutingCommand,
     route: String,
     messageId: String,

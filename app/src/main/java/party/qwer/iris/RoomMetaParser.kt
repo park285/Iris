@@ -8,11 +8,17 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import party.qwer.iris.model.NoticeInfo
+import party.qwer.iris.nativecore.NativeCoreHolder
 
 internal class RoomMetaParser(
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) {
-    fun parseRoomTitle(meta: String?): String? {
+    fun parseRoomTitle(meta: String?): String? =
+        NativeCoreHolder.current().parseRoomTitleOrFallback(meta) {
+            parseRoomTitleKotlin(meta)
+        }
+
+    private fun parseRoomTitleKotlin(meta: String?): String? {
         if (meta.isNullOrBlank()) return null
         return try {
             val element = json.parseToJsonElement(meta)
@@ -34,7 +40,12 @@ internal class RoomMetaParser(
         }
     }
 
-    fun parseNotices(meta: String?): List<NoticeInfo> {
+    fun parseNotices(meta: String?): List<NoticeInfo> =
+        NativeCoreHolder.current().parseNoticesOrFallback(meta) {
+            parseNoticesKotlin(meta)
+        }
+
+    private fun parseNoticesKotlin(meta: String?): List<NoticeInfo> {
         if (meta.isNullOrBlank()) return emptyList()
         return try {
             val obj = json.parseToJsonElement(meta).jsonObject

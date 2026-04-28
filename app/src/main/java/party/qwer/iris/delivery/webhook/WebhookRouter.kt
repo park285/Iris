@@ -5,6 +5,7 @@ import party.qwer.iris.CommandKind
 import party.qwer.iris.CommandParser
 import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
 import party.qwer.iris.ParsedCommand
+import party.qwer.iris.nativecore.NativeCoreHolder
 
 internal fun resolveWebhookRoute(commandText: String): String? = resolveWebhookRoute(CommandParser.parse(commandText))
 
@@ -17,6 +18,17 @@ private val chatbotgoEventTypes =
     )
 
 internal fun resolveWebhookRoute(
+    parsedCommand: ParsedCommand,
+    config: party.qwer.iris.ConfigProvider?,
+): String? =
+    NativeCoreHolder.current().resolveWebhookRouteOrFallback(
+        parsedCommand = parsedCommand,
+        commandRoutePrefixes = config?.commandRoutePrefixes().orEmpty(),
+    ) {
+        resolveWebhookRouteKotlin(parsedCommand, config)
+    }
+
+private fun resolveWebhookRouteKotlin(
     parsedCommand: ParsedCommand,
     config: party.qwer.iris.ConfigProvider?,
 ): String? {
@@ -39,7 +51,12 @@ internal fun resolveWebhookRoute(
         }?.key ?: DEFAULT_WEBHOOK_ROUTE
 }
 
-internal fun resolveEventRoute(messageType: String?): String? {
+internal fun resolveEventRoute(messageType: String?): String? =
+    NativeCoreHolder.current().resolveEventRouteOrFallback(messageType) {
+        resolveEventRouteKotlin(messageType)
+    }
+
+private fun resolveEventRouteKotlin(messageType: String?): String? {
     val normalizedType = messageType?.trim().orEmpty()
     if (normalizedType.isEmpty()) return null
 
@@ -53,6 +70,17 @@ internal fun resolveEventRoute(messageType: String?): String? {
 internal fun resolveImageRoute(messageType: String?): String? = resolveImageRoute(messageType, null)
 
 internal fun resolveImageRoute(
+    messageType: String?,
+    config: party.qwer.iris.ConfigProvider?,
+): String? =
+    NativeCoreHolder.current().resolveImageRouteOrFallback(
+        messageType = messageType,
+        imageMessageTypeRoutes = config?.imageMessageTypeRoutes().orEmpty(),
+    ) {
+        resolveImageRouteKotlin(messageType, config)
+    }
+
+private fun resolveImageRouteKotlin(
     messageType: String?,
     config: party.qwer.iris.ConfigProvider?,
 ): String? {

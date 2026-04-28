@@ -40,6 +40,40 @@ class ProguardSerializableGuardTest {
         }
     }
 
+    @Test
+    fun `native core behavior files do not own DTO declarations`() {
+        val appMainDir = findAppMainDir() ?: return
+        val nativeCoreDir = appMainDir.resolve("party/qwer/iris/nativecore")
+        if (!nativeCoreDir.isDirectory) return
+
+        val allowedDeclarationFiles =
+            setOf(
+                "NativeCoreConfigModels.kt",
+                "NativeCoreDiagnostics.kt",
+                "NativeDecryptModels.kt",
+                "NativeParserModels.kt",
+                "NativeRoutingModels.kt",
+                "NativeWebhookModels.kt",
+            )
+        val violations =
+            nativeCoreDir
+                .walkTopDown()
+                .filter { it.isFile && it.extension == "kt" && it.name !in allowedDeclarationFiles }
+                .flatMap { file ->
+                    Regex("""\bdata\s+class\s+(\w+)""")
+                        .findAll(file.readText())
+                        .map { match -> file.name to match.groupValues[1] }
+                        .asIterable()
+                }.toList()
+
+        if (violations.isNotEmpty()) {
+            fail(
+                "Native core behavior files should keep DTO/model declarations in dedicated model/config files:\n" +
+                    violations.joinToString("\n") { (fileName, className) -> "  - $fileName::$className" },
+            )
+        }
+    }
+
     private fun findAppMainDir(): File? {
         val candidates =
             listOf(
