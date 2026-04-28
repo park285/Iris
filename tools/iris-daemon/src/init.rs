@@ -3,6 +3,7 @@ use crate::config::DaemonConfig;
 use crate::config_sync;
 use crate::process;
 use anyhow::{Result, bail};
+use clap::ValueEnum;
 use std::time::Duration;
 
 const PHANTOM_KILLER_COMMANDS: [&str; 2] = [
@@ -10,22 +11,43 @@ const PHANTOM_KILLER_COMMANDS: [&str; 2] = [
     "setprop persist.sys.fflag.override.settings_enable_monitor_phantom_procs false",
 ];
 
-pub async fn run_init(cfg: &DaemonConfig) -> Result<()> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum InitMode {
+    ForceRestart,
+    IfMissing,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeAction {
+    Restart,
+    Start,
+    LeaveRunning,
+}
+
+pub async fn run_init(cfg: &DaemonConfig, mode: InitMode) -> Result<()> {
     let adb = Adb::new(&cfg.adb.device);
-    tracing::info!(device = %cfg.adb.device, "init 시작");
+    tracing::info!(device = %cfg.adb.device, mode = ?mode, "init 시작");
 
     prepare_device(&adb, cfg).await?;
-    config_sync::render_and_push(&adb, cfg).await?;
-    config_sync::sync_apk_if_needed(&adb, cfg, true).await?;
-    maybe_sync_native_lib(&adb, cfg).await?;
-    ensure_runtime_ready(&adb, cfg).await?;
+    let iris_running = process::iris_pid(&adb).await.is_some();
+    sync_runtime_inputs(&adb, cfg, strict_source_for(mode, iris_running)).await?;
+    let iris_running = refresh_iris_running_for_action(&adb, mode, iris_running).await;
+    ensure_runtime_ready(&adb, cfg, runtime_action_for(mode, iris_running)).await?;
 
     tracing::info!("init 완료");
     Ok(())
 }
 
-async fn maybe_sync_native_lib(adb: &Adb, cfg: &DaemonConfig) -> Result<()> {
-    if let Some(strict_source) = native_init_sync_decision_from_env() {
+async fn sync_runtime_inputs(adb: &Adb, cfg: &DaemonConfig, strict_source: bool) -> Result<()> {
+    config_sync::render_and_push(adb, cfg).await?;
+    config_sync::sync_apk_if_needed(adb, cfg, strict_source).await?;
+    maybe_sync_native_lib(adb, cfg, strict_source).await
+}
+
+async fn maybe_sync_native_lib(adb: &Adb, cfg: &DaemonConfig, strict_source: bool) -> Result<()> {
+    if let Some(native_strict_source) = native_init_sync_decision_from_env() {
+        let strict_source = strict_source && native_strict_source;
         config_sync::sync_native_lib_if_needed(adb, cfg, strict_source).await?;
     }
     Ok(())
@@ -55,9 +77,44 @@ async fn prepare_device(adb: &Adb, cfg: &DaemonConfig) -> Result<()> {
     Ok(())
 }
 
-async fn ensure_runtime_ready(adb: &Adb, cfg: &DaemonConfig) -> Result<()> {
+const fn runtime_action_for(mode: InitMode, iris_running: bool) -> RuntimeAction {
+    match (mode, iris_running) {
+        (InitMode::ForceRestart, _) => RuntimeAction::Restart,
+        (InitMode::IfMissing, true) => RuntimeAction::LeaveRunning,
+        (InitMode::IfMissing, false) => RuntimeAction::Start,
+    }
+}
+
+const fn strict_source_for(mode: InitMode, iris_running: bool) -> bool {
+    match mode {
+        InitMode::ForceRestart => true,
+        InitMode::IfMissing => !iris_running,
+    }
+}
+
+async fn refresh_iris_running_for_action(
+    adb: &Adb,
+    mode: InitMode,
+    iris_running_before_sync: bool,
+) -> bool {
+    match mode {
+        InitMode::ForceRestart => iris_running_before_sync,
+        InitMode::IfMissing => process::iris_pid(adb).await.is_some(),
+    }
+}
+
+async fn ensure_runtime_ready(adb: &Adb, cfg: &DaemonConfig, action: RuntimeAction) -> Result<()> {
     warn_if_kakaotalk_not_running(adb).await;
-    restart_iris_process(adb, cfg).await
+    match action {
+        RuntimeAction::Restart => restart_iris_process(adb, cfg).await,
+        RuntimeAction::Start => start_iris_process(adb, cfg).await,
+        RuntimeAction::LeaveRunning => {
+            tracing::info!(
+                "Iris 프로세스 실행 중 — if-missing init은 재시작 없이 준비 단계만 수행"
+            );
+            Ok(())
+        }
+    }
 }
 
 async fn connect_adb(adb: &Adb) -> Result<()> {
@@ -80,6 +137,10 @@ async fn warn_if_kakaotalk_not_running(adb: &Adb) {
 
 async fn restart_iris_process(adb: &Adb, cfg: &DaemonConfig) -> Result<()> {
     process::stop_iris(adb).await?;
+    process::start_iris(adb, cfg).await
+}
+
+async fn start_iris_process(adb: &Adb, cfg: &DaemonConfig) -> Result<()> {
     process::start_iris(adb, cfg).await
 }
 
@@ -141,5 +202,33 @@ mod tests {
         for (raw, expected) in cases {
             assert_eq!(native_init_sync_decision_from_env_value(raw), expected);
         }
+    }
+
+    #[test]
+    fn init_mode_force_restart_preserves_restart_and_strict_source_behavior() {
+        assert_eq!(
+            runtime_action_for(InitMode::ForceRestart, true),
+            RuntimeAction::Restart
+        );
+        assert_eq!(
+            runtime_action_for(InitMode::ForceRestart, false),
+            RuntimeAction::Restart
+        );
+        assert!(strict_source_for(InitMode::ForceRestart, true));
+        assert!(strict_source_for(InitMode::ForceRestart, false));
+    }
+
+    #[test]
+    fn init_mode_if_missing_leaves_running_process_alive_but_starts_when_absent() {
+        assert_eq!(
+            runtime_action_for(InitMode::IfMissing, true),
+            RuntimeAction::LeaveRunning
+        );
+        assert_eq!(
+            runtime_action_for(InitMode::IfMissing, false),
+            RuntimeAction::Start
+        );
+        assert!(!strict_source_for(InitMode::IfMissing, true));
+        assert!(strict_source_for(InitMode::IfMissing, false));
     }
 }
