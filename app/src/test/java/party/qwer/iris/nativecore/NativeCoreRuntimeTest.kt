@@ -94,6 +94,44 @@ class NativeCoreRuntimeTest {
     }
 
     @Test
+    fun `on mode self test error result exposes no enabled components and skips native decrypt`() {
+        val jni = FakeJni(selfTestResult = "error:panic in native core", decryptResult = "rust-result")
+        val runtime =
+            NativeCoreRuntime.create(
+                env = mapOf("IRIS_NATIVE_CORE" to "on"),
+                loader = {},
+                jni = jni,
+            )
+
+        val result = runtime.decryptOrFallback(encType = 0, ciphertext = "cipher", userId = 1L) { "kotlin-result" }
+        val diagnostics = runtime.diagnostics()
+
+        assertEquals(emptyList(), diagnostics.enabledComponents)
+        assertEquals("kotlin-result", result)
+        assertNull(jni.lastDecryptRequest)
+        assertEquals(0L, diagnostics.callFailures)
+    }
+
+    @Test
+    fun `shadow mode self test error result skips native shadow decrypt`() {
+        val jni = FakeJni(selfTestResult = "error:panic in native core", decryptResult = "rust-result")
+        val runtime =
+            NativeCoreRuntime.create(
+                env = mapOf("IRIS_NATIVE_CORE" to "shadow"),
+                loader = {},
+                jni = jni,
+            )
+
+        val result = runtime.decryptOrFallback(encType = 0, ciphertext = "cipher", userId = 1L) { "kotlin-result" }
+        val diagnostics = runtime.diagnostics()
+
+        assertEquals("kotlin-result", result)
+        assertNull(jni.lastDecryptRequest)
+        assertEquals(0L, diagnostics.callFailures)
+        assertEquals(0L, diagnostics.shadowMismatches["decrypt"])
+    }
+
+    @Test
     fun `decrypt sends request json with encType ciphertext and userId`() {
         val jni = FakeJni()
         val runtime =

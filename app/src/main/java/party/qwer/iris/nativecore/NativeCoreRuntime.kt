@@ -20,6 +20,8 @@ internal class NativeCoreRuntime private constructor(
     private val callFailures = AtomicLong(0)
     private val decryptMismatches = AtomicLong(0)
     private val lastErrorRef = AtomicReference(loadError)
+    private val nativeUsable: Boolean
+        get() = loaded && selfTestResult != null
 
     fun diagnostics(): NativeCoreDiagnostics =
         NativeCoreDiagnostics(
@@ -27,8 +29,8 @@ internal class NativeCoreRuntime private constructor(
             loaded = loaded,
             libraryPath = config.libraryPath,
             version = selfTestResult,
-            enabledComponents = if (config.mode == NativeCoreMode.ON && loaded) listOf("decrypt") else emptyList(),
-            selfTestOk = loaded && selfTestResult != null,
+            enabledComponents = if (config.mode == NativeCoreMode.ON && nativeUsable) listOf("decrypt") else emptyList(),
+            selfTestOk = nativeUsable,
             callFailures = callFailures.get(),
             shadowMismatches = mapOf("decrypt" to decryptMismatches.get()),
             lastError = lastErrorRef.get(),
@@ -40,7 +42,7 @@ internal class NativeCoreRuntime private constructor(
         userId: Long,
         kotlinDecrypt: () -> String,
     ): String {
-        if (!loaded || config.mode == NativeCoreMode.OFF) {
+        if (!nativeUsable || config.mode == NativeCoreMode.OFF) {
             return kotlinDecrypt()
         }
         return when (config.mode) {
