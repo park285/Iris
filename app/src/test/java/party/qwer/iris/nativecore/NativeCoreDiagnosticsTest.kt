@@ -72,7 +72,10 @@ class NativeCoreDiagnosticsTest {
 
     @Test
     fun `diagnostics carries no secret fields`() {
-        val propertyNames = NativeCoreDiagnostics::class.java.declaredFields.map { it.name }.toSet()
+        val propertyNames =
+            NativeCoreDiagnostics::class.java.declaredFields
+                .map { it.name }
+                .toSet()
 
         assertFalse("token" in propertyNames)
         assertFalse("secret" in propertyNames)
