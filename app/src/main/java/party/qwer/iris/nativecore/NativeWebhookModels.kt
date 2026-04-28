@@ -41,5 +41,6 @@ internal data class NativeWebhookPayloadBatchResponse(
 internal data class NativeWebhookPayloadBatchResult(
     val ok: Boolean,
     val payloadJson: String? = null,
+    val errorKind: String? = null,
     val error: String? = null,
 )

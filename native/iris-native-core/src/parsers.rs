@@ -50,6 +50,8 @@ enum ParserBatchResult {
     RoomTitle {
         ok: bool,
         fallback: bool,
+        #[serde(rename = "usedDefault")]
+        used_default: bool,
         #[serde(rename = "roomTitle")]
         room_title: Option<String>,
         error: Option<String>,
@@ -58,6 +60,8 @@ enum ParserBatchResult {
     Notices {
         ok: bool,
         fallback: bool,
+        #[serde(rename = "usedDefault")]
+        used_default: bool,
         notices: Vec<NoticeInfo>,
         error: Option<String>,
     },
@@ -65,6 +69,8 @@ enum ParserBatchResult {
     IdArray {
         ok: bool,
         fallback: bool,
+        #[serde(rename = "usedDefault")]
+        used_default: bool,
         ids: Vec<i64>,
         error: Option<String>,
     },
@@ -72,6 +78,8 @@ enum ParserBatchResult {
     PeriodSpec {
         ok: bool,
         fallback: bool,
+        #[serde(rename = "usedDefault")]
+        used_default: bool,
         #[serde(rename = "periodSpec")]
         period_spec: PeriodSpecInfo,
         error: Option<String>,
@@ -118,6 +126,7 @@ fn parse_item(item: ParserBatchItem) -> ParserBatchResult {
             ParserBatchResult::RoomTitle {
                 ok: true,
                 fallback,
+                used_default: false,
                 room_title,
                 error: None,
             }
@@ -127,6 +136,7 @@ fn parse_item(item: ParserBatchItem) -> ParserBatchResult {
             ParserBatchResult::Notices {
                 ok: true,
                 fallback,
+                used_default: false,
                 notices,
                 error: None,
             }
@@ -136,6 +146,7 @@ fn parse_item(item: ParserBatchItem) -> ParserBatchResult {
             ParserBatchResult::IdArray {
                 ok: true,
                 fallback,
+                used_default: false,
                 ids,
                 error: None,
             }
@@ -147,10 +158,11 @@ fn parse_item(item: ParserBatchItem) -> ParserBatchResult {
             let default_days = default_days
                 .filter(|days| *days > 0)
                 .unwrap_or(DEFAULT_PERIOD_DAYS);
-            let (period_spec, fallback) = parse_period_spec(period.as_deref(), default_days);
+            let (period_spec, used_default) = parse_period_spec(period.as_deref(), default_days);
             ParserBatchResult::PeriodSpec {
                 ok: true,
-                fallback,
+                fallback: false,
+                used_default,
                 period_spec,
                 error: None,
             }
@@ -442,7 +454,7 @@ mod tests {
     }
 
     #[test]
-    fn parsers_batch_parses_period_spec_and_default_fallbacks() {
+    fn parsers_batch_parses_period_spec_and_defaults_without_fallback_required() {
         let request = br#"{
             "items": [
                 {"kind":"periodSpec","period":"all"},
@@ -463,13 +475,16 @@ mod tests {
             14 * SECONDS_PER_DAY
         );
         assert_eq!(response["items"][1]["fallback"], false);
+        assert_eq!(response["items"][1]["usedDefault"], false);
         assert_eq!(response["items"][2]["periodSpec"]["days"], 3);
-        assert_eq!(response["items"][2]["fallback"], true);
+        assert_eq!(response["items"][2]["fallback"], false);
+        assert_eq!(response["items"][2]["usedDefault"], true);
         assert_eq!(
             response["items"][3]["periodSpec"]["days"],
             DEFAULT_PERIOD_DAYS
         );
-        assert_eq!(response["items"][3]["fallback"], true);
+        assert_eq!(response["items"][3]["fallback"], false);
+        assert_eq!(response["items"][3]["usedDefault"], true);
     }
 
     #[test]

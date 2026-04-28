@@ -157,6 +157,8 @@ struct DecryptBatchResponse {
 struct DecryptBatchResult {
     ok: bool,
     plaintext: Option<String>,
+    #[serde(rename = "errorKind")]
+    error_kind: Option<&'static str>,
     error: Option<String>,
 }
 
@@ -172,11 +174,13 @@ pub fn decrypt_batch_json(request_bytes: &[u8]) -> NativeCoreResult<Vec<u8>> {
                     Ok(plaintext) => DecryptBatchResult {
                         ok: true,
                         plaintext: Some(plaintext),
+                        error_kind: None,
                         error: None,
                     },
                     Err(error) => DecryptBatchResult {
                         ok: false,
                         plaintext: None,
+                        error_kind: Some(error.kind()),
                         error: Some(error.to_string()),
                     },
                 },
@@ -493,6 +497,7 @@ mod tests {
         let response: serde_json::Value = serde_json::from_slice(&raw).expect("json response");
 
         assert_eq!(response["items"][0]["ok"], false);
+        assert_eq!(response["items"][0]["errorKind"], "decrypt");
         assert!(
             response["items"][0]["error"]
                 .as_str()

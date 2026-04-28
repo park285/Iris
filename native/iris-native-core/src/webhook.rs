@@ -25,6 +25,8 @@ struct WebhookPayloadBatchResult {
     ok: bool,
     #[serde(rename = "payloadJson")]
     payload_json: Option<String>,
+    #[serde(rename = "errorKind")]
+    error_kind: Option<&'static str>,
     error: Option<String>,
 }
 
@@ -40,11 +42,13 @@ pub fn webhook_payload_batch_json(request_bytes: &[u8]) -> NativeCoreResult<Vec<
                     Ok(payload_json) => WebhookPayloadBatchResult {
                         ok: true,
                         payload_json: Some(payload_json),
+                        error_kind: None,
                         error: None,
                     },
                     Err(error) => WebhookPayloadBatchResult {
                         ok: false,
                         payload_json: None,
+                        error_kind: Some(error.kind()),
                         error: Some(error.to_string()),
                     },
                 },

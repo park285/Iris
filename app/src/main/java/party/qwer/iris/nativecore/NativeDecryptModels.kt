@@ -29,5 +29,7 @@ internal data class DecryptBatchResponse(
 internal data class DecryptBatchResult(
     val ok: Boolean,
     val plaintext: String? = null,
+    val errorKind: String? = null,
+    val recoverable: Boolean? = null,
     val error: String? = null,
 )

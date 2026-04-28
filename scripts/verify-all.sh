@@ -61,6 +61,7 @@ run_step "Rust deny" cargo deny --manifest-path "$repo_root/tools/Cargo.toml" ch
 run_step "Rust miri" env MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test --manifest-path "$repo_root/tools/Cargo.toml" --workspace
 
 run_step "Bridge architecture guardrails" "$repo_root/scripts/check-bridge-boundaries.sh"
+run_step "Native core architecture guardrails" "$repo_root/scripts/check-native-core-boundaries.sh"
 
 run_step "Shell integration tests" run_shell_integration_tests
 

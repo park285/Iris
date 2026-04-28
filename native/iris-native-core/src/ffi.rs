@@ -1,5 +1,5 @@
-use crate::VERSION;
 use crate::errors::{NativeCoreError, NativeCoreResult};
+use crate::native_core_identity;
 use jni::JNIEnv;
 use jni::objects::{JByteArray, JObject, JString};
 use jni::sys::{jbyteArray, jstring};
@@ -16,7 +16,7 @@ pub extern "system" fn Java_party_qwer_iris_nativecore_NativeCoreJni_nativeSelfT
     _receiver: JObject<'_>,
 ) -> jstring {
     let value =
-        recover(|| Ok(VERSION.to_string())).unwrap_or_else(|error| format!("error:{error}"));
+        recover(|| Ok(native_core_identity())).unwrap_or_else(|error| format!("error:{error}"));
     env.new_string(value)
         .map_or(std::ptr::null_mut(), JString::into_raw)
 }
@@ -98,6 +98,7 @@ fn fallback_error_response(error: &NativeCoreError) -> Vec<u8> {
         "items": [
             {
                 "ok": false,
+                "errorKind": error.kind(),
                 "error": error.to_string(),
             },
         ],
@@ -122,6 +123,7 @@ mod tests {
             response["items"][0]["error"],
             "jni error: bad \"quote\" \\ slash\nline"
         );
+        assert_eq!(response["items"][0]["errorKind"], "jniError");
     }
 
     #[test]
@@ -130,6 +132,7 @@ mod tests {
 
         let response: Value = serde_json::from_slice(&response).expect("fallback should be json");
         assert_eq!(response["items"][0]["ok"], false);
+        assert_eq!(response["items"][0]["errorKind"], "panic");
         assert_eq!(response["items"][0]["error"], "panic in native core");
     }
 }

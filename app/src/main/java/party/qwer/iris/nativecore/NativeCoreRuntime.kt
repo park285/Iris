@@ -77,7 +77,11 @@ internal class NativeCoreRuntime private constructor(
     ): List<String> {
         if (items.isEmpty()) return emptyList()
         val mode = config.effectiveMode(NativeCoreComponent.DECRYPT)
-        if (!nativeUsable || mode == NativeCoreMode.OFF) {
+        if (!nativeUsable) {
+            recordNativeUnavailableFallback(NativeCoreComponent.DECRYPT, items.size)
+            return kotlinDecryptBatch()
+        }
+        if (mode == NativeCoreMode.OFF) {
             return kotlinDecryptBatch()
         }
         return when (mode) {
@@ -107,7 +111,11 @@ internal class NativeCoreRuntime private constructor(
     ): List<ParsedCommand> {
         if (messages.isEmpty()) return emptyList()
         val mode = config.effectiveMode(NativeCoreComponent.ROUTING)
-        if (!nativeUsable || mode == NativeCoreMode.OFF) {
+        if (!nativeUsable) {
+            recordNativeUnavailableFallback(NativeCoreComponent.ROUTING, messages.size)
+            return kotlinParseBatch()
+        }
+        if (mode == NativeCoreMode.OFF) {
             return kotlinParseBatch()
         }
         val items = messages.map { message -> NativeRoutingBatchItem(text = message) }
@@ -122,7 +130,7 @@ internal class NativeCoreRuntime private constructor(
                             commandRoutePrefixes = emptyMap(),
                             imageMessageTypeRoutes = emptyMap(),
                         )
-                    }.onFailure { recordNativeFailure(NativeCoreComponent.ROUTING, items.size) }
+                    }.onFailure { error -> recordNativeFailure(NativeCoreComponent.ROUTING, items.size, error = error) }
                         .getOrNull()
                 if (nativeResults != null) {
                     val mismatchCount =
@@ -142,7 +150,7 @@ internal class NativeCoreRuntime private constructor(
                         imageMessageTypeRoutes = emptyMap(),
                     ).map { it.parsedCommand }
                 }.getOrElse {
-                    recordNativeFailure(NativeCoreComponent.ROUTING, items.size)
+                    recordNativeFailure(NativeCoreComponent.ROUTING, items.size, error = it)
                     kotlinParseBatch()
                 }
         }
@@ -280,7 +288,11 @@ internal class NativeCoreRuntime private constructor(
         kotlinBuild: () -> String,
     ): String {
         val mode = config.effectiveMode(NativeCoreComponent.WEBHOOK_PAYLOAD)
-        if (!nativeUsable || mode == NativeCoreMode.OFF) {
+        if (!nativeUsable) {
+            recordNativeUnavailableFallback(NativeCoreComponent.WEBHOOK_PAYLOAD, 1)
+            return kotlinBuild()
+        }
+        if (mode == NativeCoreMode.OFF) {
             return kotlinBuild()
         }
         return when (mode) {
@@ -289,7 +301,7 @@ internal class NativeCoreRuntime private constructor(
                 val kotlinPayload = kotlinBuild()
                 val nativePayload =
                     runCatching { callNativeWebhookPayload(command, route, messageId) }
-                        .onFailure { recordNativeFailure(NativeCoreComponent.WEBHOOK_PAYLOAD, 1) }
+                        .onFailure { error -> recordNativeFailure(NativeCoreComponent.WEBHOOK_PAYLOAD, 1, error = error) }
                         .getOrNull()
                 if (nativePayload != null && !jsonEquivalent(kotlinPayload, nativePayload)) {
                     recordShadowMismatch(NativeCoreComponent.WEBHOOK_PAYLOAD, 1)
@@ -300,7 +312,7 @@ internal class NativeCoreRuntime private constructor(
             NativeCoreMode.ON ->
                 runCatching { callNativeWebhookPayload(command, route, messageId) }
                     .getOrElse {
-                        recordNativeFailure(NativeCoreComponent.WEBHOOK_PAYLOAD, 1)
+                        recordNativeFailure(NativeCoreComponent.WEBHOOK_PAYLOAD, 1, error = it)
                         kotlinBuild()
                     }
         }
@@ -313,7 +325,7 @@ internal class NativeCoreRuntime private constructor(
         val kotlinResults = kotlinDecryptBatch()
         val nativeResults =
             runCatching { decryptNativeBatch(items) }
-                .onFailure { recordNativeFailure(NativeCoreComponent.DECRYPT, items.size) }
+                .onFailure { error -> recordNativeFailure(NativeCoreComponent.DECRYPT, items.size, error = error) }
                 .getOrNull()
         if (nativeResults != null) {
             compareDecryptShadowResults(kotlinResults, nativeResults)
@@ -327,7 +339,7 @@ internal class NativeCoreRuntime private constructor(
     ): List<String> =
         runCatching { decryptNativeBatch(items) }
             .getOrElse {
-                recordNativeFailure(NativeCoreComponent.DECRYPT, items.size)
+                recordNativeFailure(NativeCoreComponent.DECRYPT, items.size, error = it)
                 kotlinDecryptBatch()
             }
 
@@ -353,7 +365,11 @@ internal class NativeCoreRuntime private constructor(
         shadowEquivalent: (NativeRoutingDecision, NativeRoutingDecision) -> Boolean,
     ): NativeRoutingDecision {
         val mode = config.effectiveMode(NativeCoreComponent.ROUTING)
-        if (!nativeUsable || mode == NativeCoreMode.OFF) {
+        if (!nativeUsable) {
+            recordNativeUnavailableFallback(NativeCoreComponent.ROUTING, 1)
+            return kotlinDecision()
+        }
+        if (mode == NativeCoreMode.OFF) {
             return kotlinDecision()
         }
         return when (mode) {
@@ -362,7 +378,7 @@ internal class NativeCoreRuntime private constructor(
                 val kotlinResult = kotlinDecision()
                 val nativeResult =
                     runCatching { callNativeRouting(item, commandRoutePrefixes, imageMessageTypeRoutes) }
-                        .onFailure { recordNativeFailure(NativeCoreComponent.ROUTING, 1) }
+                        .onFailure { error -> recordNativeFailure(NativeCoreComponent.ROUTING, 1, error = error) }
                         .getOrNull()
                 if (nativeResult != null && !shadowEquivalent(kotlinResult, nativeResult)) {
                     recordShadowMismatch(NativeCoreComponent.ROUTING, 1)
@@ -373,7 +389,7 @@ internal class NativeCoreRuntime private constructor(
             NativeCoreMode.ON ->
                 runCatching { callNativeRouting(item, commandRoutePrefixes, imageMessageTypeRoutes) }
                     .getOrElse {
-                        recordNativeFailure(NativeCoreComponent.ROUTING, 1)
+                        recordNativeFailure(NativeCoreComponent.ROUTING, 1, error = it)
                         kotlinDecision()
                     }
         }
@@ -410,10 +426,16 @@ internal class NativeCoreRuntime private constructor(
             val rawResponse = jni.routingBatch(json.encodeToString(request).encodeToByteArray()).decodeToString()
             val response = json.decodeFromString<NativeRoutingBatchResponse>(rawResponse)
             if (response.items.size != items.size) {
-                error("native routing failed")
+                val first = response.items.singleOrNull()
+                throw NativeCoreDiagnosticFailure(
+                    batchEnvelopeFailureReason(items.size, response.items.size, first?.ok, first?.errorKind),
+                    "native routing failed",
+                )
             }
             response.items.map { result ->
-                if (!result.ok) error("native routing failed")
+                if (!result.ok) {
+                    throw NativeCoreDiagnosticFailure(nativeErrorReason(result.errorKind), "native routing failed")
+                }
                 NativeRoutingDecision(
                     parsedCommand = result.toParsedCommand(),
                     webhookRoute = result.webhookRoute,
@@ -433,7 +455,11 @@ internal class NativeCoreRuntime private constructor(
         nativeValue: (NativeParserBatchResult) -> T,
     ): T {
         val mode = config.effectiveMode(NativeCoreComponent.PARSERS)
-        if (!nativeUsable || mode == NativeCoreMode.OFF) {
+        if (!nativeUsable) {
+            recordNativeUnavailableFallback(NativeCoreComponent.PARSERS, 1, item.kind)
+            return kotlinParse()
+        }
+        if (mode == NativeCoreMode.OFF) {
             return kotlinParse()
         }
         return when (mode) {
@@ -442,11 +468,14 @@ internal class NativeCoreRuntime private constructor(
                 val kotlinResult = kotlinParse()
                 val nativeResult =
                     runCatching { callNativeParser(item) }
-                        .onFailure { recordNativeFailure(NativeCoreComponent.PARSERS, 1, item.kind) }
+                        .onFailure { error -> recordNativeFailure(NativeCoreComponent.PARSERS, 1, item.kind, error) }
                         .getOrNull()
                 if (nativeResult != null) {
+                    if (nativeResult.usedDefault) {
+                        recordParserDefaultUse(1, item.kind)
+                    }
                     if (nativeResult.fallback) {
-                        recordComponentFallback(NativeCoreComponent.PARSERS, 1, item.kind)
+                        recordComponentFallback(NativeCoreComponent.PARSERS, 1, item.kind, fallbackRequiredReason)
                     }
                     val converted = runCatching { nativeValue(nativeResult) }.getOrNull()
                     if (converted != kotlinResult) {
@@ -460,16 +489,19 @@ internal class NativeCoreRuntime private constructor(
                 val nativeResult =
                     runCatching { callNativeParser(item) }
                         .getOrElse {
-                            recordNativeFailure(NativeCoreComponent.PARSERS, 1, item.kind)
+                            recordNativeFailure(NativeCoreComponent.PARSERS, 1, item.kind, it)
                             return kotlinParse()
                         }
+                if (nativeResult.usedDefault) {
+                    recordParserDefaultUse(1, item.kind)
+                }
                 if (nativeResult.fallback) {
-                    recordComponentFallback(NativeCoreComponent.PARSERS, 1, item.kind)
+                    recordComponentFallback(NativeCoreComponent.PARSERS, 1, item.kind, fallbackRequiredReason)
                     kotlinParse()
                 } else {
                     runCatching { nativeValue(nativeResult) }
                         .getOrElse {
-                            recordNativeFailure(NativeCoreComponent.PARSERS, 1, item.kind)
+                            recordNativeFailure(NativeCoreComponent.PARSERS, 1, item.kind, reasonKey = schemaDecodeErrorReason)
                             kotlinParse()
                         }
                 }
@@ -486,14 +518,23 @@ internal class NativeCoreRuntime private constructor(
         if (commands.isEmpty()) return emptyList()
         val routingMode = config.effectiveMode(NativeCoreComponent.ROUTING)
         val payloadMode = config.effectiveMode(NativeCoreComponent.WEBHOOK_PAYLOAD)
-        if (!nativeUsable || (routingMode == NativeCoreMode.OFF && payloadMode == NativeCoreMode.OFF)) {
+        if (!nativeUsable) {
+            if (routingMode != NativeCoreMode.OFF) {
+                recordNativeUnavailableFallback(NativeCoreComponent.ROUTING, commands.size)
+            }
+            if (payloadMode != NativeCoreMode.OFF) {
+                recordNativeUnavailableFallback(NativeCoreComponent.WEBHOOK_PAYLOAD, commands.size)
+            }
+            return kotlinPlanBatch()
+        }
+        if (routingMode == NativeCoreMode.OFF && payloadMode == NativeCoreMode.OFF) {
             return kotlinPlanBatch()
         }
 
         if (routingMode == NativeCoreMode.ON && payloadMode == NativeCoreMode.ON) {
             return runCatching { callNativeIngressBatch(commands, commandRoutePrefixes, imageMessageTypeRoutes) }
                 .getOrElse {
-                    recordNativeIngressFailure(commands.size)
+                    recordNativeIngressFailure(commands.size, it)
                     kotlinPlanBatch()
                 }
         }
@@ -518,7 +559,7 @@ internal class NativeCoreRuntime private constructor(
                         }
                     callNativeRoutingBatch(items, commandRoutePrefixes, imageMessageTypeRoutes)
                         .toIngressPlans(commands)
-                }.onFailure { recordNativeFailure(NativeCoreComponent.ROUTING, commands.size) }
+                }.onFailure { error -> recordNativeFailure(NativeCoreComponent.ROUTING, commands.size, error = error) }
                     .getOrNull()
             when (routingMode) {
                 NativeCoreMode.OFF -> plans = kotlinPlans()
@@ -550,7 +591,11 @@ internal class NativeCoreRuntime private constructor(
     ): List<T> {
         if (items.isEmpty()) return emptyList()
         val mode = config.effectiveMode(NativeCoreComponent.PARSERS)
-        if (!nativeUsable || mode == NativeCoreMode.OFF) {
+        if (!nativeUsable) {
+            recordNativeUnavailableFallback(NativeCoreComponent.PARSERS, items.size, detailKey)
+            return kotlinParseBatch()
+        }
+        if (mode == NativeCoreMode.OFF) {
             return kotlinParseBatch()
         }
         return when (mode) {
@@ -559,11 +604,13 @@ internal class NativeCoreRuntime private constructor(
                 val kotlinResults = kotlinParseBatch()
                 val nativeResults =
                     runCatching { callNativeParserBatch(items) }
-                        .onFailure { recordNativeFailure(NativeCoreComponent.PARSERS, items.size, detailKey) }
+                        .onFailure { error -> recordNativeFailure(NativeCoreComponent.PARSERS, items.size, detailKey, error) }
                         .getOrNull()
                 if (nativeResults != null) {
+                    val usedDefaultCount = nativeResults.count { result -> result.usedDefault }
+                    recordParserDefaultUse(usedDefaultCount, detailKey)
                     val fallbackCount = nativeResults.count { result -> result.fallback }
-                    recordComponentFallback(NativeCoreComponent.PARSERS, fallbackCount, detailKey)
+                    recordComponentFallback(NativeCoreComponent.PARSERS, fallbackCount, detailKey, fallbackRequiredReason)
                     val nativeConverted = nativeResults.map { result -> runCatching { nativeValue(result) }.getOrNull() }
                     val mismatchCount =
                         if (kotlinResults.size != nativeConverted.size) {
@@ -580,17 +627,19 @@ internal class NativeCoreRuntime private constructor(
                 val nativeResults =
                     runCatching { callNativeParserBatch(items) }
                         .getOrElse {
-                            recordNativeFailure(NativeCoreComponent.PARSERS, items.size, detailKey)
+                            recordNativeFailure(NativeCoreComponent.PARSERS, items.size, detailKey, it)
                             return kotlinParseBatch()
                         }
+                val usedDefaultCount = nativeResults.count { result -> result.usedDefault }
+                recordParserDefaultUse(usedDefaultCount, detailKey)
                 val fallbackCount = nativeResults.count { result -> result.fallback }
                 if (fallbackCount > 0) {
-                    recordComponentFallback(NativeCoreComponent.PARSERS, fallbackCount, detailKey)
+                    recordComponentFallback(NativeCoreComponent.PARSERS, fallbackCount, detailKey, fallbackRequiredReason)
                     return kotlinParseBatch()
                 }
                 runCatching { nativeResults.map(nativeValue) }
                     .getOrElse {
-                        recordNativeFailure(NativeCoreComponent.PARSERS, items.size, detailKey)
+                        recordNativeFailure(NativeCoreComponent.PARSERS, items.size, detailKey, reasonKey = schemaDecodeErrorReason)
                         kotlinParseBatch()
                     }
             }
@@ -610,10 +659,16 @@ internal class NativeCoreRuntime private constructor(
             val rawResponse = jni.parserBatch(json.encodeToString(request).encodeToByteArray()).decodeToString()
             val response = json.decodeFromString<NativeParserBatchResponse>(rawResponse)
             if (response.items.size != items.size) {
-                error("native parsers failed")
+                val first = response.items.singleOrNull()
+                throw NativeCoreDiagnosticFailure(
+                    batchEnvelopeFailureReason(items.size, response.items.size, first?.ok, first?.errorKind),
+                    "native parsers failed",
+                )
             }
             response.items.map { result ->
-                if (!result.ok) error("native parsers failed")
+                if (!result.ok) {
+                    throw NativeCoreDiagnosticFailure(nativeErrorReason(result.errorKind), "native parsers failed")
+                }
                 result
             }
         } finally {
@@ -647,11 +702,17 @@ internal class NativeCoreRuntime private constructor(
             val rawResponse = jni.webhookPayloadBatch(json.encodeToString(request).encodeToByteArray()).decodeToString()
             val response = json.decodeFromString<NativeWebhookPayloadBatchResponse>(rawResponse)
             if (response.items.size != items.size) {
-                error("native webhook payload failed")
+                val first = response.items.singleOrNull()
+                throw NativeCoreDiagnosticFailure(
+                    batchEnvelopeFailureReason(items.size, response.items.size, first?.ok, first?.errorKind),
+                    "native webhook payload failed",
+                )
             }
             response.items.map { result ->
-                if (!result.ok) error("native webhook payload failed")
-                result.payloadJson ?: error("native webhook payload failed")
+                if (!result.ok) {
+                    throw NativeCoreDiagnosticFailure(nativeErrorReason(result.errorKind), "native webhook payload failed")
+                }
+                result.payloadJson ?: throw NativeCoreDiagnosticFailure(schemaDecodeErrorReason, "native webhook payload failed")
             }
         } finally {
             stats.recordNativeDuration(System.nanoTime() - startedAt)
@@ -680,14 +741,20 @@ internal class NativeCoreRuntime private constructor(
             val rawResponse = jni.ingressBatch(json.encodeToString(request).encodeToByteArray()).decodeToString()
             val response = json.decodeFromString<NativeIngressBatchResponse>(rawResponse)
             if (response.items.size != commands.size) {
-                error("native ingress failed")
+                val first = response.items.singleOrNull()
+                throw NativeCoreDiagnosticFailure(
+                    batchEnvelopeFailureReason(commands.size, response.items.size, first?.ok, first?.errorKind),
+                    "native ingress failed",
+                )
             }
             response.items
                 .map { result ->
-                    if (!result.ok) error("native ingress failed")
+                    if (!result.ok) {
+                        throw NativeCoreDiagnosticFailure(nativeErrorReason(result.errorKind), "native ingress failed")
+                    }
                     val targetRoute = result.targetRoute
                     if (targetRoute != null && (result.messageId.isNullOrBlank() || result.payloadJson == null)) {
-                        error("native ingress failed")
+                        throw NativeCoreDiagnosticFailure(schemaDecodeErrorReason, "native ingress failed")
                     }
                     NativeIngressPlan(
                         parsedCommand = result.toParsedCommand(),
@@ -719,14 +786,34 @@ internal class NativeCoreRuntime private constructor(
         component: NativeCoreComponent,
         fallbackItems: Int,
         detailKey: String? = null,
+        reasonKey: String = nativeFallbackReason,
     ) {
-        statsFor(component).recordFallback(fallbackItems, detailKey)
+        statsFor(component).recordFallback(fallbackItems, detailKey, reasonKey)
+    }
+
+    private fun recordParserDefaultUse(
+        count: Int,
+        detailKey: String?,
+    ) {
+        statsFor(NativeCoreComponent.PARSERS).recordParserDefaultUse(count, detailKey)
+    }
+
+    private fun recordNativeUnavailableFallback(
+        component: NativeCoreComponent,
+        fallbackItems: Int,
+        detailKey: String? = null,
+    ) {
+        val mode = config.effectiveMode(component)
+        if (mode == NativeCoreMode.OFF) return
+        statsFor(component).recordFallback(fallbackItems, detailKey, nativeUnavailableReason)
     }
 
     private fun recordNativeFailure(
         component: NativeCoreComponent,
         fallbackItems: Int,
         detailKey: String? = null,
+        error: Throwable? = null,
+        reasonKey: String? = null,
     ) {
         val message =
             when (component) {
@@ -735,24 +822,31 @@ internal class NativeCoreRuntime private constructor(
                 NativeCoreComponent.PARSERS -> "native parsers failed"
                 NativeCoreComponent.WEBHOOK_PAYLOAD -> "native webhook payload failed"
             }
+        val reason = reasonKey ?: classifyNativeFailure(error)
         val stats = statsFor(component)
         callFailures.incrementAndGet()
-        stats.recordFallback(fallbackItems, detailKey)
+        stats.recordFallback(fallbackItems, detailKey, reason)
+        stats.recordFailure(reason)
         stats.lastError.set(message)
         lastErrorRef.set(message)
-        IrisLogger.error("[NativeCore] native call failed: $message")
+        IrisLogger.error("[NativeCore] native call failed: $message reason=$reason")
     }
 
-    private fun recordNativeIngressFailure(fallbackItems: Int) {
+    private fun recordNativeIngressFailure(
+        fallbackItems: Int,
+        error: Throwable?,
+    ) {
         val message = "native ingress failed"
+        val reason = classifyNativeFailure(error)
         callFailures.incrementAndGet()
         listOf(NativeCoreComponent.ROUTING, NativeCoreComponent.WEBHOOK_PAYLOAD).forEach { component ->
             val stats = statsFor(component)
-            stats.recordFallback(fallbackItems, null)
+            stats.recordFallback(fallbackItems, null, reason)
+            stats.recordFailure(reason)
             stats.lastError.set(message)
         }
         lastErrorRef.set(message)
-        IrisLogger.error("[NativeCore] native call failed: $message")
+        IrisLogger.error("[NativeCore] native call failed: $message reason=$reason")
     }
 
     private fun decryptNativeBatch(items: List<NativeDecryptBatchItem>): List<String> {
@@ -765,11 +859,15 @@ internal class NativeCoreRuntime private constructor(
             val rawResponse = jni.decryptBatch(json.encodeToString(request).encodeToByteArray()).decodeToString()
             val response = json.decodeFromString<DecryptBatchResponse>(rawResponse)
             if (response.items.size != items.size) {
-                error(nativeDecryptFailure)
+                val first = response.items.singleOrNull()
+                throw NativeCoreDiagnosticFailure(
+                    batchEnvelopeFailureReason(items.size, response.items.size, first?.ok, first?.errorKind, ::decryptItemErrorReason),
+                    nativeDecryptFailure,
+                )
             }
             response.items.map { item ->
-                if (!item.ok) error(nativeDecryptFailure)
-                item.plaintext ?: error(nativeDecryptFailure)
+                if (!item.ok) throw NativeCoreDiagnosticFailure(decryptItemErrorReason(item.errorKind), nativeDecryptFailure)
+                item.plaintext ?: throw NativeCoreDiagnosticFailure(schemaDecodeErrorReason, nativeDecryptFailure)
             }
         } finally {
             stats.recordNativeDuration(System.nanoTime() - startedAt)
@@ -847,7 +945,7 @@ internal class NativeCoreRuntime private constructor(
         if (inputs.isEmpty()) return kotlinPayloadPlans
         val nativePayloads =
             runCatching { callNativeWebhookPayloadBatch(inputs.map { it.value }) }
-                .onFailure { recordNativeFailure(NativeCoreComponent.WEBHOOK_PAYLOAD, inputs.size) }
+                .onFailure { error -> recordNativeFailure(NativeCoreComponent.WEBHOOK_PAYLOAD, inputs.size, error = error) }
                 .getOrNull()
         if (nativePayloads != null) {
             val mismatchCount =
@@ -878,7 +976,7 @@ internal class NativeCoreRuntime private constructor(
                 }
             }
         }.getOrElse {
-            recordNativeFailure(NativeCoreComponent.WEBHOOK_PAYLOAD, inputs.size)
+            recordNativeFailure(NativeCoreComponent.WEBHOOK_PAYLOAD, inputs.size, error = it)
             completeKotlinPayloadPlans(commands, plans)
         }
     }
@@ -935,16 +1033,37 @@ internal class NativeCoreRuntime private constructor(
         val maxNativeNanos = AtomicLong(0)
         val lastError = AtomicReference<String?>(null)
         private val fallbacksByKey = ConcurrentHashMap<String, AtomicLong>()
+        private val fallbackReasons = ConcurrentHashMap<String, AtomicLong>()
+        private val failureReasons = ConcurrentHashMap<String, AtomicLong>()
         private val shadowMismatchesByKey = ConcurrentHashMap<String, AtomicLong>()
+        private val parserDefaultUses = AtomicLong(0)
+        private val parserDefaultUsesByKey = ConcurrentHashMap<String, AtomicLong>()
 
         fun recordFallback(
             count: Int,
             detailKey: String?,
+            reasonKey: String,
         ) {
             if (count <= 0) return
             fallbacks.addAndGet(count.toLong())
+            fallbackReasons.computeIfAbsent(reasonKey) { AtomicLong(0) }.addAndGet(count.toLong())
             detailKey?.let { key ->
                 fallbacksByKey.computeIfAbsent(key) { AtomicLong(0) }.addAndGet(count.toLong())
+            }
+        }
+
+        fun recordFailure(reasonKey: String) {
+            failureReasons.computeIfAbsent(reasonKey) { AtomicLong(0) }.incrementAndGet()
+        }
+
+        fun recordParserDefaultUse(
+            count: Int,
+            detailKey: String?,
+        ) {
+            if (count <= 0) return
+            parserDefaultUses.addAndGet(count.toLong())
+            detailKey?.let { key ->
+                parserDefaultUsesByKey.computeIfAbsent(key) { AtomicLong(0) }.addAndGet(count.toLong())
             }
         }
 
@@ -967,18 +1086,24 @@ internal class NativeCoreRuntime private constructor(
 
         fun snapshot(): NativeCoreComponentDiagnostics {
             val callCount = jniCalls.get()
+            val itemCount = items.get()
             val totalMicros = totalNativeNanos.get().nanosToMicros()
             return NativeCoreComponentDiagnostics(
                 mode = mode.name.lowercase(),
                 jniCalls = callCount,
-                items = items.get(),
+                items = itemCount,
                 fallbacks = fallbacks.get(),
                 shadowMismatches = shadowMismatches.get(),
                 totalNativeMicros = totalMicros,
                 maxNativeMicros = maxNativeNanos.get().nanosToMicros(),
                 averageNativeMicros = if (callCount > 0L) totalMicros / callCount else 0L,
+                averageItemNativeMicros = if (itemCount > 0L) totalMicros / itemCount else 0L,
                 fallbacksByKey = fallbacksByKey.snapshotCounts(),
+                fallbackReasons = fallbackReasons.snapshotCounts(),
+                failureReasons = failureReasons.snapshotCounts(),
                 shadowMismatchesByKey = shadowMismatchesByKey.snapshotCounts(),
+                parserDefaultUses = parserDefaultUses.get(),
+                parserDefaultUsesByKey = parserDefaultUsesByKey.snapshotCounts(),
                 lastError = lastError.get(),
             )
         }
@@ -1029,6 +1154,64 @@ internal class NativeCoreRuntime private constructor(
 
 private fun Long.nanosToMicros(): Long = (this / 1_000L).coerceAtLeast(if (this > 0L) 1L else 0L)
 
+private class NativeCoreDiagnosticFailure(
+    val reasonKey: String,
+    message: String,
+    cause: Throwable? = null,
+) : IllegalStateException(message, cause)
+
+private const val jniErrorReason = "jniError"
+private const val schemaDecodeErrorReason = "schemaDecodeError"
+private const val responseSizeMismatchReason = "responseSizeMismatch"
+private const val itemErrorReason = "itemError"
+private const val nativeUnavailableReason = "nativeUnavailable"
+private const val nativeFallbackReason = "nativeFallback"
+private const val fallbackRequiredReason = "fallbackRequired"
+
+private fun classifyNativeFailure(error: Throwable?): String =
+    when (error) {
+        is NativeCoreDiagnosticFailure -> error.reasonKey
+        is kotlinx.serialization.SerializationException -> schemaDecodeErrorReason
+        else -> jniErrorReason
+    }
+
+private fun batchEnvelopeFailureReason(
+    expectedSize: Int,
+    actualSize: Int,
+    singleOk: Boolean?,
+    singleErrorKind: String?,
+    errorKindMapper: (String?) -> String = ::nativeErrorReason,
+): String =
+    if (expectedSize > 1 && actualSize == 1 && singleOk == false && singleErrorKind != null) {
+        errorKindMapper(singleErrorKind)
+    } else {
+        responseSizeMismatchReason
+    }
+
+private fun nativeErrorReason(errorKind: String?): String =
+    when (errorKind?.trim()?.lowercase()) {
+        "invalidrequest", "invalid_request" -> "invalidRequest"
+        "invalidresponse", "invalid_response" -> "invalidResponse"
+        "jnierror", "jni_error" -> jniErrorReason
+        "panic" -> "panic"
+        "decrypt" -> "decrypt"
+        else -> itemErrorReason
+    }
+
+private fun decryptItemErrorReason(errorKind: String?): String =
+    when (errorKind?.trim()?.lowercase()) {
+        "invalidrequest", "invalid_request" -> "invalidRequest"
+        "invalidresponse", "invalid_response" -> "invalidResponse"
+        "jnierror", "jni_error" -> jniErrorReason
+        "panic" -> "panic"
+        "invalidbase64", "invalid_base64", "base64" -> "itemError.invalidBase64"
+        "invalidpadding", "invalid_padding", "badpadding", "bad_padding" -> "itemError.invalidPadding"
+        "invalidutf8", "invalid_utf8", "utf8" -> "itemError.invalidUtf8"
+        "unsupportedenctype", "unsupported_enc_type", "unsupported" -> "itemError.unsupportedEncType"
+        "decrypt", "decrypterror", "decrypt_error", "cryptoerror", "crypto_error" -> "itemError.decryptError"
+        else -> itemErrorReason
+    }
+
 private fun NativeRoutingBatchResult.toParsedCommand(): ParsedCommand =
     ParsedCommand(
         kind =
@@ -1036,7 +1219,7 @@ private fun NativeRoutingBatchResult.toParsedCommand(): ParsedCommand =
                 "NONE" -> CommandKind.NONE
                 "COMMENT" -> CommandKind.COMMENT
                 "WEBHOOK" -> CommandKind.WEBHOOK
-                else -> error("native routing failed")
+                else -> throw NativeCoreDiagnosticFailure(schemaDecodeErrorReason, "native routing failed")
             },
         normalizedText = normalizedText,
     )
@@ -1048,7 +1231,7 @@ private fun NativeIngressBatchResult.toParsedCommand(): ParsedCommand =
                 "NONE" -> CommandKind.NONE
                 "COMMENT" -> CommandKind.COMMENT
                 "WEBHOOK" -> CommandKind.WEBHOOK
-                else -> error("native ingress failed")
+                else -> throw NativeCoreDiagnosticFailure(schemaDecodeErrorReason, "native ingress failed")
             },
         normalizedText = normalizedText,
     )

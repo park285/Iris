@@ -67,6 +67,8 @@ struct RoutingBatchResult {
     image_route: Option<String>,
     #[serde(rename = "targetRoute")]
     target_route: Option<String>,
+    #[serde(rename = "errorKind")]
+    error_kind: Option<&'static str>,
     error: Option<String>,
 }
 
@@ -240,6 +242,7 @@ pub fn routing_batch_json(request_bytes: &[u8]) -> NativeCoreResult<Vec<u8>> {
                     event_route: decision.event_route,
                     image_route: decision.image_route,
                     target_route: decision.target_route,
+                    error_kind: None,
                     error: None,
                 }
             })

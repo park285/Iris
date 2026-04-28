@@ -41,7 +41,12 @@ internal data class NativeCoreComponentDiagnostics(
     val totalNativeMicros: Long = 0,
     val maxNativeMicros: Long = 0,
     val averageNativeMicros: Long = 0,
+    val averageItemNativeMicros: Long = 0,
     val fallbacksByKey: Map<String, Long> = emptyMap(),
+    val fallbackReasons: Map<String, Long> = emptyMap(),
+    val failureReasons: Map<String, Long> = emptyMap(),
     val shadowMismatchesByKey: Map<String, Long> = emptyMap(),
+    val parserDefaultUses: Long = 0,
+    val parserDefaultUsesByKey: Map<String, Long> = emptyMap(),
     val lastError: String? = null,
 )

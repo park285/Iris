@@ -6,6 +6,9 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
 
+const NATIVE_LIB_MODE: &str = "644";
+const NATIVE_LIB_TEMP_HASH_PREFIX_LEN: usize = 16;
+
 pub fn render_template_json(template: &str, vars: &HashMap<String, String>) -> Result<String> {
     let mut value: serde_json::Value = serde_json::from_str(template)?;
     replace_placeholders(&mut value, vars);
@@ -100,17 +103,57 @@ pub async fn sync_native_lib_if_needed(
         return Ok(false);
     }
 
-    ensure_native_lib_dest_dir(adb, &cfg.init.native_lib_dest).await?;
-    adb.push(native_lib_src, &cfg.init.native_lib_dest).await?;
-    let chmod_result = adb
-        .shell(&build_device_chmod_command(
-            &cfg.init.native_lib_dest,
-            "644",
-        ))
-        .await;
-    let changed = native_chmod_result_to_changed(chmod_result, &cfg.init.native_lib_dest);
+    push_native_lib_atomically(adb, native_lib_src, &cfg.init.native_lib_dest, &local_hash).await?;
+
     tracing::info!(src = %native_lib_src.display(), dest = %cfg.init.native_lib_dest, "native library sync 완료");
-    Ok(changed)
+    Ok(true)
+}
+
+async fn push_native_lib_atomically(
+    adb: &Adb,
+    native_lib_src: &Path,
+    native_lib_dest: &str,
+    local_hash: &str,
+) -> Result<()> {
+    ensure_native_lib_dest_dir(adb, native_lib_dest).await?;
+    let temp_dest = native_lib_temp_path(native_lib_dest, local_hash);
+    adb.push(native_lib_src, &temp_dest)
+        .await
+        .with_context(|| format!("native library temp push 실패: {temp_dest}"))?;
+
+    let temp_hash = device_file_sha256(adb, &temp_dest)
+        .await
+        .with_context(|| format!("native library temp hash 확인 실패: {temp_dest}"))?;
+    verify_native_lib_remote_hash(
+        NativeLibHashStage::Temp,
+        &temp_dest,
+        local_hash,
+        temp_hash.as_deref(),
+    )?;
+
+    adb.shell(&build_device_chmod_command(&temp_dest, NATIVE_LIB_MODE))
+        .await
+        .with_context(|| format!("native library temp chmod 실패: {temp_dest}"))?;
+
+    adb.shell(&build_device_atomic_replace_command(
+        &temp_dest,
+        native_lib_dest,
+    ))
+    .await
+    .with_context(|| {
+        format!("native library atomic replace 실패: {temp_dest} -> {native_lib_dest}")
+    })?;
+
+    let final_hash = device_file_sha256(adb, native_lib_dest)
+        .await
+        .with_context(|| format!("native library final hash 확인 실패: {native_lib_dest}"))?;
+    verify_native_lib_remote_hash(
+        NativeLibHashStage::Final,
+        native_lib_dest,
+        local_hash,
+        final_hash.as_deref(),
+    )?;
+    Ok(())
 }
 
 fn native_lib_source_available(
@@ -141,17 +184,6 @@ async fn ensure_native_lib_dest_dir(adb: &Adb, native_lib_dest: &str) -> Result<
             .with_context(|| format!("native library 대상 디렉터리 생성 실패: {dest_dir}"))?;
     }
     Ok(())
-}
-
-fn native_chmod_result_to_changed(chmod_result: Result<String>, native_lib_dest: &str) -> bool {
-    if let Err(error) = chmod_result {
-        tracing::warn!(
-            dest = %native_lib_dest,
-            error = %error,
-            "native library chmod failed after push; restart will still proceed"
-        );
-    }
-    true
 }
 
 pub async fn check_and_sync(adb: &Adb, cfg: &DaemonConfig) -> Result<()> {
@@ -294,8 +326,67 @@ fn build_device_chmod_command(remote_path: &str, mode: &str) -> String {
     build_root_shell_command(&format!("chmod {mode} {}", shell_quote(remote_path)))
 }
 
+fn build_device_atomic_replace_command(temp_path: &str, final_path: &str) -> String {
+    build_root_shell_command(&format!(
+        "mv -f {} {}",
+        shell_quote(temp_path),
+        shell_quote(final_path)
+    ))
+}
+
 fn build_root_shell_command(inner: &str) -> String {
     format!("su 0 sh -lc {}", shell_quote(inner))
+}
+
+fn native_lib_temp_path(native_lib_dest: &str, local_hash: &str) -> String {
+    let prefix_len = local_hash.len().min(NATIVE_LIB_TEMP_HASH_PREFIX_LEN);
+    let hash_prefix = &local_hash[..prefix_len];
+    format!(
+        "{native_lib_dest}.tmp.{}.{}",
+        std::process::id(),
+        hash_prefix
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NativeLibHashStage {
+    Temp,
+    Final,
+}
+
+impl NativeLibHashStage {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Temp => "temp",
+            Self::Final => "final",
+        }
+    }
+}
+
+fn verify_native_lib_remote_hash(
+    stage: NativeLibHashStage,
+    remote_path: &str,
+    expected_hash: &str,
+    actual_hash: Option<&str>,
+) -> Result<()> {
+    let Some(actual_hash) = actual_hash else {
+        anyhow::bail!(
+            "native library {} sha256 missing: {}",
+            stage.label(),
+            remote_path
+        );
+    };
+
+    if actual_hash != expected_hash {
+        anyhow::bail!(
+            "native library {} sha256 mismatch for {}: expected {}, got {}",
+            stage.label(),
+            remote_path,
+            expected_hash,
+            actual_hash
+        );
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -523,6 +614,70 @@ mod tests {
     }
 
     #[test]
+    fn native_lib_temp_path_is_destination_specific_and_hash_scoped() {
+        let remote_path = "/data/iris/lib/lib weird's.so";
+        let digest = "543c84b34d339f923939b62b81147fd729087c280ab9963256e7af55b3cd8b5b";
+
+        let temp_path = native_lib_temp_path(remote_path, digest);
+
+        assert!(temp_path.starts_with("/data/iris/lib/lib weird's.so.tmp."));
+        assert!(temp_path.ends_with(".543c84b34d339f92"));
+    }
+
+    #[test]
+    fn build_device_atomic_replace_command_uses_root_mv_and_quotes_paths() {
+        let temp_path = "/data/iris/lib/lib weird's.so.tmp.123.543c84b34d339f92";
+        let final_path = "/data/iris/lib/lib weird's.so";
+        let command = build_device_atomic_replace_command(temp_path, final_path);
+        let expected_inner = format!(
+            "mv -f {} {}",
+            shell_quote(temp_path),
+            shell_quote(final_path)
+        );
+
+        assert_eq!(
+            command,
+            format!("su 0 sh -lc {}", shell_quote(&expected_inner))
+        );
+    }
+
+    #[test]
+    fn verify_native_lib_remote_hash_rejects_final_hash_mismatch() {
+        let expected = "543c84b34d339f923939b62b81147fd729087c280ab9963256e7af55b3cd8b5b";
+        let actual = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+        let error = verify_native_lib_remote_hash(
+            NativeLibHashStage::Final,
+            "/data/iris/lib/libiris_native_core.so",
+            expected,
+            Some(actual),
+        )
+        .unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("final"));
+        assert!(message.contains(expected));
+        assert!(message.contains(actual));
+    }
+
+    #[test]
+    fn verify_native_lib_remote_hash_rejects_missing_temp_hash() {
+        let expected = "543c84b34d339f923939b62b81147fd729087c280ab9963256e7af55b3cd8b5b";
+
+        let error = verify_native_lib_remote_hash(
+            NativeLibHashStage::Temp,
+            "/data/iris/lib/libiris_native_core.so.tmp.123.543c84b34d339f92",
+            expected,
+            None,
+        )
+        .unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("temp"));
+        assert!(message.contains("missing"));
+    }
+
+    #[test]
     fn native_mode_parser_accepts_case_insensitive_modes_and_trims() {
         assert_eq!(native_core_mode_env_value(Some(" On ")), NativeCoreMode::On);
         assert_eq!(
@@ -571,14 +726,15 @@ mod tests {
     }
 
     #[test]
-    fn native_chmod_result_is_nonfatal_after_push() {
-        assert!(native_chmod_result_to_changed(
-            Ok(String::new()),
+    fn verify_native_lib_remote_hash_accepts_match() {
+        let expected = "543c84b34d339f923939b62b81147fd729087c280ab9963256e7af55b3cd8b5b";
+
+        verify_native_lib_remote_hash(
+            NativeLibHashStage::Final,
             "/data/iris/lib/libiris_native_core.so",
-        ));
-        assert!(native_chmod_result_to_changed(
-            Err(anyhow::anyhow!("chmod denied")),
-            "/data/iris/lib/libiris_native_core.so",
-        ));
+            expected,
+            Some(expected),
+        )
+        .unwrap();
     }
 }

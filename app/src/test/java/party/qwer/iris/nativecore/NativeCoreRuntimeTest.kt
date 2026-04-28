@@ -113,6 +113,13 @@ class NativeCoreRuntimeTest {
         assertEquals("kotlin-result", result)
         assertNull(jni.lastDecryptRequest)
         assertEquals(0L, diagnostics.callFailures)
+        assertEquals(
+            1L,
+            diagnostics.componentStats
+                .getValue("decrypt")
+                .fallbackReasons
+                .getValue("nativeUnavailable"),
+        )
     }
 
     @Test
@@ -293,6 +300,69 @@ class NativeCoreRuntimeTest {
     }
 
     @Test
+    fun `routing component on records native error kind without leaking raw error`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_ROUTING" to "on",
+                    ),
+                loader = {},
+                jni =
+                    FakeJni(
+                        rawRoutingResponse = """{"items":[{"ok":false,"errorKind":"panic","error":"ciphertext=secret"}]}""",
+                    ),
+            )
+
+        val result =
+            runtime.parseCommandOrFallback("!ping") {
+                ParsedCommand(CommandKind.NONE, "!kotlin")
+            }
+        val diagnostics = runtime.diagnostics()
+        val routingStats = diagnostics.componentStats.getValue("routing")
+
+        assertEquals(ParsedCommand(CommandKind.NONE, "!kotlin"), result)
+        assertEquals(1L, diagnostics.callFailures)
+        assertEquals(1L, routingStats.failureReasons.getValue("panic"))
+        assertEquals(1L, routingStats.fallbackReasons.getValue("panic"))
+        assertFalse(diagnostics.lastError!!.contains("secret"))
+    }
+
+    @Test
+    fun `routing batch records single native fallback error kind instead of response size mismatch`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_ROUTING" to "on",
+                    ),
+                loader = {},
+                jni =
+                    FakeJni(
+                        rawRoutingResponse = """{"items":[{"ok":false,"errorKind":"panic","error":"native panic"}]}""",
+                    ),
+            )
+
+        val result =
+            runtime.parseCommandBatchOrFallback(listOf("!a", "!b")) {
+                listOf(
+                    ParsedCommand(CommandKind.NONE, "!a"),
+                    ParsedCommand(CommandKind.NONE, "!b"),
+                )
+            }
+        val routingStats = runtime.diagnostics().componentStats.getValue("routing")
+
+        assertEquals(listOf(ParsedCommand(CommandKind.NONE, "!a"), ParsedCommand(CommandKind.NONE, "!b")), result)
+        assertEquals(1L, routingStats.failureReasons.getValue("panic"))
+        assertEquals(2L, routingStats.fallbackReasons.getValue("panic"))
+        assertFalse("responseSizeMismatch" in routingStats.failureReasons)
+    }
+
+    @Test
     fun `parser component on falls back when native requests fallback`() {
         val runtime =
             NativeCoreRuntime.create(
@@ -316,6 +386,7 @@ class NativeCoreRuntimeTest {
         assertEquals(1L, parserStats.jniCalls)
         assertEquals(1L, parserStats.items)
         assertEquals(1L, parserStats.fallbacks)
+        assertEquals(1L, parserStats.fallbackReasons.getValue("fallbackRequired"))
     }
 
     @Test
@@ -341,7 +412,38 @@ class NativeCoreRuntimeTest {
         assertNull(result)
         assertEquals(1L, parserStats.fallbacks)
         assertEquals(1L, parserStats.fallbacksByKey.getValue("roomTitle"))
+        assertEquals(1L, parserStats.fallbackReasons.getValue("fallbackRequired"))
         assertEquals(0L, parserStats.shadowMismatches)
+    }
+
+    @Test
+    fun `parser component on counts used default without forcing kotlin fallback`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_PARSERS" to "on",
+                    ),
+                loader = {},
+                jni =
+                    FakeJni(
+                        rawParserResponse = """{"items":[{"kind":"periodSpec","ok":true,"fallback":false,"usedDefault":true,"periodSpec":{"kind":"days","days":14}}]}""",
+                    ),
+            )
+
+        val result = runtime.parsePeriodSpecOrFallback(period = null, defaultDays = 7) { error("kotlin fallback should not run") }
+        val parserStats = runtime.diagnostics().componentStats.getValue("parsers")
+
+        assertEquals(
+            party.qwer.iris.model.PeriodSpec
+                .Days(14),
+            result,
+        )
+        assertEquals(0L, parserStats.fallbacks)
+        assertEquals(1L, parserStats.parserDefaultUses)
+        assertEquals(1L, parserStats.parserDefaultUsesByKey.getValue("periodSpec"))
     }
 
     @Test
@@ -409,6 +511,7 @@ class NativeCoreRuntimeTest {
         assertEquals(1L, parserStats.jniCalls)
         assertEquals(3L, parserStats.items)
         assertTrue(parserStats.totalNativeMicros > 0L)
+        assertTrue(parserStats.averageItemNativeMicros > 0L)
     }
 
     @Test
@@ -705,6 +808,7 @@ class NativeCoreRuntimeTest {
         assertTrue(decryptStats.totalNativeMicros > 0L)
         assertTrue(decryptStats.maxNativeMicros > 0L)
         assertTrue(decryptStats.averageNativeMicros > 0L)
+        assertTrue(decryptStats.averageItemNativeMicros > 0L)
         assertEquals(0L, diagnostics.callFailures)
     }
 
@@ -780,6 +884,24 @@ class NativeCoreRuntimeTest {
         assertEquals("kotlin-result", result)
         assertEquals(1L, runtime.diagnostics().callFailures)
         assertEquals("native decrypt failed", runtime.diagnostics().lastError)
+        assertEquals(
+            1L,
+            runtime
+                .diagnostics()
+                .componentStats
+                .getValue("decrypt")
+                .failureReasons
+                .getValue("jniError"),
+        )
+        assertEquals(
+            1L,
+            runtime
+                .diagnostics()
+                .componentStats
+                .getValue("decrypt")
+                .fallbackReasons
+                .getValue("jniError"),
+        )
     }
 
     @Test
@@ -791,6 +913,15 @@ class NativeCoreRuntimeTest {
         assertEquals("kotlin-result", result)
         assertEquals(1L, runtime.diagnostics().callFailures)
         assertEquals("native decrypt failed", runtime.diagnostics().lastError)
+        assertEquals(
+            1L,
+            runtime
+                .diagnostics()
+                .componentStats
+                .getValue("decrypt")
+                .failureReasons
+                .getValue("schemaDecodeError"),
+        )
     }
 
     @Test
@@ -802,6 +933,15 @@ class NativeCoreRuntimeTest {
         assertEquals("kotlin-result", result)
         assertEquals(1L, runtime.diagnostics().callFailures)
         assertEquals("native decrypt failed", runtime.diagnostics().lastError)
+        assertEquals(
+            1L,
+            runtime
+                .diagnostics()
+                .componentStats
+                .getValue("decrypt")
+                .failureReasons
+                .getValue("responseSizeMismatch"),
+        )
     }
 
     @Test
@@ -817,6 +957,20 @@ class NativeCoreRuntimeTest {
         assertEquals("kotlin-result", result)
         assertEquals(1L, diagnostics.callFailures)
         assertEquals("native decrypt failed", diagnostics.lastError)
+        assertEquals(
+            1L,
+            diagnostics.componentStats
+                .getValue("decrypt")
+                .failureReasons
+                .getValue("itemError"),
+        )
+        assertEquals(
+            1L,
+            diagnostics.componentStats
+                .getValue("decrypt")
+                .fallbackReasons
+                .getValue("itemError"),
+        )
         assertFalse(diagnostics.lastError!!.contains("secret"))
         assertFalse(diagnostics.lastError.contains("123"))
         assertFalse(diagnostics.lastError.contains("leak"))
@@ -826,7 +980,7 @@ class NativeCoreRuntimeTest {
     fun `decrypt batch in on mode falls back for partial item error and records fallback items`() {
         val runtime =
             runtimeWithNativeResponse(
-                """{"items":[{"ok":true,"plaintext":"rust-a"},{"ok":false,"error":"ciphertext=secret"}]}""",
+                """{"items":[{"ok":true,"plaintext":"rust-a"},{"ok":false,"errorKind":"invalidPadding","recoverable":true,"error":"ciphertext=secret"}]}""",
             )
 
         val result =
@@ -846,6 +1000,8 @@ class NativeCoreRuntimeTest {
         assertEquals(1L, decryptStats.jniCalls)
         assertEquals(2L, decryptStats.items)
         assertEquals(2L, decryptStats.fallbacks)
+        assertEquals(2L, decryptStats.fallbackReasons.getValue("itemError.invalidPadding"))
+        assertEquals(1L, decryptStats.failureReasons.getValue("itemError.invalidPadding"))
         assertEquals("native decrypt failed", decryptStats.lastError)
         assertEquals("native decrypt failed", diagnostics.lastError)
     }

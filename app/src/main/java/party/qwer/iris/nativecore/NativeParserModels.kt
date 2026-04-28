@@ -23,13 +23,15 @@ internal data class NativeParserBatchResponse(
 
 @Serializable
 internal data class NativeParserBatchResult(
-    val kind: String,
+    val kind: String = "",
     val ok: Boolean,
     val fallback: Boolean = false,
+    val usedDefault: Boolean = false,
     val roomTitle: String? = null,
     val notices: List<NativeNoticeInfo> = emptyList(),
     val ids: List<Long> = emptyList(),
     val periodSpec: NativePeriodSpecInfo? = null,
+    val errorKind: String? = null,
     val error: String? = null,
 )
 

@@ -35,6 +35,7 @@ internal data class NativeRoutingBatchResult(
     val eventRoute: String? = null,
     val imageRoute: String? = null,
     val targetRoute: String? = null,
+    val errorKind: String? = null,
     val error: String? = null,
 )
 

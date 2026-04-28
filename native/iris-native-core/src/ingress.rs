@@ -47,6 +47,8 @@ struct IngressBatchResult {
     payload_json: Option<String>,
     #[serde(rename = "messageId")]
     message_id: Option<String>,
+    #[serde(rename = "errorKind")]
+    error_kind: Option<&'static str>,
     error: Option<String>,
 }
 
@@ -139,11 +141,18 @@ impl IngressBatchResult {
         payload_json: Option<String>,
         message_id: Option<String>,
     ) -> Self {
-        Self::from_decision(decision, true, payload_json, message_id, None)
+        Self::from_decision(decision, true, payload_json, message_id, None, None)
     }
 
     fn with_decision_error(decision: RoutingDecision, error: &NativeCoreError) -> Self {
-        Self::from_decision(decision, false, None, None, Some(error.to_string()))
+        Self::from_decision(
+            decision,
+            false,
+            None,
+            None,
+            Some(error.kind()),
+            Some(error.to_string()),
+        )
     }
 
     fn without_decision_error(error: &NativeCoreError) -> Self {
@@ -157,6 +166,7 @@ impl IngressBatchResult {
             target_route: None,
             payload_json: None,
             message_id: None,
+            error_kind: Some(error.kind()),
             error: Some(error.to_string()),
         }
     }
@@ -166,6 +176,7 @@ impl IngressBatchResult {
         ok: bool,
         payload_json: Option<String>,
         message_id: Option<String>,
+        error_kind: Option<&'static str>,
         error: Option<String>,
     ) -> Self {
         let RoutingDecision {
@@ -187,6 +198,7 @@ impl IngressBatchResult {
             target_route,
             payload_json,
             message_id,
+            error_kind,
             error,
         }
     }

@@ -114,8 +114,15 @@ class NativeCoreDiagnosticsTest {
                                 items = 7,
                                 fallbacks = 4,
                                 shadowMismatches = 2,
+                                totalNativeMicros = 70,
+                                averageNativeMicros = 23,
+                                averageItemNativeMicros = 10,
                                 fallbacksByKey = mapOf("roomTitle" to 1),
+                                fallbackReasons = mapOf("itemError" to 2, "responseSizeMismatch" to 1),
+                                failureReasons = mapOf("itemError" to 1),
                                 shadowMismatchesByKey = mapOf("periodSpec" to 2),
+                                parserDefaultUses = 3,
+                                parserDefaultUsesByKey = mapOf("periodSpec" to 3),
                                 lastError = "native decrypt failed",
                             ),
                     ),
@@ -135,6 +142,7 @@ class NativeCoreDiagnosticsTest {
         assertEquals(7L, decryptStats.getValue("items").jsonPrimitive.long)
         assertEquals(4L, decryptStats.getValue("fallbacks").jsonPrimitive.long)
         assertEquals(2L, decryptStats.getValue("shadowMismatches").jsonPrimitive.long)
+        assertEquals(10L, decryptStats.getValue("averageItemNativeMicros").jsonPrimitive.long)
         assertEquals(
             1L,
             decryptStats
@@ -147,7 +155,35 @@ class NativeCoreDiagnosticsTest {
         assertEquals(
             2L,
             decryptStats
+                .getValue("fallbackReasons")
+                .jsonObject
+                .getValue("itemError")
+                .jsonPrimitive
+                .long,
+        )
+        assertEquals(
+            1L,
+            decryptStats
+                .getValue("failureReasons")
+                .jsonObject
+                .getValue("itemError")
+                .jsonPrimitive
+                .long,
+        )
+        assertEquals(
+            2L,
+            decryptStats
                 .getValue("shadowMismatchesByKey")
+                .jsonObject
+                .getValue("periodSpec")
+                .jsonPrimitive
+                .long,
+        )
+        assertEquals(3L, decryptStats.getValue("parserDefaultUses").jsonPrimitive.long)
+        assertEquals(
+            3L,
+            decryptStats
+                .getValue("parserDefaultUsesByKey")
                 .jsonObject
                 .getValue("periodSpec")
                 .jsonPrimitive
@@ -161,12 +197,12 @@ class NativeCoreDiagnosticsTest {
     @Test
     fun `diagnostics carries no secret fields`() {
         val propertyNames =
-            NativeCoreDiagnostics::class.java.declaredFields
-                .map { it.name }
+            (NativeCoreDiagnostics::class.java.declaredFields + NativeCoreComponentDiagnostics::class.java.declaredFields)
+                .map { it.name.lowercase() }
                 .toSet()
 
-        assertFalse("token" in propertyNames)
-        assertFalse("secret" in propertyNames)
-        assertFalse("payload" in propertyNames)
+        assertFalse(propertyNames.any { name -> "token" in name })
+        assertFalse(propertyNames.any { name -> "secret" in name })
+        assertFalse(propertyNames.any { name -> "payload" in name })
     }
 }

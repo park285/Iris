@@ -32,6 +32,7 @@ internal data class NativeIngressBatchResult(
     val targetRoute: String? = null,
     val messageId: String? = null,
     val payloadJson: String? = null,
+    val errorKind: String? = null,
     val error: String? = null,
 )
 
