@@ -351,11 +351,11 @@ iris_install() {
 
   if [[ -f "$IRIS_NATIVE_LIB_LOCAL_FILE" ]]; then
     local native_dir
-    native_dir="${IRIS_NATIVE_LIB_PATH%/*}"
+    native_dir="$(dirname "$IRIS_NATIVE_LIB_PATH")"
     echo "Pushing native library to device: $IRIS_NATIVE_LIB_PATH"
-    "${ADB_CMD[@]}" shell "mkdir -p $native_dir"
+    "${ADB_CMD[@]}" shell "su root sh -c $(sh_quote "mkdir -p $(sh_quote "$native_dir")")"
     "${ADB_CMD[@]}" push "$IRIS_NATIVE_LIB_LOCAL_FILE" "$IRIS_NATIVE_LIB_PATH"
-    "${ADB_CMD[@]}" shell "chmod 644 $IRIS_NATIVE_LIB_PATH"
+    "${ADB_CMD[@]}" shell "su root sh -c $(sh_quote "chmod 644 $(sh_quote "$IRIS_NATIVE_LIB_PATH")")"
   else
     echo "Skipping native library push; local file not found: $IRIS_NATIVE_LIB_LOCAL_FILE"
   fi
