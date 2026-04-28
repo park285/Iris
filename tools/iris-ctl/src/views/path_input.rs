@@ -142,7 +142,7 @@ impl PathInput {
             .filter(|e| e.file_name().to_string_lossy().starts_with(&prefix))
             .map(|e| {
                 let mut full = dir.join(e.file_name()).to_string_lossy().to_string();
-                if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                if e.file_type().is_ok_and(|t| t.is_dir()) {
                     full.push('/');
                 }
                 full
@@ -156,7 +156,7 @@ impl PathInput {
     pub fn validate_file(&mut self) {
         let path = Path::new(&self.value);
         if path.is_file() {
-            let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+            let size = std::fs::metadata(path).map_or(0, |m| m.len());
             let ext = path
                 .extension()
                 .map_or_else(String::new, |e| e.to_string_lossy().to_string());

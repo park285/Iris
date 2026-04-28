@@ -196,12 +196,10 @@ impl ReplyModal {
                     self.draft.image_paths_cursor = self.draft.image_paths.len() - 1;
                     self.draft.image_editing = true;
                 }
-                KeyCode::Char('d') => {
-                    if self.draft.image_paths.len() > 1 {
-                        self.draft.image_paths.remove(self.draft.image_paths_cursor);
-                        if self.draft.image_paths_cursor >= self.draft.image_paths.len() {
-                            self.draft.image_paths_cursor = self.draft.image_paths.len() - 1;
-                        }
+                KeyCode::Char('d') if self.draft.image_paths.len() > 1 => {
+                    self.draft.image_paths.remove(self.draft.image_paths_cursor);
+                    if self.draft.image_paths_cursor >= self.draft.image_paths.len() {
+                        self.draft.image_paths_cursor = self.draft.image_paths.len() - 1;
                     }
                 }
                 _ => {}
@@ -210,15 +208,11 @@ impl ReplyModal {
         }
 
         match key.code {
-            KeyCode::Up => {
-                if self.draft.image_paths_cursor > 0 {
-                    self.draft.image_paths_cursor -= 1;
-                }
+            KeyCode::Up if self.draft.image_paths_cursor > 0 => {
+                self.draft.image_paths_cursor -= 1;
             }
-            KeyCode::Down => {
-                if self.draft.image_paths_cursor + 1 < self.draft.image_paths.len() {
-                    self.draft.image_paths_cursor += 1;
-                }
+            KeyCode::Down if self.draft.image_paths_cursor + 1 < self.draft.image_paths.len() => {
+                self.draft.image_paths_cursor += 1;
             }
             KeyCode::Enter => {
                 self.draft.image_editing = true;
@@ -229,15 +223,11 @@ impl ReplyModal {
 
     fn handle_room_selector_key(&mut self, key: KeyEvent) -> super::ModalAction {
         match key.code {
-            KeyCode::Up => {
-                if self.selectors.room_selector_cursor > 0 {
-                    self.selectors.room_selector_cursor -= 1;
-                }
+            KeyCode::Up if self.selectors.room_selector_cursor > 0 => {
+                self.selectors.room_selector_cursor -= 1;
             }
-            KeyCode::Down => {
-                if self.selectors.room_selector_cursor + 1 < self.room_list.len() {
-                    self.selectors.room_selector_cursor += 1;
-                }
+            KeyCode::Down if self.selectors.room_selector_cursor + 1 < self.room_list.len() => {
+                self.selectors.room_selector_cursor += 1;
             }
             KeyCode::Enter => {
                 if let Some(selected) = self
@@ -274,17 +264,14 @@ impl ReplyModal {
 
     fn handle_thread_selector_key(&mut self, key: KeyEvent) -> super::ModalAction {
         match key.code {
-            KeyCode::Up => {
-                if self.selectors.thread_selector_cursor > 0 {
-                    self.selectors.thread_selector_cursor -= 1;
-                }
+            KeyCode::Up if self.selectors.thread_selector_cursor > 0 => {
+                self.selectors.thread_selector_cursor -= 1;
             }
-            KeyCode::Down => {
+            KeyCode::Down
                 if self.selectors.thread_selector_cursor + 1
-                    < self.selectors.thread_suggestions.len()
-                {
-                    self.selectors.thread_selector_cursor += 1;
-                }
+                    < self.selectors.thread_suggestions.len() =>
+            {
+                self.selectors.thread_selector_cursor += 1;
             }
             KeyCode::Enter => {
                 if let Some(selected) = self
