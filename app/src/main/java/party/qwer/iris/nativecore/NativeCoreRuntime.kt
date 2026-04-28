@@ -115,7 +115,18 @@ internal class NativeCoreRuntime private constructor(
             return runCatching {
                 loader(config.libraryPath)
                 val selfTest = jni.nativeSelfTest()
-                NativeCoreRuntime(config, jni, loaded = true, selfTestResult = selfTest, loadError = null)
+                if (selfTest.startsWith(nativeSelfTestErrorPrefix)) {
+                    IrisLogger.error("[NativeCore] native self-test failed: $nativeSelfTestFailure")
+                    NativeCoreRuntime(
+                        config,
+                        jni,
+                        loaded = true,
+                        selfTestResult = null,
+                        loadError = nativeSelfTestFailure,
+                    )
+                } else {
+                    NativeCoreRuntime(config, jni, loaded = true, selfTestResult = selfTest, loadError = null)
+                }
             }.getOrElse { error ->
                 IrisLogger.error("[NativeCore] failed to load native core: ${error.message}", error)
                 NativeCoreRuntime(
@@ -127,6 +138,9 @@ internal class NativeCoreRuntime private constructor(
                 )
             }
         }
+
+        private const val nativeSelfTestErrorPrefix = "error:"
+        private const val nativeSelfTestFailure = "native core self-test failed"
     }
 }
 

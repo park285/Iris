@@ -1,7 +1,7 @@
 use crate::VERSION;
 use crate::errors::{NativeCoreError, NativeCoreResult};
 use jni::JNIEnv;
-use jni::objects::{JByteArray, JClass, JString};
+use jni::objects::{JByteArray, JObject, JString};
 use jni::sys::{jbyteArray, jstring};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -13,7 +13,7 @@ fn recover<T>(operation: impl FnOnce() -> NativeCoreResult<T>) -> NativeCoreResu
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_party_qwer_iris_nativecore_NativeCoreJni_nativeSelfTest(
     env: JNIEnv<'_>,
-    _class: JClass<'_>,
+    _receiver: JObject<'_>,
 ) -> jstring {
     let value =
         recover(|| Ok(VERSION.to_string())).unwrap_or_else(|error| format!("error:{error}"));
@@ -25,7 +25,7 @@ pub extern "system" fn Java_party_qwer_iris_nativecore_NativeCoreJni_nativeSelfT
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_party_qwer_iris_nativecore_NativeCoreJni_decryptBatch(
     env: JNIEnv<'_>,
-    _class: JClass<'_>,
+    _receiver: JObject<'_>,
     request: JByteArray<'_>,
 ) -> jbyteArray {
     let response = recover(|| decrypt_batch_response(&env, &request))
@@ -52,4 +52,23 @@ fn fallback_error_response(error: &NativeCoreError) -> Vec<u8> {
     })
     .to_string()
     .into_bytes()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    #[test]
+    fn fallback_error_response_escapes_error_message_as_json() {
+        let response = fallback_error_response(&NativeCoreError::Jni(
+            "bad \"quote\" \\ slash\nline".to_owned(),
+        ));
+
+        let response: Value = serde_json::from_slice(&response).expect("fallback should be json");
+        assert_eq!(
+            response["items"][0]["error"],
+            "jni error: bad \"quote\" \\ slash\nline"
+        );
+    }
 }

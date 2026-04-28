@@ -77,6 +77,23 @@ class NativeCoreRuntimeTest {
     }
 
     @Test
+    fun `on mode self test error result records failed self test without version`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env = mapOf("IRIS_NATIVE_CORE" to "on"),
+                loader = {},
+                jni = FakeJni(selfTestResult = "error:panic in native core"),
+            )
+
+        val diagnostics = runtime.diagnostics()
+        assertTrue(diagnostics.loaded)
+        assertFalse(diagnostics.selfTestOk)
+        assertNull(diagnostics.version)
+        assertEquals("native core self-test failed", diagnostics.lastError)
+        assertEquals("native core self-test failed", diagnostics.readinessFailureReason())
+    }
+
+    @Test
     fun `decrypt sends request json with encType ciphertext and userId`() {
         val jni = FakeJni()
         val runtime =

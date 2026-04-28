@@ -74,6 +74,47 @@ mod tests {
     }
 
     #[test]
+    fn returns_placeholder_error_for_each_item_in_order() {
+        let response = decrypt_batch_json(
+            br#"{"items":[{"encType":1,"ciphertext":"abc","userId":42},{"encType":2,"ciphertext":"abcdef","userId":99}]}"#,
+        )
+        .expect("valid request should serialize a placeholder response");
+
+        let response: Value =
+            serde_json::from_slice(&response).expect("response should be valid json");
+        let items = response["items"]
+            .as_array()
+            .expect("items should be an array");
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(
+            items[0]["error"],
+            "decrypt not implemented for encType=1 userId=42 ciphertextLen=3"
+        );
+        assert_eq!(
+            items[1]["error"],
+            "decrypt not implemented for encType=2 userId=99 ciphertextLen=6"
+        );
+    }
+
+    #[test]
+    fn returns_empty_items_for_empty_batch() {
+        let response =
+            decrypt_batch_json(br#"{"items":[]}"#).expect("empty batch should serialize response");
+
+        let response: Value =
+            serde_json::from_slice(&response).expect("response should be valid json");
+
+        assert_eq!(
+            response["items"]
+                .as_array()
+                .expect("items should be an array")
+                .len(),
+            0
+        );
+    }
+
+    #[test]
     fn rejects_invalid_request_json() {
         let error = decrypt_batch_json(b"not-json").expect_err("invalid json should fail");
 
