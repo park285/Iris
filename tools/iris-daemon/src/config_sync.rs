@@ -344,11 +344,11 @@ fn native_core_mode_env_value(raw: Option<&str>) -> NativeCoreMode {
     }
 }
 
-fn native_sync_enabled_env_value(raw: Option<&str>) -> bool {
+pub fn native_sync_enabled_env_value(raw: Option<&str>) -> bool {
     native_core_mode_env_value(raw).sync_enabled()
 }
 
-fn native_required_env_value(raw: Option<&str>) -> bool {
+pub fn native_required_env_value(raw: Option<&str>) -> bool {
     native_core_mode_env_value(raw).requires_source()
 }
 

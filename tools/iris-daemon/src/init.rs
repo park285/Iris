@@ -25,10 +25,27 @@ pub async fn run_init(cfg: &DaemonConfig) -> Result<()> {
 }
 
 async fn maybe_sync_native_lib(adb: &Adb, cfg: &DaemonConfig) -> Result<()> {
-    if config_sync::native_sync_enabled_from_env() {
-        config_sync::sync_native_lib_if_needed(adb, cfg, false).await?;
+    if let Some(strict_source) = native_init_sync_decision_from_env() {
+        config_sync::sync_native_lib_if_needed(adb, cfg, strict_source).await?;
     }
     Ok(())
+}
+
+fn native_init_sync_decision_from_env() -> Option<bool> {
+    if config_sync::native_sync_enabled_from_env() {
+        Some(config_sync::native_required_from_env())
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+fn native_init_sync_decision_from_env_value(raw: Option<&str>) -> Option<bool> {
+    if config_sync::native_sync_enabled_env_value(raw) {
+        Some(config_sync::native_required_env_value(raw))
+    } else {
+        None
+    }
 }
 
 async fn prepare_device(adb: &Adb, cfg: &DaemonConfig) -> Result<()> {
@@ -105,5 +122,24 @@ mod tests {
     fn phantom_killer_commands_are_correct() {
         assert!(PHANTOM_KILLER_COMMANDS[0].contains("settings_enable_monitor_phantom_procs"));
         assert!(PHANTOM_KILLER_COMMANDS[1].contains("persist.sys.fflag.override"));
+    }
+
+    #[test]
+    fn native_init_sync_decision_respects_mode_without_adb() {
+        let cases = [
+            (None, None),
+            (Some(""), None),
+            (Some("   "), None),
+            (Some("off"), None),
+            (Some("enabled"), None),
+            (Some("shadow"), Some(false)),
+            (Some(" SHADOW "), Some(false)),
+            (Some("on"), Some(true)),
+            (Some(" ON "), Some(true)),
+        ];
+
+        for (raw, expected) in cases {
+            assert_eq!(native_init_sync_decision_from_env_value(raw), expected);
+        }
     }
 }
