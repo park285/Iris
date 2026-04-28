@@ -146,8 +146,7 @@ pub async fn restart_iris(adb: &Adb, cfg: &DaemonConfig) -> Result<()> {
 pub async fn kakaotalk_alive(adb: &Adb) -> bool {
     adb.shell(&format!("pidof {KAKAOTALK_PACKAGE}"))
         .await
-        .map(|output| !output.is_empty())
-        .unwrap_or(false)
+        .is_ok_and(|output| !output.is_empty())
 }
 
 #[cfg(test)]

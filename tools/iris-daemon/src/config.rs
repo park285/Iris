@@ -154,6 +154,10 @@ pub struct InitConfig {
     pub apk_src: String,
     #[serde(default = "default_apk_dest")]
     pub apk_dest: String,
+    #[serde(default = "default_native_lib_src")]
+    pub native_lib_src: String,
+    #[serde(default = "default_native_lib_dest")]
+    pub native_lib_dest: String,
 }
 
 impl Default for InitConfig {
@@ -165,6 +169,8 @@ impl Default for InitConfig {
             config_dest: default_config_dest(),
             apk_src: default_apk_src(),
             apk_dest: default_apk_dest(),
+            native_lib_src: default_native_lib_src(),
+            native_lib_dest: default_native_lib_dest(),
         }
     }
 }
@@ -191,6 +197,14 @@ fn default_apk_src() -> String {
 
 fn default_apk_dest() -> String {
     "/data/local/tmp/Iris.apk".to_string()
+}
+
+fn default_native_lib_src() -> String {
+    "/root/work/Iris/output/libiris_native_core.so".to_string()
+}
+
+fn default_native_lib_dest() -> String {
+    "/data/iris/lib/libiris_native_core.so".to_string()
 }
 
 impl IrisConnection for DaemonConfig {
@@ -239,6 +253,12 @@ fn apply_env_overrides_from(
     }
     if let Some(apk_src) = env.get("IRIS_APK_SRC") {
         config.init.apk_src.clone_from(apk_src);
+    }
+    if let Some(native_lib_src) = env.get("IRIS_NATIVE_LIB_SRC") {
+        config.init.native_lib_src.clone_from(native_lib_src);
+    }
+    if let Some(native_lib_dest) = env.get("IRIS_NATIVE_LIB_PATH") {
+        config.init.native_lib_dest.clone_from(native_lib_dest);
     }
 }
 
@@ -319,6 +339,14 @@ apk_dest = "/data/Iris.apk"
         let config = DaemonConfig::default();
 
         assert_eq!(config.init.apk_src, "/root/work/Iris/Iris.apk");
+        assert_eq!(
+            config.init.native_lib_src,
+            "/root/work/Iris/output/libiris_native_core.so"
+        );
+        assert_eq!(
+            config.init.native_lib_dest,
+            "/data/iris/lib/libiris_native_core.so"
+        );
         assert_eq!(config.rollback.max_consecutive_failures, 5);
     }
 
@@ -380,5 +408,27 @@ device = "10.0.0.2:5555"
         apply_env_overrides_from(&mut config, &env);
 
         assert_eq!(config.init.apk_src, "/tmp/Iris.apk");
+    }
+
+    #[test]
+    fn env_overrides_native_library_paths() {
+        let mut config = DaemonConfig::default();
+        let env = std::collections::HashMap::from([
+            (
+                String::from("IRIS_NATIVE_LIB_SRC"),
+                String::from("/tmp/libiris_native_core.so"),
+            ),
+            (
+                String::from("IRIS_NATIVE_LIB_PATH"),
+                String::from("/data/local/tmp/libiris_native_core.so"),
+            ),
+        ]);
+        apply_env_overrides_from(&mut config, &env);
+
+        assert_eq!(config.init.native_lib_src, "/tmp/libiris_native_core.so");
+        assert_eq!(
+            config.init.native_lib_dest,
+            "/data/local/tmp/libiris_native_core.so"
+        );
     }
 }

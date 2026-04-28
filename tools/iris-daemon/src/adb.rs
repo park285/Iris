@@ -85,8 +85,7 @@ impl Adb {
     pub async fn is_boot_completed(&self) -> bool {
         self.shell("getprop sys.boot_completed")
             .await
-            .map(|output| output.trim() == "1")
-            .unwrap_or(false)
+            .is_ok_and(|output| output.trim() == "1")
     }
 
     pub async fn connect(&self) -> Result<String> {

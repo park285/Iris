@@ -261,8 +261,7 @@ mod tests {
             bridge: ProbeResult::Fail("bridge not running".to_string()),
         };
         assert!(next_transition(&mut sm, &degraded).is_none());
-        let t = next_transition(&mut sm, &degraded)
-            .expect("should degrade from bridge failure");
+        let t = next_transition(&mut sm, &degraded).expect("should degrade from bridge failure");
         assert_eq!(t.to, State::Degraded);
         assert!(t.reason.contains("readiness"));
     }

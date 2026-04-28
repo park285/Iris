@@ -72,13 +72,80 @@ pub async fn sync_apk_if_needed(
     Ok(true)
 }
 
+pub async fn sync_native_lib_if_needed(
+    adb: &Adb,
+    cfg: &DaemonConfig,
+    strict_source: bool,
+) -> Result<bool> {
+    let native_lib_src = Path::new(&cfg.init.native_lib_src);
+    if !native_lib_source_available(native_lib_src, strict_source)? {
+        return Ok(false);
+    }
+
+    let local_hash = local_file_sha256(native_lib_src).with_context(|| {
+        format!(
+            "로컬 native library hash 계산 실패: {}",
+            native_lib_src.display()
+        )
+    })?;
+    let device_hash = device_file_sha256(adb, &cfg.init.native_lib_dest).await?;
+    if !apk_needs_sync(&local_hash, device_hash.as_deref()) {
+        tracing::debug!(dest = %cfg.init.native_lib_dest, "native library drift 없음");
+        return Ok(false);
+    }
+
+    ensure_native_lib_dest_dir(adb, &cfg.init.native_lib_dest).await?;
+    adb.push(native_lib_src, &cfg.init.native_lib_dest).await?;
+    adb.shell(&build_device_chmod_command(
+        &cfg.init.native_lib_dest,
+        "644",
+    ))
+    .await
+    .with_context(|| {
+        format!(
+            "native library 권한 설정 실패: {}",
+            cfg.init.native_lib_dest
+        )
+    })?;
+    tracing::info!(src = %native_lib_src.display(), dest = %cfg.init.native_lib_dest, "native library sync 완료");
+    Ok(true)
+}
+
+fn native_lib_source_available(native_lib_src: &Path, strict_source: bool) -> Result<bool> {
+    if native_lib_src.exists() {
+        return Ok(true);
+    }
+    if strict_source && native_required_from_env() {
+        anyhow::bail!(
+            "native library source missing: {}",
+            native_lib_src.display()
+        );
+    }
+    tracing::warn!(
+        path = %native_lib_src.display(),
+        "native library source missing, native library drift check skipped"
+    );
+    Ok(false)
+}
+
+async fn ensure_native_lib_dest_dir(adb: &Adb, native_lib_dest: &str) -> Result<()> {
+    if let Some(dest_dir) = remote_parent_dir(native_lib_dest) {
+        adb.shell(&build_device_mkdir_command(&dest_dir))
+            .await
+            .with_context(|| format!("native library 대상 디렉터리 생성 실패: {dest_dir}"))?;
+    }
+    Ok(())
+}
+
 pub async fn check_and_sync(adb: &Adb, cfg: &DaemonConfig) -> Result<()> {
     let config_changed = sync_config_if_needed(adb, cfg).await?;
     let apk_changed = sync_apk_if_needed(adb, cfg, false).await?;
-    if config_changed || apk_changed {
+    let native_changed = sync_native_lib_if_needed(adb, cfg, false).await?;
+    if config_changed || apk_changed || native_changed {
         tracing::info!(
             config_changed = config_changed,
             apk_changed = apk_changed,
+            native_changed = native_changed,
             "runtime drift 감지 — Iris 재시작",
         );
         crate::process::restart_iris(adb, cfg).await?;
@@ -168,7 +235,7 @@ fn build_device_sha256_command(remote_path: &str) -> String {
     let inner = format!(
         "sha256sum {quoted_path} 2>/dev/null || toybox sha256sum {quoted_path} 2>/dev/null || true"
     );
-    format!("su 0 sh -lc {}", shell_quote(&inner))
+    build_root_shell_command(&inner)
 }
 
 fn parse_sha256_output(output: &str) -> Option<String> {
@@ -186,6 +253,38 @@ fn parse_sha256_output(output: &str) -> Option<String> {
 
 fn apk_needs_sync(local_hash: &str, device_hash: Option<&str>) -> bool {
     device_hash != Some(local_hash)
+}
+
+fn remote_parent_dir(remote_path: &str) -> Option<String> {
+    let parent = Path::new(remote_path).parent()?;
+    let parent = parent.to_string_lossy();
+    if parent.is_empty() {
+        None
+    } else {
+        Some(parent.into_owned())
+    }
+}
+
+fn build_device_mkdir_command(remote_dir: &str) -> String {
+    build_root_shell_command(&format!("mkdir -p {}", shell_quote(remote_dir)))
+}
+
+fn build_device_chmod_command(remote_path: &str, mode: &str) -> String {
+    build_root_shell_command(&format!("chmod {mode} {}", shell_quote(remote_path)))
+}
+
+fn build_root_shell_command(inner: &str) -> String {
+    format!("su 0 sh -lc {}", shell_quote(inner))
+}
+
+fn native_required_from_env() -> bool {
+    std::env::var("IRIS_NATIVE_CORE")
+        .ok()
+        .is_some_and(|value| native_required_env_value(&value))
+}
+
+fn native_required_env_value(value: &str) -> bool {
+    value.trim() == "on"
 }
 
 fn shell_quote(value: &str) -> String {
@@ -304,7 +403,10 @@ mod tests {
             "sha256sum {quoted_path} 2>/dev/null || toybox sha256sum {quoted_path} 2>/dev/null || true"
         );
 
-        assert_eq!(command, format!("su 0 sh -lc {}", shell_quote(&expected_inner)));
+        assert_eq!(
+            command,
+            format!("su 0 sh -lc {}", shell_quote(&expected_inner))
+        );
     }
 
     #[test]
@@ -316,6 +418,51 @@ mod tests {
             "sha256sum {quoted_path} 2>/dev/null || toybox sha256sum {quoted_path} 2>/dev/null || true"
         );
 
-        assert_eq!(command, format!("su 0 sh -lc {}", shell_quote(&expected_inner)));
+        assert_eq!(
+            command,
+            format!("su 0 sh -lc {}", shell_quote(&expected_inner))
+        );
+    }
+
+    #[test]
+    fn remote_parent_dir_extracts_native_library_dest_dir() {
+        assert_eq!(
+            remote_parent_dir("/data/iris/lib/libiris_native_core.so").as_deref(),
+            Some("/data/iris/lib"),
+        );
+        assert_eq!(remote_parent_dir("libiris_native_core.so"), None);
+    }
+
+    #[test]
+    fn build_device_mkdir_command_uses_root_shell_and_quotes_dir() {
+        let remote_dir = "/data/iris/lib weird's";
+        let command = build_device_mkdir_command(remote_dir);
+        let expected_inner = format!("mkdir -p {}", shell_quote(remote_dir));
+
+        assert_eq!(
+            command,
+            format!("su 0 sh -lc {}", shell_quote(&expected_inner))
+        );
+    }
+
+    #[test]
+    fn build_device_chmod_command_uses_root_shell_and_quotes_path() {
+        let remote_path = "/data/iris/lib/lib weird's.so";
+        let command = build_device_chmod_command(remote_path, "644");
+        let expected_inner = format!("chmod 644 {}", shell_quote(remote_path));
+
+        assert_eq!(
+            command,
+            format!("su 0 sh -lc {}", shell_quote(&expected_inner))
+        );
+    }
+
+    #[test]
+    fn native_required_env_value_accepts_only_trimmed_exact_on() {
+        assert!(native_required_env_value("on"));
+        assert!(native_required_env_value(" on "));
+        assert!(!native_required_env_value("ON"));
+        assert!(!native_required_env_value("enabled"));
+        assert!(!native_required_env_value(""));
     }
 }
