@@ -1,5 +1,7 @@
 package party.qwer.iris.config
 
+import party.qwer.iris.DEFAULT_COMMAND_ROUTE_PREFIXES
+import party.qwer.iris.DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES
 import party.qwer.iris.UserConfigState
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -158,10 +160,10 @@ class ConfigPolicyTest {
     }
 
     @Test
-    fun `default routing policy has empty maps and requires external bootstrap`() {
+    fun `default routing policy seeds chatbotgo routes and requires external bootstrap`() {
         val policy = ConfigPolicy.defaultRoutingPolicy
-        assertEquals(emptyMap<String, List<String>>(), policy.commandRoutePrefixes)
-        assertEquals(emptyMap<String, List<String>>(), policy.imageMessageTypeRoutes)
+        assertEquals(DEFAULT_COMMAND_ROUTE_PREFIXES, policy.commandRoutePrefixes)
+        assertEquals(DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES, policy.imageMessageTypeRoutes)
         assertTrue(policy.requiresExternalBootstrap)
     }
 }

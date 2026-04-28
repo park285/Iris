@@ -15,8 +15,8 @@ internal data class UserConfigState(
     val dbPollingRate: Long = 100,
     val messageSendRate: Long = 50,
     val messageSendJitterMax: Long = 0,
-    val commandRoutePrefixes: Map<String, List<String>> = emptyMap(),
-    val imageMessageTypeRoutes: Map<String, List<String>> = emptyMap(),
+    val commandRoutePrefixes: Map<String, List<String>> = DEFAULT_COMMAND_ROUTE_PREFIXES,
+    val imageMessageTypeRoutes: Map<String, List<String>> = DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES,
 )
 
 internal data class DiscoveredConfigState(

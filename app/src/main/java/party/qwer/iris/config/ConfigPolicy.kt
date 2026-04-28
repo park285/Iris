@@ -2,6 +2,8 @@ package party.qwer.iris.config
 
 import party.qwer.iris.ApiRequestException
 import party.qwer.iris.ConfigMutationPlan
+import party.qwer.iris.DEFAULT_COMMAND_ROUTE_PREFIXES
+import party.qwer.iris.DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES
 import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
 import party.qwer.iris.PlannedConfigUpdate
 import party.qwer.iris.UserConfigState
@@ -131,8 +133,8 @@ internal object ConfigPolicy {
 
     val defaultRoutingPolicy: RoutingPolicy =
         RoutingPolicy(
-            commandRoutePrefixes = emptyMap(),
-            imageMessageTypeRoutes = emptyMap(),
+            commandRoutePrefixes = DEFAULT_COMMAND_ROUTE_PREFIXES,
+            imageMessageTypeRoutes = DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES,
             requiresExternalBootstrap = true,
         )
 
@@ -258,9 +260,9 @@ internal object ConfigPolicy {
                 requiresRestart = false,
                 plan =
                     ConfigMutationPlan(
-                    candidateSnapshot = candidateState,
-                    applyImmediately = true,
-                ),
+                        candidateSnapshot = candidateState,
+                        applyImmediately = true,
+                    ),
             )
         }
 
@@ -277,9 +279,9 @@ internal object ConfigPolicy {
                 requiresRestart = requiresRestart(ConfigField.DB_POLLING_RATE),
                 plan =
                     ConfigMutationPlan(
-                    candidateSnapshot = candidateState,
-                    applyImmediately = true,
-                ),
+                        candidateSnapshot = candidateState,
+                        applyImmediately = true,
+                    ),
             )
         }
 
@@ -296,9 +298,9 @@ internal object ConfigPolicy {
                 requiresRestart = requiresRestart(ConfigField.MESSAGE_SEND_RATE),
                 plan =
                     ConfigMutationPlan(
-                    candidateSnapshot = candidateState,
-                    applyImmediately = true,
-                ),
+                        candidateSnapshot = candidateState,
+                        applyImmediately = true,
+                    ),
             )
         }
 
@@ -315,9 +317,9 @@ internal object ConfigPolicy {
                 requiresRestart = requiresRestart(ConfigField.BOT_SOCKET_PORT),
                 plan =
                     ConfigMutationPlan(
-                    candidateSnapshot = candidateState,
-                    applyImmediately = false,
-                ),
+                        candidateSnapshot = candidateState,
+                        applyImmediately = false,
+                    ),
             )
         }
 

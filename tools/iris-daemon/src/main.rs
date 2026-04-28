@@ -28,7 +28,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    Init,
+    Init {
+        #[arg(long, value_enum, default_value_t = init::InitMode::ForceRestart)]
+        mode: init::InitMode,
+    },
     Watch,
     Status,
 }
@@ -55,7 +58,7 @@ async fn main() -> Result<()> {
     let cfg = config::DaemonConfig::load(cli.config.as_deref())?;
     tracing::info!(health_url = %cfg.iris.health_url, device = %cfg.adb.device, "iris-daemon 시작");
     match cli.command {
-        Command::Init => init::run_init(&cfg).await,
+        Command::Init { mode } => init::run_init(&cfg, mode).await,
         Command::Watch => daemon::run_watch(cfg).await,
         Command::Status => {
             let api = iris_common::api::IrisApi::with_timeout(

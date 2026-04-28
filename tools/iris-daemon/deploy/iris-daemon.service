@@ -5,7 +5,9 @@ After=network.target docker.service
 [Service]
 Type=notify
 ExecStart=/usr/local/bin/iris-daemon watch
-ExecStartPre=/usr/local/bin/iris-daemon init
+# systemd 데몬 재시작은 Iris HTTP 프로세스를 재시작하지 않는다.
+# APK/config rollout 재시작은 명시적으로 `iris-daemon init`을 실행한다.
+ExecStartPre=/usr/local/bin/iris-daemon init --mode if-missing
 Restart=always
 RestartSec=5
 EnvironmentFile=/root/work/arm-iris-runtime/configs/iris/iris.env

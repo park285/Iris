@@ -3,6 +3,7 @@ use crate::config::DaemonConfig;
 use crate::config_sync;
 use crate::process;
 use anyhow::{Result, bail};
+use clap::ValueEnum;
 use std::time::Duration;
 
 const PHANTOM_KILLER_COMMANDS: [&str; 2] = [
@@ -10,17 +11,32 @@ const PHANTOM_KILLER_COMMANDS: [&str; 2] = [
     "setprop persist.sys.fflag.override.settings_enable_monitor_phantom_procs false",
 ];
 
-pub async fn run_init(cfg: &DaemonConfig) -> Result<()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum InitMode {
+    ForceRestart,
+    IfMissing,
+}
+
+pub async fn run_init(cfg: &DaemonConfig, mode: InitMode) -> Result<()> {
     let adb = Adb::new(&cfg.adb.device);
     tracing::info!(device = %cfg.adb.device, "init 시작");
 
     prepare_device(&adb, cfg).await?;
+    if should_skip_destructive_init(mode, process::iris_pid(&adb).await.is_some()) {
+        tracing::info!("Iris 프로세스 실행 중, if-missing init 건너뜀");
+        return Ok(());
+    }
+
     config_sync::render_and_push(&adb, cfg).await?;
     config_sync::sync_apk_if_needed(&adb, cfg, true).await?;
     ensure_runtime_ready(&adb, cfg).await?;
 
     tracing::info!("init 완료");
     Ok(())
+}
+
+fn should_skip_destructive_init(mode: InitMode, iris_running: bool) -> bool {
+    mode == InitMode::IfMissing && iris_running
 }
 
 async fn prepare_device(adb: &Adb, cfg: &DaemonConfig) -> Result<()> {
@@ -92,6 +108,22 @@ async fn run_phantom_killer_command(adb: &Adb, command: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn if_missing_mode_skips_destructive_init_when_iris_is_running() {
+        assert!(should_skip_destructive_init(InitMode::IfMissing, true));
+    }
+
+    #[test]
+    fn if_missing_mode_runs_full_init_when_iris_is_missing() {
+        assert!(!should_skip_destructive_init(InitMode::IfMissing, false));
+    }
+
+    #[test]
+    fn force_restart_mode_always_runs_full_init() {
+        assert!(!should_skip_destructive_init(InitMode::ForceRestart, true));
+        assert!(!should_skip_destructive_init(InitMode::ForceRestart, false));
+    }
 
     #[test]
     fn phantom_killer_commands_are_correct() {
