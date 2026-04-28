@@ -131,7 +131,7 @@ class ConfigSerializationTest {
     }
 
     @Test
-    fun `keeps routing fields empty when routing fields are missing`() {
+    fun `seeds default routing fields when routing fields are missing`() {
         val decoded =
             decodeConfigValues(
                 json,
@@ -143,8 +143,8 @@ class ConfigSerializationTest {
                 """.trimIndent(),
             )
 
-        assertEquals(emptyMap(), decoded.values.commandRoutePrefixes)
-        assertEquals(emptyMap(), decoded.values.imageMessageTypeRoutes)
+        assertEquals(DEFAULT_COMMAND_ROUTE_PREFIXES, decoded.values.commandRoutePrefixes)
+        assertEquals(DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES, decoded.values.imageMessageTypeRoutes)
     }
 
     @Test

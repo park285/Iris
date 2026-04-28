@@ -1,8 +1,12 @@
 package party.qwer.iris.delivery.webhook
 
 import kotlinx.serialization.json.JsonPrimitive
+import party.qwer.iris.CHATBOTGO_ROUTE
 import party.qwer.iris.CommandParser
+import party.qwer.iris.DEFAULT_COMMAND_ROUTE_PREFIXES
 import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
+import party.qwer.iris.DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES
+import party.qwer.iris.SETTLEMENT_ROUTE
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
@@ -12,34 +16,28 @@ import kotlin.test.assertSame
 class H2cDispatcherRouteSupportTest {
     private val seededRouteConfig =
         TestConfigProvider(
-            commandRoutes =
-                mapOf(
-                    "settlement" to listOf("!정산", "!정산완료"),
-                    "chatbotgo" to listOf("!질문", "!이미지", "!그림", "!리셋", "!관리자", "!한강"),
-                ),
-            imageRoutes =
-                mapOf(
-                    "chatbotgo" to listOf("2"),
-                ),
+            commandRoutes = DEFAULT_COMMAND_ROUTE_PREFIXES,
+            imageRoutes = DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES,
         )
 
     private val emptyRouteConfig = TestConfigProvider()
 
     @Test
     fun `seeded config routes configured webhook commands`() {
-        assertEquals("chatbotgo", resolveWebhookRoute(CommandParser.parse("!질문 hello"), seededRouteConfig))
-        assertEquals("settlement", resolveWebhookRoute(CommandParser.parse("!정산"), seededRouteConfig))
+        assertEquals(CHATBOTGO_ROUTE, resolveWebhookRoute(CommandParser.parse("!질문 hello"), seededRouteConfig))
+        assertEquals(CHATBOTGO_ROUTE, resolveWebhookRoute(CommandParser.parse("!프로필 테스트"), seededRouteConfig))
+        assertEquals(SETTLEMENT_ROUTE, resolveWebhookRoute(CommandParser.parse("!정산"), seededRouteConfig))
     }
 
     @Test
     fun `seeded config routes configured image types`() {
-        assertEquals("chatbotgo", resolveImageRoute("2", seededRouteConfig))
+        assertEquals(CHATBOTGO_ROUTE, resolveImageRoute("2", seededRouteConfig))
     }
 
     @Test
     fun `member identity events route to chatbotgo`() {
-        assertEquals("chatbotgo", resolveEventRoute("nickname_change"))
-        assertEquals("chatbotgo", resolveEventRoute("profile_change"))
+        assertEquals(CHATBOTGO_ROUTE, resolveEventRoute("nickname_change"))
+        assertEquals(CHATBOTGO_ROUTE, resolveEventRoute("profile_change"))
     }
 
     @Test

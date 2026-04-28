@@ -1,5 +1,6 @@
 package party.qwer.iris.delivery.webhook
 
+import party.qwer.iris.CHATBOTGO_ROUTE
 import party.qwer.iris.CommandKind
 import party.qwer.iris.CommandParser
 import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
@@ -8,8 +9,6 @@ import party.qwer.iris.ParsedCommand
 internal fun resolveWebhookRoute(commandText: String): String? = resolveWebhookRoute(CommandParser.parse(commandText))
 
 internal fun resolveWebhookRoute(parsedCommand: ParsedCommand): String? = resolveWebhookRoute(parsedCommand, null)
-
-private const val chatbotgoRoute = "chatbotgo"
 
 private val chatbotgoEventTypes =
     setOf(
@@ -48,7 +47,7 @@ internal fun resolveEventRoute(messageType: String?): String? {
         return null
     }
 
-    return chatbotgoRoute
+    return CHATBOTGO_ROUTE
 }
 
 internal fun resolveImageRoute(messageType: String?): String? = resolveImageRoute(messageType, null)

@@ -98,18 +98,18 @@ class ConfigManagerPersistenceTest {
     }
 
     @Test
-    fun `missing config keeps routing maps empty after reload via facade`() {
+    fun `missing config seeds routing maps after reload via facade`() {
         val configDir = Files.createTempDirectory("iris-config-manager-routing-defaults").toFile()
         val configPath = configDir.resolve("config.json").absolutePath
         val manager = ConfigManager(configPath = configPath)
 
-        assertEquals(emptyMap(), manager.commandRoutePrefixes())
-        assertEquals(emptyMap(), manager.imageMessageTypeRoutes())
+        assertEquals(DEFAULT_COMMAND_ROUTE_PREFIXES, manager.commandRoutePrefixes())
+        assertEquals(DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES, manager.imageMessageTypeRoutes())
         assertTrue(manager.saveConfigNow())
 
         val reloaded = ConfigManager(configPath = configPath)
-        assertEquals(emptyMap(), reloaded.commandRoutePrefixes())
-        assertEquals(emptyMap(), reloaded.imageMessageTypeRoutes())
+        assertEquals(DEFAULT_COMMAND_ROUTE_PREFIXES, reloaded.commandRoutePrefixes())
+        assertEquals(DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES, reloaded.imageMessageTypeRoutes())
         configDir.deleteRecursively()
     }
 
