@@ -47,6 +47,16 @@ class KakaoDecryptTest {
     }
 
     @Test
+    fun `decrypt still uses kotlin path when native core is off`() {
+        party.qwer.iris.nativecore.NativeCoreHolder.resetForTest()
+        val ciphertext = encrypt(encType = 0, plaintext = "native-off", userId = 123L)
+
+        val result = KakaoDecrypt.decrypt(encType = 0, b64_ciphertext = ciphertext, user_id = 123L)
+
+        assertEquals("native-off", result)
+    }
+
+    @Test
     fun `decrypt round trips short plaintext values`() {
         val cases = listOf("{}", "a")
 

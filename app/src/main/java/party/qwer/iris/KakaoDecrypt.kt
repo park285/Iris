@@ -1,5 +1,6 @@
 package party.qwer.iris
 
+import party.qwer.iris.nativecore.NativeCoreHolder
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.Arrays
@@ -321,6 +322,20 @@ class KakaoDecrypt {
 
         @Throws(Exception::class)
         fun decrypt(
+            encType: Int,
+            b64_ciphertext: String,
+            user_id: Long,
+        ): String =
+            NativeCoreHolder.current().decryptOrFallback(
+                encType = encType,
+                ciphertext = b64_ciphertext,
+                userId = user_id,
+            ) {
+                decryptKotlin(encType, b64_ciphertext, user_id)
+            }
+
+        @Throws(Exception::class)
+        private fun decryptKotlin(
             encType: Int,
             b64_ciphertext: String,
             user_id: Long,
