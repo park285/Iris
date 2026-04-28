@@ -11,6 +11,23 @@ run_step() {
   "$@"
 }
 
+run_shell_integration_tests() {
+  local test_script
+  local shell_tests=(
+    tests/iris_control_device_selection_test.sh
+    tests/iris_control_env_loading_test.sh
+    tests/iris_control_install_checksum_test.sh
+    tests/iris_control_native_install_test.sh
+    tests/iris_control_shell_quote_test.sh
+    tests/zygisk_next_bootstrap_test.sh
+    tests/closeout_packet_scripts_test.sh
+  )
+
+  for test_script in "${shell_tests[@]}"; do
+    bash "$repo_root/$test_script"
+  done
+}
+
 cd "$repo_root"
 
 run_step "Gradle lint/format checks/tests" ./gradlew \
@@ -45,6 +62,6 @@ run_step "Rust miri" env MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly mir
 
 run_step "Bridge architecture guardrails" "$repo_root/scripts/check-bridge-boundaries.sh"
 
-run_step "Shell integration tests" bash -lc "cd '$repo_root' && bash ./tests/iris_control_device_selection_test.sh && bash ./tests/zygisk_next_bootstrap_test.sh && bash ./tests/closeout_packet_scripts_test.sh"
+run_step "Shell integration tests" run_shell_integration_tests
 
 echo "[verify-all] all checks passed"
