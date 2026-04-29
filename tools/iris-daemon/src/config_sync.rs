@@ -23,6 +23,57 @@ pub fn collect_iris_env_vars() -> HashMap<String, String> {
         .collect()
 }
 
+fn collect_iris_env_vars_for_template(template_path: &Path) -> Result<HashMap<String, String>> {
+    let mut vars = HashMap::new();
+    if let Some(parent) = template_path.parent() {
+        let env_path = parent.join("iris.env");
+        if env_path.exists() {
+            let content = std::fs::read_to_string(&env_path)
+                .with_context(|| format!("iris.env 읽기 실패: {}", env_path.display()))?;
+            vars.extend(parse_iris_env_file_vars(&content));
+        }
+    }
+    vars.extend(collect_iris_env_vars());
+    Ok(vars)
+}
+
+fn parse_iris_env_file_vars(content: &str) -> HashMap<String, String> {
+    content
+        .lines()
+        .filter_map(parse_iris_env_line)
+        .filter(|(key, _)| key.starts_with("IRIS_") || key.starts_with("WEBHOOK_"))
+        .collect()
+}
+
+fn parse_iris_env_line(line: &str) -> Option<(String, String)> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+    let assignment = trimmed.strip_prefix("export ").unwrap_or(trimmed).trim();
+    let (key, raw_value) = assignment.split_once('=')?;
+    let key = key.trim();
+    if key.is_empty() {
+        return None;
+    }
+    Some((
+        key.to_owned(),
+        unquote_env_value(raw_value.trim()).to_owned(),
+    ))
+}
+
+fn unquote_env_value(value: &str) -> &str {
+    if value.len() >= 2 {
+        let bytes = value.as_bytes();
+        if (bytes[0] == b'"' && bytes[value.len() - 1] == b'"')
+            || (bytes[0] == b'\'' && bytes[value.len() - 1] == b'\'')
+        {
+            return &value[1..value.len() - 1];
+        }
+    }
+    value
+}
+
 pub async fn render_and_push(adb: &Adb, cfg: &DaemonConfig) -> Result<()> {
     let template_path = Path::new(&cfg.init.config_template);
     if !template_path.exists() {
@@ -31,7 +82,7 @@ pub async fn render_and_push(adb: &Adb, cfg: &DaemonConfig) -> Result<()> {
     }
     let template = std::fs::read_to_string(template_path)
         .with_context(|| format!("config 템플릿 읽기 실패: {}", template_path.display()))?;
-    let vars = collect_iris_env_vars();
+    let vars = collect_iris_env_vars_for_template(template_path)?;
     let rendered = render_template_json(&template, &vars)
         .with_context(|| format!("config 템플릿 렌더링 실패: {}", template_path.display()))?;
     validate_rendered_config(&rendered).with_context(|| {
@@ -229,7 +280,7 @@ async fn sync_config_if_needed(adb: &Adb, cfg: &DaemonConfig) -> Result<bool> {
     };
     let template = std::fs::read_to_string(template_path)
         .with_context(|| format!("config 템플릿 읽기 실패: {}", template_path.display()))?;
-    let vars = collect_iris_env_vars();
+    let vars = collect_iris_env_vars_for_template(template_path)?;
     let expected = render_template_json(&template, &vars)
         .with_context(|| format!("config 템플릿 렌더링 실패: {}", template_path.display()))?;
     validate_rendered_config(&expected).with_context(|| {
@@ -601,6 +652,51 @@ mod tests {
         let result = render_template_json(template, &vars).unwrap();
 
         assert_eq!(normalize_json(&result), r#"{"token":"\"quoted\"\nvalue"}"#);
+    }
+
+    #[test]
+    fn parse_iris_env_file_vars_reads_shell_style_assignments() {
+        let content = r#"
+            # comment
+            export IRIS_SHARED_TOKEN="shared"
+            IRIS_WEBHOOK_CHATBOTGO='http://chatbotgo'
+            WEBHOOK_LEGACY=http://legacy
+            OTHER_VALUE=ignored
+        "#;
+
+        let vars = parse_iris_env_file_vars(content);
+
+        assert_eq!(vars.get("IRIS_SHARED_TOKEN"), Some(&"shared".to_string()));
+        assert_eq!(
+            vars.get("IRIS_WEBHOOK_CHATBOTGO"),
+            Some(&"http://chatbotgo".to_string()),
+        );
+        assert_eq!(
+            vars.get("WEBHOOK_LEGACY"),
+            Some(&"http://legacy".to_string())
+        );
+        assert!(!vars.contains_key("OTHER_VALUE"));
+    }
+
+    #[test]
+    fn collect_iris_env_vars_for_template_reads_sibling_iris_env() {
+        let dir = std::env::temp_dir().join(format!(
+            "iris-daemon-config-sync-test-{}",
+            std::process::id(),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let template_path = dir.join("config.json");
+        let env_path = dir.join("iris.env");
+        std::fs::write(&template_path, "{}").unwrap();
+        std::fs::write(&env_path, "IRIS_TEST_ONLY_CONFIG_SYNC_VALUE=file-value\n").unwrap();
+
+        let vars = collect_iris_env_vars_for_template(&template_path).unwrap();
+
+        assert_eq!(
+            vars.get("IRIS_TEST_ONLY_CONFIG_SYNC_VALUE"),
+            Some(&"file-value".to_string()),
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
