@@ -1,6 +1,7 @@
 package party.qwer.iris
 
 import party.qwer.iris.model.NoticeInfo
+import party.qwer.iris.nativecore.NativeCoreHolder
 import party.qwer.iris.storage.ChatId
 import party.qwer.iris.storage.LinkId
 import party.qwer.iris.storage.ObservedProfileQueries
@@ -28,11 +29,23 @@ internal class MemberRepositoryMetadata(
 
     fun parseJsonLongArray(raw: String?): Set<Long> = jsonIdArrayParser.parse(raw)
 
+    fun parseJsonLongArrays(rawValues: List<String?>): List<Set<Long>> = jsonIdArrayParser.parseBatch(rawValues)
+
     fun parseRoomTitle(meta: String?): String? = roomMetaParser.parseRoomTitle(meta)
 
     fun parseRoomTitles(metas: List<String?>): List<String?> = roomMetaParser.parseRoomTitles(metas)
 
     fun parseNotices(meta: String?): List<NoticeInfo> = roomMetaParser.parseNotices(meta)
+
+    fun parseRoomInfoMetadata(
+        meta: String?,
+        blindedMemberIds: String?,
+    ): Pair<List<NoticeInfo>, Set<Long>> =
+        NativeCoreHolder.current().parseRoomInfoMetadataOrFallback(meta, blindedMemberIds) {
+            roomMetaParser.parseNoticesKotlin(meta) to jsonIdArrayParser.parseKotlin(blindedMemberIds)
+        }
+
+    fun resolveObservedRoomName(chatId: ChatId): String? = nonOpenRoomNameResolver.resolveObservedRoomName(chatId)
 
     fun resolveNonOpenRoomName(
         chatId: ChatId,
@@ -40,5 +53,20 @@ internal class MemberRepositoryMetadata(
         meta: String?,
         members: String?,
         parsedRoomTitle: String? = null,
-    ): String? = nonOpenRoomNameResolver.resolve(chatId, roomType, meta, members, parsedRoomTitle)
+        parsedRoomTitleKnown: Boolean = false,
+        observedRoomName: String? = null,
+        observedRoomNameKnown: Boolean = false,
+        parsedMemberIds: Set<Long>? = null,
+    ): String? =
+        nonOpenRoomNameResolver.resolve(
+            chatId = chatId,
+            roomType = roomType,
+            meta = meta,
+            members = members,
+            parsedRoomTitle = parsedRoomTitle,
+            parsedRoomTitleKnown = parsedRoomTitleKnown,
+            observedRoomName = observedRoomName,
+            observedRoomNameKnown = observedRoomNameKnown,
+            parsedMemberIds = parsedMemberIds,
+        )
 }

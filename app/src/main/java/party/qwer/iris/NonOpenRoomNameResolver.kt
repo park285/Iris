@@ -16,26 +16,45 @@ internal class NonOpenRoomNameResolver(
     private val jsonIdArrayParser: JsonIdArrayParser,
     private val botId: Long,
 ) {
+    fun resolveObservedRoomName(chatId: ChatId): String? =
+        observedProfile
+            .resolveProfileByChatId(chatId)
+            ?.roomName
+            ?.takeIf { it.isNotBlank() }
+
     fun resolve(
         chatId: ChatId,
         roomType: String?,
         meta: String?,
         members: String?,
         parsedRoomTitle: String? = null,
+        parsedRoomTitleKnown: Boolean = false,
+        observedRoomName: String? = null,
+        observedRoomNameKnown: Boolean = false,
+        parsedMemberIds: Set<Long>? = null,
     ): String? {
-        val titleFromMeta = parsedRoomTitle ?: roomMetaParser.parseRoomTitle(meta)
+        val titleFromMeta =
+            if (parsedRoomTitleKnown) {
+                parsedRoomTitle
+            } else {
+                parsedRoomTitle ?: roomMetaParser.parseRoomTitle(meta)
+            }
         if (!titleFromMeta.isNullOrBlank()) {
             return titleFromMeta
         }
 
-        val observedRoomName = observedProfile.resolveProfileByChatId(chatId)?.roomName
-        if (!observedRoomName.isNullOrBlank()) {
-            return observedRoomName
+        val resolvedObservedRoomName =
+            if (observedRoomNameKnown) {
+                observedRoomName
+            } else {
+                resolveObservedRoomName(chatId)
+            }
+        if (!resolvedObservedRoomName.isNullOrBlank()) {
+            return resolvedObservedRoomName
         }
 
         val memberIds =
-            jsonIdArrayParser
-                .parse(members)
+            (parsedMemberIds ?: jsonIdArrayParser.parse(members))
                 .filter { it != botId }
                 .map(::UserId)
         if (memberIds.isEmpty()) {

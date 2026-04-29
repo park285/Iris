@@ -2,6 +2,9 @@ package party.qwer.iris
 
 import kotlinx.serialization.json.JsonPrimitive
 import party.qwer.iris.model.QueryColumn
+import party.qwer.iris.nativecore.NativeCoreHolder
+import party.qwer.iris.nativecore.NativeCoreJniBridge
+import party.qwer.iris.nativecore.NativeCoreRuntime
 import party.qwer.iris.snapshot.RoomSnapshotReadResult
 import party.qwer.iris.storage.KakaoDbSqlClient
 import party.qwer.iris.storage.MemberIdentityQueries
@@ -109,6 +112,53 @@ private fun buildRepoFromLegacy(
     )
 }
 
+private fun withNativeParserResponses(
+    vararg parserResponses: String,
+    block: (QueueNativeCoreJni, NativeCoreRuntime) -> Unit,
+) {
+    val jni = QueueNativeCoreJni(parserResponses.toList())
+    val runtime =
+        NativeCoreRuntime.create(
+            env =
+                mapOf(
+                    "IRIS_NATIVE_CORE" to "on",
+                    "IRIS_NATIVE_DECRYPT" to "off",
+                    "IRIS_NATIVE_PARSERS" to "on",
+                ),
+            loader = {},
+            jni = jni,
+        )
+    try {
+        NativeCoreHolder.install(runtime)
+        block(jni, runtime)
+    } finally {
+        NativeCoreHolder.resetForTest()
+    }
+}
+
+private class QueueNativeCoreJni(
+    parserResponses: List<String>,
+) : NativeCoreJniBridge {
+    private val parserResponses = ArrayDeque(parserResponses)
+
+    var parserCalls = 0
+        private set
+    val parserRequests = mutableListOf<String>()
+
+    override fun nativeSelfTest(): String = "iris-native-core:test"
+
+    override fun decryptBatch(requestJsonBytes: ByteArray): ByteArray = error("decrypt should not be called")
+
+    override fun parserBatch(requestJsonBytes: ByteArray): ByteArray {
+        parserCalls += 1
+        parserRequests += requestJsonBytes.decodeToString()
+        if (parserResponses.isEmpty()) {
+            error("unexpected parser batch call")
+        }
+        return parserResponses.removeFirst().encodeToByteArray()
+    }
+}
+
 class MemberRepositoryTest {
     @Test
     fun `roleCodeToName maps known codes correctly`() {
@@ -197,6 +247,124 @@ class MemberRepositoryTest {
         assertEquals(42L, summary.chatId)
         assertEquals("DirectChat", summary.type)
         assertEquals("Room Title", summary.linkName)
+    }
+
+    @Test
+    fun `roomInfo parses notices and blinded ids from room metadata`() {
+        val repo =
+            buildRepoFromLegacy(
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, _, _ ->
+                        when {
+                            sqlQuery == "SELECT id, type, link_id, meta, blinded_member_ids FROM chat_rooms WHERE id = ?" ->
+                                listOf(
+                                    mapOf(
+                                        "id" to "42",
+                                        "type" to "OM",
+                                        "link_id" to null,
+                                        "meta" to
+                                            """
+                                            {
+                                              "noticeActivityContents": [
+                                                {"message":"공지", "authorId":123, "createdAt":456}
+                                              ]
+                                            }
+                                            """.trimIndent(),
+                                        "blinded_member_ids" to "[7,8]",
+                                    ),
+                                )
+                            else -> emptyList()
+                        }
+                    },
+                botId = 1L,
+            )
+
+        val response = repo.roomInfo(42L)
+
+        assertEquals(42L, response.chatId)
+        assertEquals("OM", response.type)
+        assertEquals(listOf("공지"), response.notices.map { it.content })
+        assertEquals(listOf(123L), response.notices.map { it.authorId })
+        assertEquals(listOf(456L), response.notices.map { it.updatedAt })
+        assertEquals(listOf(7L, 8L), response.blindedMemberIds)
+    }
+
+    @Test
+    fun `roomInfo coalesces notices and blinded ids through one native parser batch`() {
+        withNativeParserResponses(
+            """
+            {
+              "items": [
+                {
+                  "kind":"notices",
+                  "ok":true,
+                  "fallback":false,
+                  "notices":[{"content":"점검","authorId":7,"updatedAt":100}]
+                },
+                {"kind":"idArray","ok":true,"fallback":false,"ids":[8,9]}
+              ]
+            }
+            """.trimIndent(),
+        ) { jni, runtime ->
+            val repo =
+                buildRepoFromLegacy(
+                    executeQueryTyped =
+                        legacyQuery { sqlQuery, _, _ ->
+                            when {
+                                sqlQuery == "SELECT id, type, link_id, meta, blinded_member_ids FROM chat_rooms WHERE id = ?" ->
+                                    listOf(
+                                        mapOf(
+                                            "id" to "42",
+                                            "type" to "OM",
+                                            "link_id" to null,
+                                            "meta" to "native-meta",
+                                            "blinded_member_ids" to "[1]",
+                                        ),
+                                    )
+                                else -> emptyList()
+                            }
+                        },
+                    botId = 1L,
+                )
+
+            val response = repo.roomInfo(42L)
+            val parserStats = runtime.diagnostics().componentStats.getValue("parsers")
+
+            assertEquals(listOf("점검"), response.notices.map { it.content })
+            assertEquals(listOf(8L, 9L), response.blindedMemberIds)
+            assertEquals(1, jni.parserCalls)
+            assertEquals(1L, parserStats.jniCalls)
+            assertEquals(2L, parserStats.items)
+        }
+    }
+
+    @Test
+    fun `roomInfo falls back to empty metadata for malformed notices and blinded ids`() {
+        val repo =
+            buildRepoFromLegacy(
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, _, _ ->
+                        when {
+                            sqlQuery == "SELECT id, type, link_id, meta, blinded_member_ids FROM chat_rooms WHERE id = ?" ->
+                                listOf(
+                                    mapOf(
+                                        "id" to "42",
+                                        "type" to "OM",
+                                        "link_id" to null,
+                                        "meta" to "{not-json",
+                                        "blinded_member_ids" to "not-json",
+                                    ),
+                                )
+                            else -> emptyList()
+                        }
+                    },
+                botId = 1L,
+            )
+
+        val response = repo.roomInfo(42L)
+
+        assertEquals(emptyList(), response.notices)
+        assertEquals(emptyList(), response.blindedMemberIds)
     }
 
     @Test
@@ -773,6 +941,175 @@ class MemberRepositoryTest {
         val rooms = repo.listRooms().rooms
 
         assertEquals(listOf("박준우"), rooms.map { it.linkName })
+    }
+
+    @Test
+    fun `listRooms skips member id batch when observed profile resolves room name`() {
+        withNativeParserResponses(
+            """
+            {
+              "items": [
+                {"kind":"roomTitle","ok":true,"fallback":false,"roomTitle":null}
+              ]
+            }
+            """.trimIndent(),
+        ) { jni, runtime ->
+            val repo =
+                buildRepoFromLegacy(
+                    executeQueryTyped =
+                        legacyQuery { sqlQuery, bindArgs, _ ->
+                            when {
+                                sqlQuery.contains("FROM chat_rooms cr") ->
+                                    listOf(
+                                        mapOf(
+                                            "id" to "464252100463241",
+                                            "type" to "DirectChat",
+                                            "active_members_count" to "2",
+                                            "link_id" to null,
+                                            "link_name" to null,
+                                            "link_url" to null,
+                                            "member_limit" to null,
+                                            "searchable" to null,
+                                            "bot_role" to null,
+                                            "meta" to "[]",
+                                            "members" to "not-json",
+                                        ),
+                                    )
+                                sqlQuery.contains("FROM db3.observed_profiles") &&
+                                    bindArgs?.toList() == listOf("464252100463241") ->
+                                    listOf(
+                                        mapOf(
+                                            "display_name" to "박준우",
+                                            "room_name" to "박준우",
+                                        ),
+                                    )
+                                else -> emptyList()
+                            }
+                        },
+                    decrypt = { _, raw, _ -> raw },
+                    botId = 438562408L,
+                )
+
+            val rooms = repo.listRooms().rooms
+            val parserStats = runtime.diagnostics().componentStats.getValue("parsers")
+
+            assertEquals(listOf("박준우"), rooms.map { it.linkName })
+            assertEquals(1, jni.parserCalls)
+            assertEquals(1L, parserStats.jniCalls)
+            assertEquals(1L, parserStats.items)
+        }
+    }
+
+    @Test
+    fun `listRooms batches non open member id parsing through native parser`() {
+        withNativeParserResponses(
+            """
+            {
+              "items": [
+                {"kind":"roomTitle","ok":true,"fallback":false,"roomTitle":null},
+                {"kind":"roomTitle","ok":true,"fallback":false,"roomTitle":null}
+              ]
+            }
+            """.trimIndent(),
+            """
+            {
+              "items": [
+                {"kind":"idArray","ok":true,"fallback":false,"ids":[100]},
+                {"kind":"idArray","ok":true,"fallback":false,"ids":[200]}
+              ]
+            }
+            """.trimIndent(),
+        ) { jni, runtime ->
+            val repo =
+                buildRepoFromLegacy(
+                    executeQueryTyped =
+                        legacyQuery { sqlQuery, bindArgs, _ ->
+                            when {
+                                sqlQuery.contains("FROM chat_rooms cr") ->
+                                    listOf(
+                                        mapOf(
+                                            "id" to "1",
+                                            "type" to "DirectChat",
+                                            "active_members_count" to "2",
+                                            "link_id" to null,
+                                            "link_name" to null,
+                                            "link_url" to null,
+                                            "member_limit" to null,
+                                            "searchable" to null,
+                                            "bot_role" to null,
+                                            "meta" to "[]",
+                                            "members" to "not-json-a",
+                                        ),
+                                        mapOf(
+                                            "id" to "2",
+                                            "type" to "DirectChat",
+                                            "active_members_count" to "2",
+                                            "link_id" to null,
+                                            "link_name" to null,
+                                            "link_url" to null,
+                                            "member_limit" to null,
+                                            "searchable" to null,
+                                            "bot_role" to null,
+                                            "meta" to "[]",
+                                            "members" to "not-json-b",
+                                        ),
+                                    )
+                                sqlQuery == "SELECT id, name, enc FROM db2.friends WHERE id IN (?)" &&
+                                    bindArgs?.toList() == listOf("100") ->
+                                    listOf(mapOf("id" to "100", "name" to "Alice", "enc" to "0"))
+                                sqlQuery == "SELECT id, name, enc FROM db2.friends WHERE id IN (?)" &&
+                                    bindArgs?.toList() == listOf("200") ->
+                                    listOf(mapOf("id" to "200", "name" to "Bob", "enc" to "0"))
+                                else -> emptyList()
+                            }
+                        },
+                    decrypt = { _, raw, _ -> raw },
+                    botId = 438562408L,
+                )
+
+            val rooms = repo.listRooms().rooms
+            val parserStats = runtime.diagnostics().componentStats.getValue("parsers")
+
+            assertEquals(listOf("Alice", "Bob"), rooms.map { it.linkName })
+            assertEquals(2, jni.parserCalls, jni.parserRequests.joinToString(separator = "\n"))
+            assertEquals(2L, parserStats.jniCalls)
+            assertEquals(4L, parserStats.items)
+        }
+    }
+
+    @Test
+    fun `listRooms falls back to room type when members array is malformed`() {
+        val repo =
+            buildRepoFromLegacy(
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, _, _ ->
+                        when {
+                            sqlQuery.contains("FROM chat_rooms cr") ->
+                                listOf(
+                                    mapOf(
+                                        "id" to "464252100463241",
+                                        "type" to "DirectChat",
+                                        "active_members_count" to "2",
+                                        "link_id" to null,
+                                        "link_name" to null,
+                                        "link_url" to null,
+                                        "member_limit" to null,
+                                        "searchable" to null,
+                                        "bot_role" to null,
+                                        "meta" to "[]",
+                                        "members" to "not-json",
+                                    ),
+                                )
+                            else -> emptyList()
+                        }
+                    },
+                decrypt = { _, raw, _ -> raw },
+                botId = 438562408L,
+            )
+
+        val rooms = repo.listRooms().rooms
+
+        assertEquals(listOf("DirectChat"), rooms.map { it.linkName })
     }
 
     @Test

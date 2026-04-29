@@ -69,6 +69,64 @@ class ParserNativeCoreIntegrationTest {
     }
 
     @Test
+    fun `id array parser on batches native parser calls`() {
+        val jni =
+            FakeNativeCoreJni(
+                parserResponse =
+                    """
+                    {
+                      "items": [
+                        {"kind":"idArray","ok":true,"fallback":false,"ids":[5,6]},
+                        {"kind":"idArray","ok":true,"fallback":false,"ids":[7]}
+                      ]
+                    }
+                    """.trimIndent(),
+            )
+        val runtime = parserRuntime(mode = "on", jni = jni)
+
+        withNativeRuntime(runtime) {
+            val ids = JsonIdArrayParser().parseBatch(listOf("[1,2]", "[3]"))
+
+            assertEquals(listOf(setOf(5L, 6L), setOf(7L)), ids)
+            assertEquals(1, jni.parserCalls)
+        }
+    }
+
+    @Test
+    fun `notice parser on batches native parser calls`() {
+        val jni =
+            FakeNativeCoreJni(
+                parserResponse =
+                    """
+                    {
+                      "items": [
+                        {
+                          "kind":"notices",
+                          "ok":true,
+                          "fallback":false,
+                          "notices":[{"content":"공지 A","authorId":1,"updatedAt":10}]
+                        },
+                        {
+                          "kind":"notices",
+                          "ok":true,
+                          "fallback":false,
+                          "notices":[{"content":"공지 B","authorId":2,"updatedAt":20}]
+                        }
+                      ]
+                    }
+                    """.trimIndent(),
+            )
+        val runtime = parserRuntime(mode = "on", jni = jni)
+
+        withNativeRuntime(runtime) {
+            val notices = RoomMetaParser().parseNoticesBatch(listOf("meta-a", "meta-b"))
+
+            assertEquals(listOf("공지 A", "공지 B"), notices.map { it.single().content })
+            assertEquals(1, jni.parserCalls)
+        }
+    }
+
+    @Test
     fun `period parser on falls back when native parser requests fallback`() {
         val jni =
             FakeNativeCoreJni(

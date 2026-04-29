@@ -240,29 +240,68 @@ internal class NativeCoreRuntime private constructor(
         meta: String?,
         kotlinParse: () -> List<NoticeInfo>,
     ): List<NoticeInfo> =
-        parserOrFallback(
-            item = NativeParserBatchItem(kind = "notices", meta = meta),
-            kotlinParse = kotlinParse,
-            nativeValue = { result ->
-                result.notices.map { notice ->
-                    NoticeInfo(
-                        content = notice.content,
-                        authorId = notice.authorId,
-                        updatedAt = notice.updatedAt,
-                    )
-                }
-            },
+        parseNoticesBatchOrFallback(listOf(meta)) {
+            listOf(kotlinParse())
+        }.single()
+
+    fun parseNoticesBatchOrFallback(
+        metas: List<String?>,
+        kotlinParseBatch: () -> List<List<NoticeInfo>>,
+    ): List<List<NoticeInfo>> =
+        parserBatchOrFallback(
+            items = metas.map { meta -> NativeParserBatchItem(kind = "notices", meta = meta) },
+            kotlinParseBatch = kotlinParseBatch,
+            nativeValue = { result -> result.toNoticeInfos() },
+            detailKey = "notices",
         )
 
     fun parseIdArrayOrFallback(
         raw: String?,
         kotlinParse: () -> Set<Long>,
     ): Set<Long> =
-        parserOrFallback(
-            item = NativeParserBatchItem(kind = "idArray", raw = raw),
-            kotlinParse = kotlinParse,
-            nativeValue = { it.ids.toSet() },
+        parseIdArraysOrFallback(listOf(raw)) {
+            listOf(kotlinParse())
+        }.single()
+
+    fun parseIdArraysOrFallback(
+        rawValues: List<String?>,
+        kotlinParseBatch: () -> List<Set<Long>>,
+    ): List<Set<Long>> =
+        parserBatchOrFallback(
+            items = rawValues.map { raw -> NativeParserBatchItem(kind = "idArray", raw = raw) },
+            kotlinParseBatch = kotlinParseBatch,
+            nativeValue = { result -> result.toIdSet() },
+            detailKey = "idArray",
         )
+
+    fun parseRoomInfoMetadataOrFallback(
+        meta: String?,
+        blindedMemberIds: String?,
+        kotlinParse: () -> Pair<List<NoticeInfo>, Set<Long>>,
+    ): Pair<List<NoticeInfo>, Set<Long>> {
+        val parsed =
+            parserBatchOrFallbackIndexed<Any>(
+                items =
+                    listOf(
+                        NativeParserBatchItem(kind = "notices", meta = meta),
+                        NativeParserBatchItem(kind = "idArray", raw = blindedMemberIds),
+                    ),
+                kotlinParseBatch = {
+                    val kotlinResult = kotlinParse()
+                    listOf(kotlinResult.first, kotlinResult.second)
+                },
+                nativeValue = { index, result ->
+                    when (index) {
+                        0 -> result.requireKind("notices").toNoticeInfos()
+                        1 -> result.requireKind("idArray").toIdSet()
+                        else -> error("native parsers failed")
+                    }
+                },
+                detailKey = "roomInfo",
+            )
+        @Suppress("UNCHECKED_CAST")
+        return (parsed[0] as List<NoticeInfo>) to (parsed[1] as Set<Long>)
+    }
 
     fun parsePeriodSpecOrFallback(
         period: String?,
@@ -588,6 +627,19 @@ internal class NativeCoreRuntime private constructor(
         kotlinParseBatch: () -> List<T>,
         nativeValue: (NativeParserBatchResult) -> T,
         detailKey: String,
+    ): List<T> =
+        parserBatchOrFallbackIndexed(
+            items = items,
+            kotlinParseBatch = kotlinParseBatch,
+            nativeValue = { _, result -> nativeValue(result) },
+            detailKey = detailKey,
+        )
+
+    private fun <T> parserBatchOrFallbackIndexed(
+        items: List<NativeParserBatchItem>,
+        kotlinParseBatch: () -> List<T>,
+        nativeValue: (Int, NativeParserBatchResult) -> T,
+        detailKey: String,
     ): List<T> {
         if (items.isEmpty()) return emptyList()
         val mode = config.effectiveMode(NativeCoreComponent.PARSERS)
@@ -611,7 +663,7 @@ internal class NativeCoreRuntime private constructor(
                     recordParserDefaultUse(usedDefaultCount, detailKey)
                     val fallbackCount = nativeResults.count { result -> result.fallback }
                     recordComponentFallback(NativeCoreComponent.PARSERS, fallbackCount, detailKey, fallbackRequiredReason)
-                    val nativeConverted = nativeResults.map { result -> runCatching { nativeValue(result) }.getOrNull() }
+                    val nativeConverted = nativeResults.mapIndexed { index, result -> runCatching { nativeValue(index, result) }.getOrNull() }
                     val mismatchCount =
                         if (kotlinResults.size != nativeConverted.size) {
                             maxOf(kotlinResults.size, nativeConverted.size)
@@ -634,16 +686,34 @@ internal class NativeCoreRuntime private constructor(
                 recordParserDefaultUse(usedDefaultCount, detailKey)
                 val fallbackCount = nativeResults.count { result -> result.fallback }
                 if (fallbackCount > 0) {
-                    recordComponentFallback(NativeCoreComponent.PARSERS, fallbackCount, detailKey, fallbackRequiredReason)
+                    recordComponentFallback(NativeCoreComponent.PARSERS, items.size, detailKey, fallbackRequiredReason)
                     return kotlinParseBatch()
                 }
-                runCatching { nativeResults.map(nativeValue) }
+                runCatching { nativeResults.mapIndexed(nativeValue) }
                     .getOrElse {
                         recordNativeFailure(NativeCoreComponent.PARSERS, items.size, detailKey, reasonKey = schemaDecodeErrorReason)
                         kotlinParseBatch()
                     }
             }
         }
+    }
+
+    private fun NativeParserBatchResult.toNoticeInfos(): List<NoticeInfo> =
+        notices.map { notice ->
+            NoticeInfo(
+                content = notice.content,
+                authorId = notice.authorId,
+                updatedAt = notice.updatedAt,
+            )
+        }
+
+    private fun NativeParserBatchResult.toIdSet(): Set<Long> = ids.toSet()
+
+    private fun NativeParserBatchResult.requireKind(expected: String): NativeParserBatchResult {
+        if (kind.isNotBlank() && kind != expected) {
+            throw NativeCoreDiagnosticFailure(schemaDecodeErrorReason, "native parsers failed")
+        }
+        return this
     }
 
     private fun callNativeParser(item: NativeParserBatchItem): NativeParserBatchResult = callNativeParserBatch(listOf(item)).singleOrNull() ?: error("native parsers failed")

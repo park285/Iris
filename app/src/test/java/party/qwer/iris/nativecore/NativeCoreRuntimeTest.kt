@@ -10,6 +10,7 @@ import kotlinx.serialization.json.long
 import party.qwer.iris.CommandKind
 import party.qwer.iris.ParsedCommand
 import party.qwer.iris.delivery.webhook.RoutingCommand
+import party.qwer.iris.model.NoticeInfo
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -512,6 +513,273 @@ class NativeCoreRuntimeTest {
         assertEquals(3L, parserStats.items)
         assertTrue(parserStats.totalNativeMicros > 0L)
         assertTrue(parserStats.averageItemNativeMicros > 0L)
+    }
+
+    @Test
+    fun `parser batch in on mode uses one jni call for many id arrays`() {
+        val jni =
+            FakeJni(
+                rawParserResponse =
+                    """
+                    {
+                      "items": [
+                        {"kind":"idArray","ok":true,"fallback":false,"ids":[1,2]},
+                        {"kind":"idArray","ok":true,"fallback":false,"ids":[]},
+                        {"kind":"idArray","ok":true,"fallback":false,"ids":[3]}
+                      ]
+                    }
+                    """.trimIndent(),
+            )
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_PARSERS" to "on",
+                    ),
+                loader = {},
+                jni = jni,
+            )
+
+        val result =
+            runtime.parseIdArraysOrFallback(listOf("[9]", null, "[10]")) {
+                listOf(setOf(9L), emptySet(), setOf(10L))
+            }
+        val parserStats = runtime.diagnostics().componentStats.getValue("parsers")
+        val request = Json.decodeFromString<JsonObject>(jni.lastParserRequest!!.decodeToString())
+        val items = request.getValue("items").jsonArray
+
+        assertEquals(listOf(setOf(1L, 2L), emptySet(), setOf(3L)), result)
+        assertEquals(1, jni.parserCalls)
+        assertEquals(3, items.size)
+        assertTrue(
+            items.all { item ->
+                item.jsonObject
+                    .getValue("kind")
+                    .jsonPrimitive
+                    .content == "idArray"
+            },
+        )
+        assertEquals(1L, parserStats.jniCalls)
+        assertEquals(3L, parserStats.items)
+    }
+
+    @Test
+    fun `parser batch in on mode uses one jni call for many notices`() {
+        val jni =
+            FakeJni(
+                rawParserResponse =
+                    """
+                    {
+                      "items": [
+                        {
+                          "kind":"notices",
+                          "ok":true,
+                          "fallback":false,
+                          "notices":[{"content":"공지 A","authorId":1,"updatedAt":10}]
+                        },
+                        {
+                          "kind":"notices",
+                          "ok":true,
+                          "fallback":false,
+                          "notices":[{"content":"공지 B","authorId":2,"updatedAt":20}]
+                        }
+                      ]
+                    }
+                    """.trimIndent(),
+            )
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_PARSERS" to "on",
+                    ),
+                loader = {},
+                jni = jni,
+            )
+
+        val result =
+            runtime.parseNoticesBatchOrFallback(listOf("meta-a", "meta-b")) {
+                listOf(emptyList(), emptyList())
+            }
+        val parserStats = runtime.diagnostics().componentStats.getValue("parsers")
+        val request = Json.decodeFromString<JsonObject>(jni.lastParserRequest!!.decodeToString())
+        val items = request.getValue("items").jsonArray
+
+        assertEquals(
+            listOf(
+                listOf(NoticeInfo(content = "공지 A", authorId = 1L, updatedAt = 10L)),
+                listOf(NoticeInfo(content = "공지 B", authorId = 2L, updatedAt = 20L)),
+            ),
+            result,
+        )
+        assertEquals(1, jni.parserCalls)
+        assertEquals(2, items.size)
+        assertTrue(
+            items.all { item ->
+                item.jsonObject
+                    .getValue("kind")
+                    .jsonPrimitive
+                    .content == "notices"
+            },
+        )
+        assertEquals(1L, parserStats.jniCalls)
+        assertEquals(2L, parserStats.items)
+    }
+
+    @Test
+    fun `parser batch returns empty results without jni calls`() {
+        val jni = FakeJni()
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_PARSERS" to "on",
+                    ),
+                loader = {},
+                jni = jni,
+            )
+
+        val ids = runtime.parseIdArraysOrFallback(emptyList<String?>()) { error("kotlin fallback should not run") }
+        val notices = runtime.parseNoticesBatchOrFallback(emptyList<String?>()) { error("kotlin fallback should not run") }
+        val parserStats = runtime.diagnostics().componentStats.getValue("parsers")
+
+        assertEquals(emptyList(), ids)
+        assertEquals(emptyList(), notices)
+        assertEquals(0, jni.parserCalls)
+        assertEquals(0L, parserStats.jniCalls)
+        assertEquals(0L, parserStats.items)
+    }
+
+    @Test
+    fun `parser batch in on mode falls back to kotlin when response size mismatches`() {
+        val jni =
+            FakeJni(
+                rawParserResponse = """{"items":[{"kind":"idArray","ok":true,"fallback":false,"ids":[99]}]}""",
+            )
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_PARSERS" to "on",
+                    ),
+                loader = {},
+                jni = jni,
+            )
+
+        val result =
+            runtime.parseIdArraysOrFallback(listOf("[1]", "[2]")) {
+                listOf(setOf(1L), setOf(2L))
+            }
+        val parserStats = runtime.diagnostics().componentStats.getValue("parsers")
+
+        assertEquals(listOf(setOf(1L), setOf(2L)), result)
+        assertEquals(1, jni.parserCalls)
+        assertEquals(1L, parserStats.jniCalls)
+        assertEquals(2L, parserStats.items)
+        assertEquals(2L, parserStats.fallbackReasons.getValue("responseSizeMismatch"))
+        assertEquals(1L, parserStats.failureReasons.getValue("responseSizeMismatch"))
+    }
+
+    @Test
+    fun `parser batch in on mode records whole batch fallback when one item requires fallback`() {
+        val jni =
+            FakeJni(
+                rawParserResponse =
+                    """
+                    {
+                      "items": [
+                        {"kind":"idArray","ok":true,"fallback":true,"ids":[99]},
+                        {"kind":"idArray","ok":true,"fallback":false,"ids":[2]}
+                      ]
+                    }
+                    """.trimIndent(),
+            )
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_PARSERS" to "on",
+                    ),
+                loader = {},
+                jni = jni,
+            )
+
+        val result =
+            runtime.parseIdArraysOrFallback(listOf("[1]", "[2]")) {
+                listOf(setOf(1L), setOf(2L))
+            }
+        val parserStats = runtime.diagnostics().componentStats.getValue("parsers")
+
+        assertEquals(listOf(setOf(1L), setOf(2L)), result)
+        assertEquals(1, jni.parserCalls)
+        assertEquals(2L, parserStats.fallbacks)
+        assertEquals(2L, parserStats.fallbacksByKey.getValue("idArray"))
+        assertEquals(2L, parserStats.fallbackReasons.getValue("fallbackRequired"))
+    }
+
+    @Test
+    fun `parser mixed room info metadata uses one jni call for notices and blinded ids`() {
+        val jni =
+            FakeJni(
+                rawParserResponse =
+                    """
+                    {
+                      "items": [
+                        {
+                          "kind":"notices",
+                          "ok":true,
+                          "fallback":false,
+                          "notices":[{"content":"점검","authorId":7,"updatedAt":100}]
+                        },
+                        {"kind":"idArray","ok":true,"fallback":false,"ids":[8,9]}
+                      ]
+                    }
+                    """.trimIndent(),
+            )
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_PARSERS" to "on",
+                    ),
+                loader = {},
+                jni = jni,
+            )
+
+        val result =
+            runtime.parseRoomInfoMetadataOrFallback(meta = "meta", blindedMemberIds = "[1]") {
+                emptyList<NoticeInfo>() to emptySet()
+            }
+        val parserStats = runtime.diagnostics().componentStats.getValue("parsers")
+        val request = Json.decodeFromString<JsonObject>(jni.lastParserRequest!!.decodeToString())
+        val kinds =
+            request
+                .getValue("items")
+                .jsonArray
+                .map { item ->
+                    item.jsonObject
+                        .getValue("kind")
+                        .jsonPrimitive
+                        .content
+                }
+
+        assertEquals(listOf(NoticeInfo(content = "점검", authorId = 7L, updatedAt = 100L)) to setOf(8L, 9L), result)
+        assertEquals(1, jni.parserCalls)
+        assertEquals(listOf("notices", "idArray"), kinds)
+        assertEquals(1L, parserStats.jniCalls)
+        assertEquals(2L, parserStats.items)
     }
 
     @Test

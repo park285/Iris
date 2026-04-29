@@ -9,12 +9,14 @@ import party.qwer.iris.nativecore.NativeCoreHolder
 internal class JsonIdArrayParser(
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) {
-    fun parse(raw: String?): Set<Long> =
-        NativeCoreHolder.current().parseIdArrayOrFallback(raw) {
-            parseKotlin(raw)
+    fun parse(raw: String?): Set<Long> = parseBatch(listOf(raw)).single()
+
+    fun parseBatch(rawValues: List<String?>): List<Set<Long>> =
+        NativeCoreHolder.current().parseIdArraysOrFallback(rawValues) {
+            rawValues.map { raw -> parseKotlin(raw) }
         }
 
-    private fun parseKotlin(raw: String?): Set<Long> {
+    fun parseKotlin(raw: String?): Set<Long> {
         if (raw.isNullOrBlank() || raw == "[]") {
             return emptySet()
         }

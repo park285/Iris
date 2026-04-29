@@ -45,12 +45,14 @@ internal class RoomMetaParser(
         }
     }
 
-    fun parseNotices(meta: String?): List<NoticeInfo> =
-        NativeCoreHolder.current().parseNoticesOrFallback(meta) {
-            parseNoticesKotlin(meta)
+    fun parseNotices(meta: String?): List<NoticeInfo> = parseNoticesBatch(listOf(meta)).single()
+
+    fun parseNoticesBatch(metas: List<String?>): List<List<NoticeInfo>> =
+        NativeCoreHolder.current().parseNoticesBatchOrFallback(metas) {
+            metas.map { meta -> parseNoticesKotlin(meta) }
         }
 
-    private fun parseNoticesKotlin(meta: String?): List<NoticeInfo> {
+    fun parseNoticesKotlin(meta: String?): List<NoticeInfo> {
         if (meta.isNullOrBlank()) return emptyList()
         return try {
             val obj = json.parseToJsonElement(meta).jsonObject

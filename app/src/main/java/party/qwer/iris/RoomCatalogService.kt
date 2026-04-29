@@ -15,6 +15,27 @@ internal class RoomCatalogService(
     fun listRooms(): RoomListResponse {
         val roomRows = roomDirectory.listAllRooms()
         val parsedRoomTitles = metadata.parseRoomTitles(roomRows.map { row -> row.meta })
+        val nonOpenMemberRows =
+            roomRows.mapIndexedNotNull { index, row ->
+                if (row.linkName == null && parsedRoomTitles.getOrNull(index).isNullOrBlank()) {
+                    index to row.members
+                } else {
+                    null
+                }
+            }
+        val observedCheckedIndexes = nonOpenMemberRows.mapTo(mutableSetOf()) { it.first }
+        val observedRoomNamesByIndex =
+            nonOpenMemberRows
+                .mapNotNull { (index, _) ->
+                    metadata.resolveObservedRoomName(roomRows[index].id)?.let { roomName -> index to roomName }
+                }.toMap()
+        val memberFallbackRows =
+            nonOpenMemberRows.filter { (index, _) -> observedRoomNamesByIndex[index].isNullOrBlank() }
+        val parsedMemberIdsByIndex =
+            memberFallbackRows
+                .map { it.first }
+                .zip(metadata.parseJsonLongArrays(memberFallbackRows.map { it.second }))
+                .toMap()
         val rooms =
             roomRows.mapIndexed { index, row ->
                 RoomSummary(
@@ -30,6 +51,10 @@ internal class RoomCatalogService(
                                 meta = row.meta,
                                 members = row.members,
                                 parsedRoomTitle = parsedRoomTitles.getOrNull(index),
+                                parsedRoomTitleKnown = index < parsedRoomTitles.size,
+                                observedRoomName = observedRoomNamesByIndex[index],
+                                observedRoomNameKnown = index in observedCheckedIndexes,
+                                parsedMemberIds = parsedMemberIdsByIndex[index],
                             ),
                     linkUrl = row.linkUrl,
                     memberLimit = row.memberLimit,
@@ -83,8 +108,7 @@ internal class RoomCatalogService(
                 ?: return RoomInfoResponse(chatId.value, null, null, emptyList(), emptyList(), emptyList())
 
         val linkId = roomRow.linkId
-        val notices = metadata.parseNotices(roomRow.meta)
-        val blindedIds = metadata.parseJsonLongArray(roomRow.blindedMemberIds).toList()
+        val (notices, blindedIds) = metadata.parseRoomInfoMetadata(roomRow.meta, roomRow.blindedMemberIds)
 
         val botCommands =
             if (linkId != null) {
@@ -113,7 +137,7 @@ internal class RoomCatalogService(
             type = roomRow.type,
             linkId = linkId?.value,
             notices = notices,
-            blindedMemberIds = blindedIds,
+            blindedMemberIds = blindedIds.toList(),
             botCommands = botCommands,
             openLink = openLink,
         )
