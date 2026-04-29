@@ -38,6 +38,8 @@ interface WebhookRoutingConfigProvider {
     fun commandRoutePrefixes(): Map<String, List<String>> = emptyMap()
 
     fun imageMessageTypeRoutes(): Map<String, List<String>> = emptyMap()
+
+    fun eventTypeRoutes(): Map<String, List<String>> = emptyMap()
 }
 
 interface ConfigProvider :

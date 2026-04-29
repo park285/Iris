@@ -8,6 +8,8 @@ use std::path::Path;
 
 const NATIVE_LIB_MODE: &str = "644";
 const NATIVE_LIB_TEMP_HASH_PREFIX_LEN: usize = 16;
+const PLACEHOLDER_SECRET_VALUE: &str = "change-me";
+const PLACEHOLDER_WEBHOOK_HOST: &str = "example.invalid";
 
 pub fn render_template_json(template: &str, vars: &HashMap<String, String>) -> Result<String> {
     let mut value: serde_json::Value = serde_json::from_str(template)?;
@@ -32,6 +34,12 @@ pub async fn render_and_push(adb: &Adb, cfg: &DaemonConfig) -> Result<()> {
     let vars = collect_iris_env_vars();
     let rendered = render_template_json(&template, &vars)
         .with_context(|| format!("config 템플릿 렌더링 실패: {}", template_path.display()))?;
+    validate_rendered_config(&rendered).with_context(|| {
+        format!(
+            "config 렌더링 안전성 검증 실패: {}",
+            template_path.display()
+        )
+    })?;
     let tmp_dir = std::env::temp_dir();
     let tmp_file = tmp_dir.join("iris-daemon-config-rendered.json");
     std::fs::write(&tmp_file, &rendered)
@@ -224,6 +232,12 @@ async fn sync_config_if_needed(adb: &Adb, cfg: &DaemonConfig) -> Result<bool> {
     let vars = collect_iris_env_vars();
     let expected = render_template_json(&template, &vars)
         .with_context(|| format!("config 템플릿 렌더링 실패: {}", template_path.display()))?;
+    validate_rendered_config(&expected).with_context(|| {
+        format!(
+            "config 렌더링 안전성 검증 실패: {}",
+            template_path.display()
+        )
+    })?;
     let device_normalized = normalize_json(&device_config);
     let expected_normalized = normalize_json(&expected);
     if device_normalized == expected_normalized {
@@ -239,6 +253,94 @@ fn normalize_json(input: &str) -> String {
     serde_json::from_str::<serde_json::Value>(input)
         .and_then(|v| serde_json::to_string(&v))
         .unwrap_or_else(|_| input.trim().to_string())
+}
+
+fn validate_rendered_config(rendered: &str) -> Result<()> {
+    let value: serde_json::Value = serde_json::from_str(rendered)?;
+    let mut errors = Vec::new();
+    collect_rendered_config_errors(&value, "$", &mut errors);
+    if errors.is_empty() {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "rendered config contains unsafe placeholder values: {}",
+        errors.join(", ")
+    );
+}
+
+fn collect_rendered_config_errors(value: &serde_json::Value, path: &str, errors: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(raw) => {
+            if contains_unresolved_placeholder(raw) {
+                errors.push(format!("{path}: unresolved placeholder"));
+            }
+            if is_runtime_secret_path(path) && is_placeholder_secret(raw) {
+                errors.push(format!("{path}: placeholder secret"));
+            }
+            if is_webhook_endpoint_path(path) && is_placeholder_webhook_endpoint(raw) {
+                errors.push(format!("{path}: placeholder webhook endpoint"));
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                collect_rendered_config_errors(item, &format!("{path}[{index}]"), errors);
+            }
+        }
+        serde_json::Value::Object(entries) => {
+            for (key, value) in entries {
+                collect_rendered_config_errors(value, &format!("{path}.{key}"), errors);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn contains_unresolved_placeholder(value: &str) -> bool {
+    value.contains("${")
+}
+
+fn is_runtime_secret_path(path: &str) -> bool {
+    let field_name = path.rsplit('.').next().unwrap_or_default();
+    matches!(
+        field_name,
+        "inboundSigningSecret"
+            | "outboundWebhookToken"
+            | "botControlToken"
+            | "bridgeToken"
+            | "sharedToken"
+    )
+}
+
+fn is_webhook_endpoint_path(path: &str) -> bool {
+    path == "$.endpoint" || path.starts_with("$.webhooks.")
+}
+
+fn is_placeholder_secret(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.eq_ignore_ascii_case(PLACEHOLDER_SECRET_VALUE)
+        || contains_unresolved_placeholder(trimmed)
+}
+
+fn is_placeholder_webhook_endpoint(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || contains_unresolved_placeholder(trimmed) {
+        return contains_unresolved_placeholder(trimmed);
+    }
+
+    webhook_endpoint_host(trimmed)
+        .is_some_and(|host| host.eq_ignore_ascii_case(PLACEHOLDER_WEBHOOK_HOST))
+}
+
+fn webhook_endpoint_host(endpoint: &str) -> Option<&str> {
+    let without_scheme = endpoint
+        .strip_prefix("http://")
+        .or_else(|| endpoint.strip_prefix("https://"))?;
+    let authority = without_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default();
+    authority.split(':').next().filter(|host| !host.is_empty())
 }
 
 fn replace_placeholders(value: &mut serde_json::Value, vars: &HashMap<String, String>) {
@@ -499,6 +601,33 @@ mod tests {
         let result = render_template_json(template, &vars).unwrap();
 
         assert_eq!(normalize_json(&result), r#"{"token":"\"quoted\"\nvalue"}"#);
+    }
+
+    #[test]
+    fn validate_rendered_config_rejects_unresolved_placeholders() {
+        let rendered = r#"{"webhooks":{"chatbotgo":"${IRIS_WEBHOOK_CHATBOTGO}"}}"#;
+
+        let error = validate_rendered_config(rendered).unwrap_err();
+
+        assert!(error.to_string().contains("unresolved placeholder"));
+    }
+
+    #[test]
+    fn validate_rendered_config_rejects_placeholder_runtime_values() {
+        let rendered = r#"{"inboundSigningSecret":"change-me","webhooks":{"chatbotgo":"http://example.invalid/webhook"}}"#;
+
+        let error = validate_rendered_config(rendered).unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.contains("placeholder secret"));
+        assert!(message.contains("placeholder webhook endpoint"));
+    }
+
+    #[test]
+    fn validate_rendered_config_allows_empty_optional_webhook() {
+        let rendered = r#"{"inboundSigningSecret":"secret","webhooks":{"chatbotgo":"http://100.100.1.3:31001/webhook","twentyq":""}}"#;
+
+        validate_rendered_config(rendered).unwrap();
     }
 
     #[test]

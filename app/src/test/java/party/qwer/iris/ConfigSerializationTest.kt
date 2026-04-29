@@ -145,6 +145,7 @@ class ConfigSerializationTest {
 
         assertEquals(DEFAULT_COMMAND_ROUTE_PREFIXES, decoded.values.commandRoutePrefixes)
         assertEquals(DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES, decoded.values.imageMessageTypeRoutes)
+        assertEquals(DEFAULT_EVENT_TYPE_ROUTES, decoded.values.eventTypeRoutes)
     }
 
     @Test
@@ -157,13 +158,15 @@ class ConfigSerializationTest {
                   "botName": "Iris",
                   "endpoint": "http://example",
                   "commandRoutePrefixes": {},
-                  "imageMessageTypeRoutes": {}
+                  "imageMessageTypeRoutes": {},
+                  "eventTypeRoutes": {}
                 }
                 """.trimIndent(),
             )
 
         assertEquals(emptyMap(), decoded.values.commandRoutePrefixes)
         assertEquals(emptyMap(), decoded.values.imageMessageTypeRoutes)
+        assertEquals(emptyMap(), decoded.values.eventTypeRoutes)
     }
 
     @Test

@@ -292,7 +292,10 @@ class NativeCoreRuntimeTest {
                     ),
             )
 
-        val result = runtime.resolveEventRouteOrFallback("nickname_change") { "kotlin-route" }
+        val result =
+            runtime.resolveEventRouteOrFallback("nickname_change", mapOf("chatbotgo" to listOf("nickname_change"))) {
+                "kotlin-route"
+            }
         val diagnostics = runtime.diagnostics()
         val routingStats = diagnostics.componentStats.getValue("routing")
 
@@ -1084,6 +1087,7 @@ class NativeCoreRuntimeTest {
                     ),
                 commandRoutePrefixes = mapOf("default" to listOf("!")),
                 imageMessageTypeRoutes = mapOf("chatbotgo" to listOf("2")),
+                eventTypeRoutes = emptyMap(),
             ) {
                 error("kotlin fallback should not run")
             }
@@ -1129,6 +1133,7 @@ class NativeCoreRuntimeTest {
                     commands = listOf(sampleRoutingCommand()),
                     commandRoutePrefixes = mapOf("default" to listOf("!")),
                     imageMessageTypeRoutes = emptyMap(),
+                    eventTypeRoutes = emptyMap(),
                 ) {
                     kotlinFallbackCalls += 1
                     emptyList()
@@ -1172,6 +1177,7 @@ class NativeCoreRuntimeTest {
                 commands = listOf(sampleRoutingCommand()),
                 commandRoutePrefixes = mapOf("native" to listOf("!")),
                 imageMessageTypeRoutes = emptyMap(),
+                eventTypeRoutes = emptyMap(),
             ) {
                 error("full kotlin planner should not run when native routing succeeds")
             }
@@ -1209,6 +1215,7 @@ class NativeCoreRuntimeTest {
                 commands = listOf(sampleRoutingCommand()),
                 commandRoutePrefixes = mapOf("native" to listOf("!")),
                 imageMessageTypeRoutes = emptyMap(),
+                eventTypeRoutes = emptyMap(),
             ) {
                 listOf(
                     NativeIngressPlan(
@@ -1247,6 +1254,7 @@ class NativeCoreRuntimeTest {
                 commands = listOf(sampleRoutingCommand()),
                 commandRoutePrefixes = emptyMap(),
                 imageMessageTypeRoutes = emptyMap(),
+                eventTypeRoutes = emptyMap(),
             ) {
                 listOf(
                     NativeIngressPlan(

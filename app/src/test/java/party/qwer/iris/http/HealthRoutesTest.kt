@@ -119,6 +119,22 @@ class HealthRoutesTest {
     }
 
     @Test
+    fun `runtime readiness blocks placeholder config values`() {
+        val reason =
+            RuntimeConfigReadiness(
+                inboundSigningSecretConfigured = true,
+                outboundWebhookTokenConfigured = true,
+                botControlTokenConfigured = true,
+                bridgeTokenConfigured = true,
+                defaultWebhookEndpointConfigured = true,
+                bridgeRequired = true,
+                placeholderValuesAbsent = false,
+            ).failureReason()
+
+        assertEquals("placeholder runtime config value configured", reason)
+    }
+
+    @Test
     fun `readiness failure reports bridge when config is complete`() {
         val reason =
             readinessFailureReason(

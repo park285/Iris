@@ -5,6 +5,9 @@ import party.qwer.iris.config.ConfigLoadResult
 import party.qwer.iris.config.ConfigPathPolicy
 import party.qwer.iris.config.ConfigPersistence
 import party.qwer.iris.config.ConfigStateStore
+import party.qwer.iris.config.isConfiguredRuntimeSecret
+import party.qwer.iris.config.isPlaceholderSecretValue
+import party.qwer.iris.config.isPlaceholderWebhookEndpoint
 import party.qwer.iris.http.RuntimeBootstrapState
 import party.qwer.iris.http.RuntimeConfigReadiness
 import party.qwer.iris.model.ConfigResponse
@@ -245,18 +248,18 @@ class ConfigManager(
 
     internal fun runtimeConfigReadiness(): RuntimeConfigReadiness {
         val appliedUser = stateStore.current().appliedUser
-        val envBridgeTokenConfigured = env["IRIS_BRIDGE_TOKEN"]?.trim()?.isNotEmpty() == true
-        val bridgeTokenConfigured = appliedUser.bridgeToken.isNotBlank() || envBridgeTokenConfigured
+        val envBridgeToken = env["IRIS_BRIDGE_TOKEN"].orEmpty()
+        val envBridgeTokenConfigured = isConfiguredRuntimeSecret(envBridgeToken)
+        val bridgeTokenConfigured = isConfiguredRuntimeSecret(appliedUser.bridgeToken) || envBridgeTokenConfigured
         return RuntimeConfigReadiness(
-            inboundSigningSecretConfigured = appliedUser.inboundSigningSecret.isNotBlank(),
-            outboundWebhookTokenConfigured = appliedUser.outboundWebhookToken.isNotBlank(),
-            botControlTokenConfigured = appliedUser.botControlToken.isNotBlank(),
+            placeholderValuesAbsent = runtimePlaceholderValuesAbsent(appliedUser, envBridgeToken),
+            inboundSigningSecretConfigured = isConfiguredRuntimeSecret(appliedUser.inboundSigningSecret),
+            outboundWebhookTokenConfigured = isConfiguredRuntimeSecret(appliedUser.outboundWebhookToken),
+            botControlTokenConfigured = isConfiguredRuntimeSecret(appliedUser.botControlToken),
             bridgeTokenConfigured = bridgeTokenConfigured,
             defaultWebhookEndpointConfigured =
-                configuredWebhookEndpoint(
-                    appliedUser.toLegacyConfigValues(),
-                    DEFAULT_WEBHOOK_ROUTE,
-                ).isNotBlank(),
+                configuredWebhookEndpoint(appliedUser.toLegacyConfigValues(), DEFAULT_WEBHOOK_ROUTE)
+                    .let { endpoint -> endpoint.isNotBlank() && !isPlaceholderWebhookEndpoint(endpoint) },
             bridgeRequired =
                 resolveBridgeRequirement(
                     bridgeRequirementOverride = bridgeRequirementOverride,
@@ -294,6 +297,8 @@ class ConfigManager(
 
     override fun imageMessageTypeRoutes(): Map<String, List<String>> = stateStore.current().appliedUser.imageMessageTypeRoutes
 
+    override fun eventTypeRoutes(): Map<String, List<String>> = stateStore.current().appliedUser.eventTypeRoutes
+
     fun configResponse(): ConfigResponse {
         val current = stateStore.current()
         return buildConfigResponse(
@@ -329,6 +334,20 @@ class ConfigManager(
             isDirty = true,
         )
 }
+
+private fun runtimePlaceholderValuesAbsent(
+    appliedUser: UserConfigState,
+    envBridgeToken: String,
+): Boolean =
+    listOf(
+        appliedUser.inboundSigningSecret,
+        appliedUser.outboundWebhookToken,
+        appliedUser.botControlToken,
+        appliedUser.bridgeToken,
+        envBridgeToken,
+    ).none(::isPlaceholderSecretValue) &&
+        !isPlaceholderWebhookEndpoint(appliedUser.endpoint) &&
+        appliedUser.webhooks.values.none(::isPlaceholderWebhookEndpoint)
 
 private fun resolveBridgeRequirement(
     bridgeRequirementOverride: Boolean?,

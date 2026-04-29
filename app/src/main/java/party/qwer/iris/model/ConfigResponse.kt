@@ -21,6 +21,8 @@ data class ConfigState(
     val commandRoutePrefixes: Map<String, List<String>> = emptyMap(),
     @SerialName("image_message_type_routes")
     val imageMessageTypeRoutes: Map<String, List<String>> = emptyMap(),
+    @SerialName("event_type_routes")
+    val eventTypeRoutes: Map<String, List<String>> = emptyMap(),
 )
 
 @Serializable

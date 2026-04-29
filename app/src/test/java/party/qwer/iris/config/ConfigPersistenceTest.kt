@@ -161,11 +161,13 @@ class ConfigPersistenceTest {
             party.qwer.iris.UserConfigState(
                 commandRoutePrefixes = mapOf("chatbot" to listOf("!", "/")),
                 imageMessageTypeRoutes = mapOf("dalle" to listOf("26")),
+                eventTypeRoutes = mapOf("events" to listOf("nickname_change")),
             )
         persistence.save(original)
         val loaded = assertIs<ConfigLoadResult.Loaded>(persistence.load())
         assertEquals(mapOf("chatbot" to listOf("!", "/")), loaded.config.userState.commandRoutePrefixes)
         assertEquals(mapOf("dalle" to listOf("26")), loaded.config.userState.imageMessageTypeRoutes)
+        assertEquals(mapOf("events" to listOf("nickname_change")), loaded.config.userState.eventTypeRoutes)
         tmpDir.deleteRecursively()
     }
 

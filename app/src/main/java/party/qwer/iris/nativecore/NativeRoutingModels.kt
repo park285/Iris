@@ -13,6 +13,7 @@ internal data class NativeRoutingBatchRequest(
     val items: List<NativeRoutingBatchItem>,
     val commandRoutePrefixes: List<NativeRouteEntry> = emptyList(),
     val imageMessageTypeRoutes: List<NativeRouteEntry> = emptyList(),
+    val eventTypeRoutes: List<NativeRouteEntry> = emptyList(),
 )
 
 @Serializable

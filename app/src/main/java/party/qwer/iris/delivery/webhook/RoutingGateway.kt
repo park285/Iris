@@ -7,6 +7,8 @@ import java.io.Closeable
 interface RoutingGateway : Closeable {
     fun route(command: RoutingCommand): RoutingResult
 
+    fun isRoutableEventType(messageType: String?): Boolean = resolveEventRoute(messageType) != null
+
     /**
      * 입력 순서대로 처리한 prefix 결과를 반환합니다.
      * RETRY_LATER가 발생하면 해당 항목까지 반환하고 이후 항목은 시도하지 않습니다.
@@ -25,13 +27,15 @@ interface RoutingGateway : Closeable {
 }
 
 internal class H2cRoutingGateway(
-    config: party.qwer.iris.ConfigProvider,
+    private val config: party.qwer.iris.ConfigProvider,
 ) : RoutingGateway {
     private val dispatcher = H2cDispatcher(config)
 
     override fun route(command: RoutingCommand): RoutingResult = dispatcher.route(command)
 
     override fun routeBatch(commands: List<RoutingCommand>): List<RoutingResult> = dispatcher.routeBatch(commands)
+
+    override fun isRoutableEventType(messageType: String?): Boolean = resolveEventRoute(messageType, config) != null
 
     override fun close() {
         dispatcher.close()
@@ -75,6 +79,8 @@ internal class OutboxRoutingGateway(
         }
         return results
     }
+
+    override fun isRoutableEventType(messageType: String?): Boolean = resolveEventRoute(messageType, config) != null
 
     override fun close() {
         deliveryStore.close()

@@ -44,9 +44,11 @@ internal data class RuntimeConfigReadiness(
     val bridgeTokenConfigured: Boolean,
     val defaultWebhookEndpointConfigured: Boolean,
     val bridgeRequired: Boolean = true,
+    val placeholderValuesAbsent: Boolean = true,
 ) {
     fun bootstrapState(): RuntimeBootstrapState =
         when {
+            !placeholderValuesAbsent -> RuntimeBootstrapState.Blocked("placeholder runtime config value configured")
             !inboundSigningSecretConfigured -> RuntimeBootstrapState.Blocked("inbound signing secret not configured")
             !outboundWebhookTokenConfigured -> RuntimeBootstrapState.Blocked("outbound webhook token not configured")
             !botControlTokenConfigured -> RuntimeBootstrapState.Blocked("bot control token not configured")
@@ -69,6 +71,7 @@ internal data class RuntimeConfigReadiness(
                 bridgeTokenConfigured = true,
                 defaultWebhookEndpointConfigured = true,
                 bridgeRequired = bridgeRequired,
+                placeholderValuesAbsent = true,
             )
     }
 }

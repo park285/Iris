@@ -4,6 +4,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import party.qwer.iris.CHATBOTGO_ROUTE
 import party.qwer.iris.CommandParser
 import party.qwer.iris.DEFAULT_COMMAND_ROUTE_PREFIXES
+import party.qwer.iris.DEFAULT_EVENT_TYPE_ROUTES
 import party.qwer.iris.DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES
 import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
 import party.qwer.iris.SETTLEMENT_ROUTE
@@ -18,6 +19,7 @@ class H2cDispatcherRouteSupportTest {
         TestConfigProvider(
             commandRoutes = DEFAULT_COMMAND_ROUTE_PREFIXES,
             imageRoutes = DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES,
+            eventRoutes = DEFAULT_EVENT_TYPE_ROUTES,
         )
 
     private val emptyRouteConfig = TestConfigProvider()
@@ -38,6 +40,14 @@ class H2cDispatcherRouteSupportTest {
     fun `member identity events route to chatbotgo`() {
         assertEquals(CHATBOTGO_ROUTE, resolveEventRoute("nickname_change"))
         assertEquals(CHATBOTGO_ROUTE, resolveEventRoute("profile_change"))
+    }
+
+    @Test
+    fun `configured event types route through config`() {
+        val config = TestConfigProvider(eventRoutes = mapOf("custom-events" to listOf("role_change")))
+
+        assertEquals("custom-events", resolveEventRoute("role_change", config))
+        assertNull(resolveEventRoute("nickname_change", emptyRouteConfig))
     }
 
     @Test
@@ -154,6 +164,7 @@ class H2cDispatcherRouteSupportTest {
     private data class TestConfigProvider(
         val commandRoutes: Map<String, List<String>> = emptyMap(),
         val imageRoutes: Map<String, List<String>> = emptyMap(),
+        val eventRoutes: Map<String, List<String>> = emptyMap(),
         val webhookEndpoint: String = "",
     ) : party.qwer.iris.ConfigProvider {
         override val botId: Long = 0L
@@ -171,5 +182,7 @@ class H2cDispatcherRouteSupportTest {
         override fun commandRoutePrefixes(): Map<String, List<String>> = commandRoutes
 
         override fun imageMessageTypeRoutes(): Map<String, List<String>> = imageRoutes
+
+        override fun eventTypeRoutes(): Map<String, List<String>> = eventRoutes
     }
 }

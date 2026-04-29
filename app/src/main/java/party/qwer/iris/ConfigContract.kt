@@ -80,4 +80,5 @@ private fun ConfigValues.toConfigState(): ConfigState =
         messageSendRate = messageSendRate,
         commandRoutePrefixes = commandRoutePrefixes,
         imageMessageTypeRoutes = imageMessageTypeRoutes,
+        eventTypeRoutes = eventTypeRoutes,
     )

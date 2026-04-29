@@ -105,11 +105,13 @@ class ConfigManagerPersistenceTest {
 
         assertEquals(DEFAULT_COMMAND_ROUTE_PREFIXES, manager.commandRoutePrefixes())
         assertEquals(DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES, manager.imageMessageTypeRoutes())
+        assertEquals(DEFAULT_EVENT_TYPE_ROUTES, manager.eventTypeRoutes())
         assertTrue(manager.saveConfigNow())
 
         val reloaded = ConfigManager(configPath = configPath)
         assertEquals(DEFAULT_COMMAND_ROUTE_PREFIXES, reloaded.commandRoutePrefixes())
         assertEquals(DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES, reloaded.imageMessageTypeRoutes())
+        assertEquals(DEFAULT_EVENT_TYPE_ROUTES, reloaded.eventTypeRoutes())
         configDir.deleteRecursively()
     }
 
@@ -122,7 +124,8 @@ class ConfigManagerPersistenceTest {
             {
               "endpoint": "http://example",
               "commandRoutePrefixes": {},
-              "imageMessageTypeRoutes": {}
+              "imageMessageTypeRoutes": {},
+              "eventTypeRoutes": {}
             }
             """.trimIndent(),
         )
@@ -131,16 +134,19 @@ class ConfigManagerPersistenceTest {
 
         assertEquals(emptyMap(), manager.commandRoutePrefixes())
         assertEquals(emptyMap(), manager.imageMessageTypeRoutes())
+        assertEquals(emptyMap(), manager.eventTypeRoutes())
         assertTrue(manager.saveConfigNow())
 
         val configText = configDir.resolve("config.json").readText()
         val root = Json.parseToJsonElement(configText).jsonObject
         assertTrue(root.getValue("commandRoutePrefixes").jsonObject.isEmpty())
         assertTrue(root.getValue("imageMessageTypeRoutes").jsonObject.isEmpty())
+        assertTrue(root.getValue("eventTypeRoutes").jsonObject.isEmpty())
 
         val reloaded = ConfigManager(configPath = configPath)
         assertEquals(emptyMap(), reloaded.commandRoutePrefixes())
         assertEquals(emptyMap(), reloaded.imageMessageTypeRoutes())
+        assertEquals(emptyMap(), reloaded.eventTypeRoutes())
         configDir.deleteRecursively()
     }
 

@@ -304,6 +304,24 @@ class SnapshotEventEmitterTest {
 
         helper.close()
     }
+
+    @Test
+    fun `skipped non-routable event still persists room event`() {
+        val bus = SseEventBus(bufferSize = 10)
+        val helper = JdbcSqliteHelper.inMemory()
+        IrisDatabaseSchema.createRoomEventsTable(helper)
+        val store = SqliteRoomEventStore(helper)
+        val emitter = SnapshotEventEmitter(bus, NonRoutableSkippedGateway(), eventStore = store)
+
+        val event = NicknameChangeEvent(chatId = 100L, linkId = 1100L, userId = 2L, oldNickname = "Bob", newNickname = "Bobby", timestamp = 2000L)
+
+        emitter.emit(listOf(event))
+
+        assertEquals(1, store.listByChatId(100L, limit = 100).size)
+        assertEquals(1, bus.replayFrom(0).size)
+
+        helper.close()
+    }
 }
 
 private class RecordingGateway : RoutingGateway {
@@ -325,6 +343,14 @@ private class RetryLaterGateway : RoutingGateway {
 
 private class SkippedGateway : RoutingGateway {
     override fun route(command: RoutingCommand): RoutingResult = RoutingResult.SKIPPED
+
+    override fun close() {}
+}
+
+private class NonRoutableSkippedGateway : RoutingGateway {
+    override fun route(command: RoutingCommand): RoutingResult = RoutingResult.SKIPPED
+
+    override fun isRoutableEventType(messageType: String?): Boolean = false
 
     override fun close() {}
 }

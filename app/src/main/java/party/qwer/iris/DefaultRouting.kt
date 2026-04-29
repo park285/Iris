@@ -3,6 +3,8 @@ package party.qwer.iris
 const val CHATBOTGO_ROUTE = "chatbotgo"
 const val SETTLEMENT_ROUTE = "settlement"
 const val IMAGE_MESSAGE_TYPE_PHOTO = "2"
+const val EVENT_TYPE_NICKNAME_CHANGE = "nickname_change"
+const val EVENT_TYPE_PROFILE_CHANGE = "profile_change"
 
 val DEFAULT_COMMAND_ROUTE_PREFIXES: Map<String, List<String>> =
     linkedMapOf(
@@ -33,4 +35,13 @@ val DEFAULT_COMMAND_ROUTE_PREFIXES: Map<String, List<String>> =
 val DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES: Map<String, List<String>> =
     linkedMapOf(
         CHATBOTGO_ROUTE to listOf(IMAGE_MESSAGE_TYPE_PHOTO),
+    )
+
+val DEFAULT_EVENT_TYPE_ROUTES: Map<String, List<String>> =
+    linkedMapOf(
+        CHATBOTGO_ROUTE to
+            listOf(
+                EVENT_TYPE_NICKNAME_CHANGE,
+                EVENT_TYPE_PROFILE_CHANGE,
+            ),
     )

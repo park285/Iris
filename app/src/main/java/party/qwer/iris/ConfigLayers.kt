@@ -17,6 +17,7 @@ internal data class UserConfigState(
     val messageSendJitterMax: Long = 0,
     val commandRoutePrefixes: Map<String, List<String>> = DEFAULT_COMMAND_ROUTE_PREFIXES,
     val imageMessageTypeRoutes: Map<String, List<String>> = DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES,
+    val eventTypeRoutes: Map<String, List<String>> = DEFAULT_EVENT_TYPE_ROUTES,
 )
 
 internal data class DiscoveredConfigState(
@@ -42,6 +43,7 @@ internal data class AppliedConfigState(
             messageSendJitterMax = user.messageSendJitterMax,
             commandRoutePrefixes = user.commandRoutePrefixes,
             imageMessageTypeRoutes = user.imageMessageTypeRoutes,
+            eventTypeRoutes = user.eventTypeRoutes,
             botId = discovered.botId,
         )
 }
@@ -61,6 +63,7 @@ internal fun ConfigValues.toUserConfigState(): UserConfigState =
         messageSendJitterMax = messageSendJitterMax,
         commandRoutePrefixes = commandRoutePrefixes,
         imageMessageTypeRoutes = imageMessageTypeRoutes,
+        eventTypeRoutes = eventTypeRoutes,
     )
 
 internal fun ConfigValues.toDiscoveredConfigState(): DiscoveredConfigState =
@@ -83,6 +86,7 @@ internal fun UserConfigState.toPersistedConfigValues(): UserConfigValues =
         messageSendJitterMax = messageSendJitterMax,
         commandRoutePrefixes = commandRoutePrefixes,
         imageMessageTypeRoutes = imageMessageTypeRoutes,
+        eventTypeRoutes = eventTypeRoutes,
     )
 
 internal fun UserConfigState.toLegacyConfigValues(
@@ -102,6 +106,7 @@ internal fun UserConfigState.toLegacyConfigValues(
         messageSendJitterMax = messageSendJitterMax,
         commandRoutePrefixes = commandRoutePrefixes,
         imageMessageTypeRoutes = imageMessageTypeRoutes,
+        eventTypeRoutes = eventTypeRoutes,
         botId = botId,
     )
 

@@ -123,4 +123,21 @@ class ConfigManagerStateTest {
         assertTrue(manager.runtimeConfigReadiness().bridgeRequired)
         tmpDir.deleteRecursively()
     }
+
+    @Test
+    fun `runtime readiness rejects placeholder env bridge token`() {
+        val tmpDir = Files.createTempDirectory("iris-cfg-state-placeholder-env").toFile()
+        val configPath = tmpDir.resolve("config.json").absolutePath
+
+        val manager =
+            ConfigManager(
+                configPath = configPath,
+                env = mapOf("IRIS_BRIDGE_TOKEN" to "change-me"),
+            )
+
+        val readiness = manager.runtimeConfigReadiness()
+        assertFalse(readiness.placeholderValuesAbsent)
+        assertEquals("placeholder runtime config value configured", readiness.failureReason())
+        tmpDir.deleteRecursively()
+    }
 }

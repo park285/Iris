@@ -7,7 +7,6 @@ import party.qwer.iris.SseEventBus
 import party.qwer.iris.delivery.webhook.RoutingCommand
 import party.qwer.iris.delivery.webhook.RoutingGateway
 import party.qwer.iris.delivery.webhook.RoutingResult
-import party.qwer.iris.delivery.webhook.resolveEventRoute
 import party.qwer.iris.model.MemberEvent
 import party.qwer.iris.model.NicknameChangeEvent
 import party.qwer.iris.model.ProfileChangeEvent
@@ -68,7 +67,7 @@ open class SnapshotEventEmitter(
             if (routingResult == RoutingResult.RETRY_LATER) {
                 error("retry later for eventType=${event.type}, chatId=${event.chatId}, userId=$eventUserId")
             }
-            if (routingResult == RoutingResult.SKIPPED && resolveEventRoute(event.type) != null) {
+            if (routingResult == RoutingResult.SKIPPED && routingGateway?.isRoutableEventType(event.type) == true) {
                 error("skipped routable eventType=${event.type}, chatId=${event.chatId}, userId=$eventUserId")
             }
 

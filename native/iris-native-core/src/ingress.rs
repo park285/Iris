@@ -11,6 +11,8 @@ struct IngressBatchRequest {
     command_route_prefixes: RouteList,
     #[serde(default, rename = "imageMessageTypeRoutes")]
     image_message_type_routes: RouteList,
+    #[serde(default, rename = "eventTypeRoutes")]
+    event_type_routes: RouteList,
 }
 
 #[derive(Debug, Deserialize)]
@@ -22,6 +24,8 @@ struct IngressBatchItem {
     command_route_prefixes: Option<RouteList>,
     #[serde(default, rename = "imageMessageTypeRoutes")]
     image_message_type_routes: Option<RouteList>,
+    #[serde(default, rename = "eventTypeRoutes")]
+    event_type_routes: Option<RouteList>,
 }
 
 #[derive(Debug, Serialize)]
@@ -57,6 +61,7 @@ pub fn ingress_batch_json(request_bytes: &[u8]) -> NativeCoreResult<Vec<u8>> {
         .map_err(|error| NativeCoreError::InvalidRequest(error.to_string()))?;
     let command_routes = request.command_route_prefixes;
     let image_routes = request.image_message_type_routes;
+    let event_routes = request.event_type_routes;
     let response = IngressBatchResponse {
         items: request
             .items
@@ -67,12 +72,20 @@ pub fn ingress_batch_json(request_bytes: &[u8]) -> NativeCoreResult<Vec<u8>> {
                     message_id,
                     command_route_prefixes,
                     image_message_type_routes,
+                    event_type_routes,
                 } = item;
                 let item_command_routes =
                     command_route_prefixes.as_ref().unwrap_or(&command_routes);
                 let item_image_routes = image_message_type_routes.as_ref().unwrap_or(&image_routes);
+                let item_event_routes = event_type_routes.as_ref().unwrap_or(&event_routes);
 
-                plan_ingress_item(command, message_id, item_command_routes, item_image_routes)
+                plan_ingress_item(
+                    command,
+                    message_id,
+                    item_command_routes,
+                    item_image_routes,
+                    item_event_routes,
+                )
             })
             .collect(),
     };
@@ -85,6 +98,7 @@ fn plan_ingress_item(
     message_id: Option<String>,
     command_route_prefixes: &RouteList,
     image_message_type_routes: &RouteList,
+    event_type_routes: &RouteList,
 ) -> IngressBatchResult {
     let Some(command_object) = command.as_object() else {
         return IngressBatchResult::without_decision_error(&NativeCoreError::InvalidRequest(
@@ -105,6 +119,7 @@ fn plan_ingress_item(
         message_type.as_deref(),
         command_route_prefixes,
         image_message_type_routes,
+        event_type_routes,
     );
     let Some(target_route) = decision.target_route.as_deref() else {
         return IngressBatchResult::success(decision, None, None);
@@ -400,6 +415,7 @@ mod tests {
             "timestamp": 1_700_000_000
         });
         let request = serde_json::json!({
+            "eventTypeRoutes": {"chatbotgo": ["nickname_change"]},
             "items": [{
                 "command": {
                     "sourceLogId": -1,

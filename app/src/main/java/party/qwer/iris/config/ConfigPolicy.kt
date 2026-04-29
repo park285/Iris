@@ -3,6 +3,7 @@ package party.qwer.iris.config
 import party.qwer.iris.ApiRequestException
 import party.qwer.iris.ConfigMutationPlan
 import party.qwer.iris.DEFAULT_COMMAND_ROUTE_PREFIXES
+import party.qwer.iris.DEFAULT_EVENT_TYPE_ROUTES
 import party.qwer.iris.DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES
 import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
 import party.qwer.iris.PlannedConfigUpdate
@@ -102,7 +103,8 @@ internal object ConfigPolicy {
                 restartRequired = false,
                 differs = { snapshot, effective ->
                     snapshot.commandRoutePrefixes != effective.commandRoutePrefixes ||
-                        snapshot.imageMessageTypeRoutes != effective.imageMessageTypeRoutes
+                        snapshot.imageMessageTypeRoutes != effective.imageMessageTypeRoutes ||
+                        snapshot.eventTypeRoutes != effective.eventTypeRoutes
                 },
             ),
             ConfigFieldPolicy(
@@ -135,6 +137,7 @@ internal object ConfigPolicy {
         RoutingPolicy(
             commandRoutePrefixes = DEFAULT_COMMAND_ROUTE_PREFIXES,
             imageMessageTypeRoutes = DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES,
+            eventTypeRoutes = DEFAULT_EVENT_TYPE_ROUTES,
             requiresExternalBootstrap = true,
         )
 
@@ -194,6 +197,22 @@ internal object ConfigPolicy {
                 }
             }
 
+            state.eventTypeRoutes.forEach { (route, eventTypes) ->
+                validateRouteMapEntry(
+                    rawRoute = route,
+                    fieldPath = "eventTypeRoutes.$route",
+                )?.let { message ->
+                    add(ConfigValidationError(ConfigField.ROUTING_POLICY, message))
+                }
+                validateNonBlankEntries(
+                    fieldPath = "eventTypeRoutes.$route",
+                    values = eventTypes,
+                    valueName = "event type",
+                )?.let { message ->
+                    add(ConfigValidationError(ConfigField.ROUTING_POLICY, message))
+                }
+            }
+
             validateSecret("inboundSigningSecret", state.inboundSigningSecret)?.let { message ->
                 add(ConfigValidationError(ConfigField.INBOUND_SIGNING_SECRET, message))
             }
@@ -225,10 +244,13 @@ internal object ConfigPolicy {
             .toList()
 
     fun validateWebhookEndpoint(endpoint: String): String? =
-        if (endpoint.isNotEmpty() && !endpoint.startsWith("http://") && !endpoint.startsWith("https://")) {
-            "endpoint must start with http:// or https://"
-        } else {
-            null
+        when {
+            endpoint.isEmpty() -> null
+            isPlaceholderWebhookEndpoint(endpoint) -> "endpoint must not use placeholder value"
+            !endpoint.startsWith("http://") && !endpoint.startsWith("https://") ->
+                "endpoint must start with http:// or https://"
+
+            else -> null
         }
 
     fun validateWebhookRoute(route: String): String? =
@@ -374,6 +396,7 @@ internal object ConfigPolicy {
         if (value.isEmpty()) return null
         if (value != value.trim()) return "$name must not have leading or trailing whitespace"
         if (value.any { it.isISOControl() }) return "$name must not contain control characters"
+        if (isPlaceholderSecretValue(value)) return "$name must not use placeholder value"
         return null
     }
 }

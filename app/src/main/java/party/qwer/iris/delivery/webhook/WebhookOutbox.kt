@@ -272,6 +272,7 @@ internal fun resolveWebhookDeliveryPlansBatch(
             commands = commands,
             commandRoutePrefixes = config.commandRoutePrefixes(),
             imageMessageTypeRoutes = config.imageMessageTypeRoutes(),
+            eventTypeRoutes = config.eventTypeRoutes(),
         ) {
             commands.map { command -> resolveWebhookDeliveryPlanKotlin(command, config) }
         }
@@ -287,7 +288,7 @@ internal fun resolveWebhookDelivery(
     val parsedCommand = CommandParser.parse(command.text)
     val targetRoute =
         resolveWebhookRoute(parsedCommand, config)
-            ?: resolveEventRoute(command.messageType)
+            ?: resolveEventRoute(command.messageType, config)
             ?: resolveImageRoute(command.messageType, config)
             ?: return null
     val webhookUrl = config.webhookEndpointFor(targetRoute).takeIf { it.isNotBlank() } ?: return null
@@ -308,7 +309,7 @@ private fun resolveWebhookDeliveryPlanKotlin(
     val parsedCommand = CommandParser.parseKotlin(command.text)
     val targetRoute =
         resolveWebhookRouteKotlin(parsedCommand, config)
-            ?: resolveEventRouteKotlin(command.messageType)
+            ?: resolveEventRouteKotlin(command.messageType, config.eventTypeRoutes())
             ?: resolveImageRouteKotlin(command.messageType, config)
             ?: return NativeIngressPlan(parsedCommand = parsedCommand)
     val normalizedCommand = command.copy(text = parsedCommand.normalizedText)

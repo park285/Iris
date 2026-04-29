@@ -4,13 +4,20 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 pub const DEFAULT_WEBHOOK_ROUTE: &str = "default";
+#[cfg(test)]
 pub const CHATBOTGO_ROUTE: &str = "chatbotgo";
+#[cfg(test)]
 pub const SETTLEMENT_ROUTE: &str = "settlement";
+#[cfg(test)]
 pub const IMAGE_MESSAGE_TYPE_PHOTO: &str = "2";
+#[cfg(test)]
 pub const EVENT_TYPE_NICKNAME_CHANGE: &str = "nickname_change";
+#[cfg(test)]
 pub const EVENT_TYPE_PROFILE_CHANGE: &str = "profile_change";
 
+#[cfg(test)]
 pub const SETTLEMENT_COMMAND_PREFIXES: &[&str] = &["!정산", "!정산완료"];
+#[cfg(test)]
 pub const CHATBOTGO_COMMAND_PREFIXES: &[&str] = &[
     "!질문",
     "!프로필",
@@ -35,6 +42,8 @@ struct RoutingBatchRequest {
     command_route_prefixes: RouteList,
     #[serde(default, rename = "imageMessageTypeRoutes")]
     image_message_type_routes: RouteList,
+    #[serde(default, rename = "eventTypeRoutes")]
+    event_type_routes: RouteList,
 }
 
 #[derive(Debug, Deserialize)]
@@ -46,6 +55,8 @@ struct RoutingBatchItem {
     command_route_prefixes: Option<RouteList>,
     #[serde(default, rename = "imageMessageTypeRoutes")]
     image_message_type_routes: Option<RouteList>,
+    #[serde(default, rename = "eventTypeRoutes")]
+    event_type_routes: Option<RouteList>,
 }
 
 #[derive(Debug, Serialize)]
@@ -150,10 +161,12 @@ impl RouteList {
             Some(other) => return Err(format!("route must be string, got {other}")),
             None => return Err("route entry missing route".to_owned()),
         };
-        let values = ["prefixes", "messageTypes", "types", "values"]
+        let values = ["prefixes", "messageTypes", "eventTypes", "types", "values"]
             .into_iter()
             .find_map(|key| object.remove(key))
-            .ok_or_else(|| "route entry missing prefixes/messageTypes/types/values".to_owned())
+            .ok_or_else(|| {
+                "route entry missing prefixes/messageTypes/eventTypes/types/values".to_owned()
+            })
             .and_then(string_array)?;
 
         Ok(RouteEntry { route, values })
@@ -194,6 +207,19 @@ impl RouteList {
             }],
         }
     }
+
+    #[cfg(test)]
+    fn default_event_types() -> Self {
+        Self {
+            entries: vec![RouteEntry {
+                route: CHATBOTGO_ROUTE.to_owned(),
+                values: vec![
+                    EVENT_TYPE_NICKNAME_CHANGE.to_owned(),
+                    EVENT_TYPE_PROFILE_CHANGE.to_owned(),
+                ],
+            }],
+        }
+    }
 }
 
 fn string_array(value: Value) -> Result<Vec<String>, String> {
@@ -214,6 +240,7 @@ pub fn routing_batch_json(request_bytes: &[u8]) -> NativeCoreResult<Vec<u8>> {
         .map_err(|error| NativeCoreError::InvalidRequest(error.to_string()))?;
     let command_routes = request.command_route_prefixes;
     let image_routes = request.image_message_type_routes;
+    let event_routes = request.event_type_routes;
     let response = RoutingBatchResponse {
         items: request
             .items
@@ -227,11 +254,13 @@ pub fn routing_batch_json(request_bytes: &[u8]) -> NativeCoreResult<Vec<u8>> {
                     .image_message_type_routes
                     .as_ref()
                     .unwrap_or(&image_routes);
+                let item_event_routes = item.event_type_routes.as_ref().unwrap_or(&event_routes);
                 let decision = route_command(
                     &item.text,
                     item.message_type.as_deref(),
                     item_command_routes,
                     item_image_routes,
+                    item_event_routes,
                 );
 
                 RoutingBatchResult {
@@ -257,10 +286,11 @@ pub(crate) fn route_command(
     message_type: Option<&str>,
     command_route_prefixes: &RouteList,
     image_message_type_routes: &RouteList,
+    event_type_routes: &RouteList,
 ) -> RoutingDecision {
     let parsed_command = parse_command(text);
     let webhook_route = resolve_webhook_route(&parsed_command, command_route_prefixes);
-    let event_route = resolve_event_route(message_type);
+    let event_route = resolve_event_route(message_type, event_type_routes);
     let image_route = resolve_image_route(message_type, image_message_type_routes);
     let target_route = webhook_route
         .clone()
@@ -318,11 +348,20 @@ fn resolve_webhook_route(
         .or_else(|| Some(DEFAULT_WEBHOOK_ROUTE.to_owned()))
 }
 
-fn resolve_event_route(message_type: Option<&str>) -> Option<String> {
-    match message_type.map(str::trim).unwrap_or_default() {
-        EVENT_TYPE_NICKNAME_CHANGE | EVENT_TYPE_PROFILE_CHANGE => Some(CHATBOTGO_ROUTE.to_owned()),
-        _ => None,
+fn resolve_event_route(
+    message_type: Option<&str>,
+    event_type_routes: &RouteList,
+) -> Option<String> {
+    let normalized_type = message_type.map(str::trim).unwrap_or_default();
+    if normalized_type.is_empty() || event_type_routes.is_empty() {
+        return None;
     }
+
+    event_type_routes
+        .entries
+        .iter()
+        .find(|entry| entry.values.iter().any(|value| value == normalized_type))
+        .map(|entry| entry.route.clone())
 }
 
 fn resolve_image_route(
@@ -389,9 +428,15 @@ mod tests {
             .iter()
             .map(|entry| serde_json::json!({"route": &entry.route, "messageTypes": &entry.values}))
             .collect();
+        let event_type_routes: Vec<_> = RouteList::default_event_types()
+            .entries
+            .iter()
+            .map(|entry| serde_json::json!({"route": &entry.route, "eventTypes": &entry.values}))
+            .collect();
         let request = serde_json::json!({
             "commandRoutePrefixes": command_route_prefixes,
             "imageMessageTypeRoutes": image_message_type_routes,
+            "eventTypeRoutes": event_type_routes,
             "items": [
                 {"text": "!정산"},
                 {"text": "!질문 hello"},
@@ -421,9 +466,11 @@ mod tests {
                 {"route":"second","prefixes":["!cmd"]}
             ],
             "imageMessageTypeRoutes": {"img":["2"]},
+            "eventTypeRoutes": {"events":["nickname_change"]},
             "items": [
                 {"text":"!cmd arg", "messageType":"2"},
-                {"text":"!cmdSuffix", "messageType":"2"}
+                {"text":"!cmdSuffix", "messageType":"2"},
+                {"text":"event", "messageType":"nickname_change"}
             ]
         }"#;
         let response = routing_batch_json(request).expect("routing response");
@@ -434,6 +481,22 @@ mod tests {
         assert_eq!(response["items"][1]["webhookRoute"], DEFAULT_WEBHOOK_ROUTE);
         assert_eq!(response["items"][1]["imageRoute"], "img");
         assert_eq!(response["items"][1]["targetRoute"], DEFAULT_WEBHOOK_ROUTE);
+        assert_eq!(response["items"][2]["eventRoute"], "events");
+        assert_eq!(response["items"][2]["targetRoute"], "events");
+    }
+
+    #[test]
+    fn routing_batch_does_not_route_events_without_config() {
+        let request = br#"{
+            "items": [
+                {"text":"event", "messageType":"nickname_change"}
+            ]
+        }"#;
+        let response = routing_batch_json(request).expect("routing response");
+        let response: Value = serde_json::from_slice(&response).expect("json response");
+
+        assert!(response["items"][0]["eventRoute"].is_null());
+        assert!(response["items"][0]["targetRoute"].is_null());
     }
 
     #[test]

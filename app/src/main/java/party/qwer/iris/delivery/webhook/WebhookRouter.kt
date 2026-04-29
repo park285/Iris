@@ -1,8 +1,8 @@
 package party.qwer.iris.delivery.webhook
 
-import party.qwer.iris.CHATBOTGO_ROUTE
 import party.qwer.iris.CommandKind
 import party.qwer.iris.CommandParser
+import party.qwer.iris.DEFAULT_EVENT_TYPE_ROUTES
 import party.qwer.iris.DEFAULT_WEBHOOK_ROUTE
 import party.qwer.iris.ParsedCommand
 import party.qwer.iris.nativecore.NativeCoreHolder
@@ -10,12 +10,6 @@ import party.qwer.iris.nativecore.NativeCoreHolder
 internal fun resolveWebhookRoute(commandText: String): String? = resolveWebhookRoute(CommandParser.parse(commandText))
 
 internal fun resolveWebhookRoute(parsedCommand: ParsedCommand): String? = resolveWebhookRoute(parsedCommand, null)
-
-private val chatbotgoEventTypes =
-    setOf(
-        "nickname_change",
-        "profile_change",
-    )
 
 internal fun resolveWebhookRoute(
     parsedCommand: ParsedCommand,
@@ -51,20 +45,28 @@ internal fun resolveWebhookRouteKotlin(
         }?.key ?: DEFAULT_WEBHOOK_ROUTE
 }
 
-internal fun resolveEventRoute(messageType: String?): String? =
-    NativeCoreHolder.current().resolveEventRouteOrFallback(messageType) {
-        resolveEventRouteKotlin(messageType)
+internal fun resolveEventRoute(messageType: String?): String? = resolveEventRoute(messageType, null)
+
+internal fun resolveEventRoute(
+    messageType: String?,
+    config: party.qwer.iris.ConfigProvider?,
+): String? {
+    val eventTypeRoutes = config?.eventTypeRoutes() ?: DEFAULT_EVENT_TYPE_ROUTES
+    return NativeCoreHolder.current().resolveEventRouteOrFallback(messageType, eventTypeRoutes) {
+        resolveEventRouteKotlin(messageType, eventTypeRoutes)
     }
+}
 
-internal fun resolveEventRouteKotlin(messageType: String?): String? {
+internal fun resolveEventRouteKotlin(
+    messageType: String?,
+    eventTypeRoutes: Map<String, List<String>> = DEFAULT_EVENT_TYPE_ROUTES,
+): String? {
     val normalizedType = messageType?.trim().orEmpty()
-    if (normalizedType.isEmpty()) return null
-
-    if (normalizedType !in chatbotgoEventTypes) {
+    if (normalizedType.isEmpty() || eventTypeRoutes.isEmpty()) {
         return null
     }
 
-    return CHATBOTGO_ROUTE
+    return eventTypeRoutes.entries.firstOrNull { (_, types) -> normalizedType in types }?.key
 }
 
 internal fun resolveImageRoute(messageType: String?): String? = resolveImageRoute(messageType, null)

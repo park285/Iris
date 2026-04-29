@@ -3,6 +3,7 @@ package party.qwer.iris.model
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import party.qwer.iris.DEFAULT_COMMAND_ROUTE_PREFIXES
+import party.qwer.iris.DEFAULT_EVENT_TYPE_ROUTES
 import party.qwer.iris.DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES
 
 @Serializable
@@ -22,5 +23,6 @@ data class ConfigValues(
     val messageSendJitterMax: Long = 0,
     val commandRoutePrefixes: Map<String, List<String>> = DEFAULT_COMMAND_ROUTE_PREFIXES,
     val imageMessageTypeRoutes: Map<String, List<String>> = DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES,
+    val eventTypeRoutes: Map<String, List<String>> = DEFAULT_EVENT_TYPE_ROUTES,
     val botId: Long = 0L,
 )

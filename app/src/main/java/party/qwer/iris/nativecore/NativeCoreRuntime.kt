@@ -104,6 +104,7 @@ internal class NativeCoreRuntime private constructor(
             item = NativeRoutingBatchItem(text = message),
             commandRoutePrefixes = emptyMap(),
             imageMessageTypeRoutes = emptyMap(),
+            eventTypeRoutes = emptyMap(),
             kotlinDecision = { NativeRoutingDecision(parsedCommand = kotlinParse()) },
             shadowEquivalent = { kotlinResult, nativeResult ->
                 kotlinResult.parsedCommand == nativeResult.parsedCommand
@@ -137,6 +138,7 @@ internal class NativeCoreRuntime private constructor(
                             items = items,
                             commandRoutePrefixes = emptyMap(),
                             imageMessageTypeRoutes = emptyMap(),
+                            eventTypeRoutes = emptyMap(),
                         )
                     }.onFailure { error -> recordNativeFailure(NativeCoreComponent.ROUTING, items.size, error = error) }
                         .getOrNull()
@@ -156,6 +158,7 @@ internal class NativeCoreRuntime private constructor(
                         items = items,
                         commandRoutePrefixes = emptyMap(),
                         imageMessageTypeRoutes = emptyMap(),
+                        eventTypeRoutes = emptyMap(),
                     ).map { it.parsedCommand }
                 }.getOrElse {
                     if (strictMode(NativeCoreComponent.ROUTING)) {
@@ -176,6 +179,7 @@ internal class NativeCoreRuntime private constructor(
             item = NativeRoutingBatchItem(text = parsedCommand.normalizedText),
             commandRoutePrefixes = commandRoutePrefixes,
             imageMessageTypeRoutes = emptyMap(),
+            eventTypeRoutes = emptyMap(),
             kotlinDecision = {
                 NativeRoutingDecision(
                     parsedCommand = parsedCommand,
@@ -189,12 +193,14 @@ internal class NativeCoreRuntime private constructor(
 
     fun resolveEventRouteOrFallback(
         messageType: String?,
+        eventTypeRoutes: Map<String, List<String>>,
         kotlinResolve: () -> String?,
     ): String? =
         routingOrFallback(
             item = NativeRoutingBatchItem(text = "", messageType = messageType),
             commandRoutePrefixes = emptyMap(),
             imageMessageTypeRoutes = emptyMap(),
+            eventTypeRoutes = eventTypeRoutes,
             kotlinDecision = {
                 NativeRoutingDecision(
                     parsedCommand = ParsedCommand(CommandKind.NONE, ""),
@@ -215,6 +221,7 @@ internal class NativeCoreRuntime private constructor(
             item = NativeRoutingBatchItem(text = "", messageType = messageType),
             commandRoutePrefixes = emptyMap(),
             imageMessageTypeRoutes = imageMessageTypeRoutes,
+            eventTypeRoutes = emptyMap(),
             kotlinDecision = {
                 NativeRoutingDecision(
                     parsedCommand = ParsedCommand(CommandKind.NONE, ""),
@@ -420,6 +427,7 @@ internal class NativeCoreRuntime private constructor(
         item: NativeRoutingBatchItem,
         commandRoutePrefixes: Map<String, List<String>>,
         imageMessageTypeRoutes: Map<String, List<String>>,
+        eventTypeRoutes: Map<String, List<String>>,
         kotlinDecision: () -> NativeRoutingDecision,
         shadowEquivalent: (NativeRoutingDecision, NativeRoutingDecision) -> Boolean,
     ): NativeRoutingDecision {
@@ -439,7 +447,7 @@ internal class NativeCoreRuntime private constructor(
             NativeCoreMode.SHADOW -> {
                 val kotlinResult = kotlinDecision()
                 val nativeResult =
-                    runCatching { callNativeRouting(item, commandRoutePrefixes, imageMessageTypeRoutes) }
+                    runCatching { callNativeRouting(item, commandRoutePrefixes, imageMessageTypeRoutes, eventTypeRoutes) }
                         .onFailure { error -> recordNativeFailure(NativeCoreComponent.ROUTING, 1, error = error) }
                         .getOrNull()
                 if (nativeResult != null && !shadowEquivalent(kotlinResult, nativeResult)) {
@@ -449,7 +457,7 @@ internal class NativeCoreRuntime private constructor(
             }
 
             NativeCoreMode.ON ->
-                runCatching { callNativeRouting(item, commandRoutePrefixes, imageMessageTypeRoutes) }
+                runCatching { callNativeRouting(item, commandRoutePrefixes, imageMessageTypeRoutes, eventTypeRoutes) }
                     .getOrElse {
                         if (strictMode(NativeCoreComponent.ROUTING)) {
                             strictNativeFailure(NativeCoreComponent.ROUTING, 1, error = it)
@@ -464,17 +472,20 @@ internal class NativeCoreRuntime private constructor(
         item: NativeRoutingBatchItem,
         commandRoutePrefixes: Map<String, List<String>>,
         imageMessageTypeRoutes: Map<String, List<String>>,
+        eventTypeRoutes: Map<String, List<String>>,
     ): NativeRoutingDecision =
         callNativeRoutingBatch(
             items = listOf(item),
             commandRoutePrefixes = commandRoutePrefixes,
             imageMessageTypeRoutes = imageMessageTypeRoutes,
+            eventTypeRoutes = eventTypeRoutes,
         ).singleOrNull() ?: error("native routing failed")
 
     private fun callNativeRoutingBatch(
         items: List<NativeRoutingBatchItem>,
         commandRoutePrefixes: Map<String, List<String>>,
         imageMessageTypeRoutes: Map<String, List<String>>,
+        eventTypeRoutes: Map<String, List<String>>,
     ): List<NativeRoutingDecision> {
         if (items.isEmpty()) return emptyList()
         val stats = statsFor(NativeCoreComponent.ROUTING)
@@ -487,6 +498,7 @@ internal class NativeCoreRuntime private constructor(
                     items = items,
                     commandRoutePrefixes = commandRoutePrefixes.toNativeRouteEntries(),
                     imageMessageTypeRoutes = imageMessageTypeRoutes.toNativeRouteEntries(),
+                    eventTypeRoutes = eventTypeRoutes.toNativeRouteEntries(),
                 )
             val rawResponse = jni.routingBatch(json.encodeToString(request).encodeToByteArray()).decodeToString()
             val response = json.decodeFromString<NativeRoutingBatchResponse>(rawResponse)
@@ -602,6 +614,7 @@ internal class NativeCoreRuntime private constructor(
         commands: List<RoutingCommand>,
         commandRoutePrefixes: Map<String, List<String>>,
         imageMessageTypeRoutes: Map<String, List<String>>,
+        eventTypeRoutes: Map<String, List<String>>,
         kotlinPlanBatch: () -> List<NativeIngressPlan>,
     ): List<NativeIngressPlan> {
         if (commands.isEmpty()) return emptyList()
@@ -628,7 +641,7 @@ internal class NativeCoreRuntime private constructor(
         }
 
         if (routingMode == NativeCoreMode.ON && payloadMode == NativeCoreMode.ON) {
-            return runCatching { callNativeIngressBatch(commands, commandRoutePrefixes, imageMessageTypeRoutes) }
+            return runCatching { callNativeIngressBatch(commands, commandRoutePrefixes, imageMessageTypeRoutes, eventTypeRoutes) }
                 .getOrElse {
                     if (strictMode(NativeCoreComponent.ROUTING) || strictMode(NativeCoreComponent.WEBHOOK_PAYLOAD)) {
                         strictNativeIngressFailure(commands.size, it)
@@ -656,7 +669,7 @@ internal class NativeCoreRuntime private constructor(
                         commands.map { command ->
                             NativeRoutingBatchItem(text = command.text, messageType = command.messageType)
                         }
-                    callNativeRoutingBatch(items, commandRoutePrefixes, imageMessageTypeRoutes)
+                    callNativeRoutingBatch(items, commandRoutePrefixes, imageMessageTypeRoutes, eventTypeRoutes)
                         .toIngressPlans(commands)
                 }.getOrElse { error ->
                     if (strictMode(NativeCoreComponent.ROUTING)) {
@@ -882,6 +895,7 @@ internal class NativeCoreRuntime private constructor(
         commands: List<RoutingCommand>,
         commandRoutePrefixes: Map<String, List<String>>,
         imageMessageTypeRoutes: Map<String, List<String>>,
+        eventTypeRoutes: Map<String, List<String>>,
     ): List<NativeIngressPlan> {
         if (commands.isEmpty()) return emptyList()
         val routingStats = statsFor(NativeCoreComponent.ROUTING)
@@ -896,6 +910,7 @@ internal class NativeCoreRuntime private constructor(
                     items = commands.map { command -> NativeIngressBatchItem(command = command.toNativeWebhookCommand()) },
                     commandRoutePrefixes = commandRoutePrefixes.toNativeRouteEntries(),
                     imageMessageTypeRoutes = imageMessageTypeRoutes.toNativeRouteEntries(),
+                    eventTypeRoutes = eventTypeRoutes.toNativeRouteEntries(),
                 )
             val rawResponse = jni.ingressBatch(json.encodeToString(request).encodeToByteArray()).decodeToString()
             val response = json.decodeFromString<NativeIngressBatchResponse>(rawResponse)

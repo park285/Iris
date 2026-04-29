@@ -1,6 +1,7 @@
 package party.qwer.iris.config
 
 import party.qwer.iris.DEFAULT_COMMAND_ROUTE_PREFIXES
+import party.qwer.iris.DEFAULT_EVENT_TYPE_ROUTES
 import party.qwer.iris.DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES
 import party.qwer.iris.UserConfigState
 import kotlin.test.Test
@@ -142,6 +143,24 @@ class ConfigPolicyTest {
     }
 
     @Test
+    fun `validate rejects placeholder webhook endpoint`() {
+        val state = UserConfigState(webhooks = mapOf("chatbotgo" to "http://example.invalid/webhook"))
+
+        val errors = ConfigPolicy.validate(state)
+
+        assertTrue(errors.any { it.field == ConfigField.ROUTING_POLICY && it.message.contains("placeholder") })
+    }
+
+    @Test
+    fun `validate rejects unresolved webhook endpoint placeholder`() {
+        val state = UserConfigState(endpoint = "\${IRIS_WEBHOOK_CHATBOTGO}")
+
+        val errors = ConfigPolicy.validate(state)
+
+        assertTrue(errors.any { it.field == ConfigField.ROUTING_POLICY && it.message.contains("placeholder") })
+    }
+
+    @Test
     fun `validate rejects invalid webhook route key`() {
         val state = UserConfigState(webhooks = mapOf("bad route" to "https://example.com/webhook"))
 
@@ -160,10 +179,20 @@ class ConfigPolicyTest {
     }
 
     @Test
+    fun `validate rejects placeholder secrets`() {
+        val state = UserConfigState(inboundSigningSecret = "change-me")
+
+        val errors = ConfigPolicy.validate(state)
+
+        assertTrue(errors.any { it.field == ConfigField.INBOUND_SIGNING_SECRET && it.message.contains("placeholder") })
+    }
+
+    @Test
     fun `default routing policy seeds chatbotgo routes and requires external bootstrap`() {
         val policy = ConfigPolicy.defaultRoutingPolicy
         assertEquals(DEFAULT_COMMAND_ROUTE_PREFIXES, policy.commandRoutePrefixes)
         assertEquals(DEFAULT_IMAGE_MESSAGE_TYPE_ROUTES, policy.imageMessageTypeRoutes)
+        assertEquals(DEFAULT_EVENT_TYPE_ROUTES, policy.eventTypeRoutes)
         assertTrue(policy.requiresExternalBootstrap)
     }
 }
