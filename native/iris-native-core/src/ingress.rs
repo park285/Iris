@@ -298,9 +298,9 @@ mod tests {
     use super::*;
     use serde_json::Value;
 
-    fn assert_routing_message_id(command: Value, route: &str, expected: &str) {
+    fn assert_routing_message_id(command: &Value, route: &str, expected: &str) {
         assert_eq!(
-            build_routing_message_id(&command, route).as_deref(),
+            build_routing_message_id(command, route).as_deref(),
             Some(expected)
         );
     }
@@ -308,7 +308,7 @@ mod tests {
     #[test]
     fn routing_message_id_uses_positive_numeric_source_log_id() {
         assert_routing_message_id(
-            serde_json::json!({
+            &serde_json::json!({
                 "sourceLogId": 123,
                 "text": "ignored"
             }),
@@ -320,7 +320,7 @@ mod tests {
     #[test]
     fn routing_message_id_accepts_positive_string_source_log_id() {
         assert_routing_message_id(
-            serde_json::json!({
+            &serde_json::json!({
                 "sourceLogId": "456",
                 "text": "ignored"
             }),
@@ -332,7 +332,7 @@ mod tests {
     #[test]
     fn routing_message_id_hashes_system_fingerprint_in_kotlin_field_order() {
         assert_routing_message_id(
-            serde_json::json!({
+            &serde_json::json!({
                 "sourceLogId": 0,
                 "room": "room-1",
                 "userId": "user-1",
@@ -346,7 +346,7 @@ mod tests {
     #[test]
     fn routing_message_id_hashes_null_missing_and_blank_optional_fields() {
         assert_routing_message_id(
-            serde_json::json!({
+            &serde_json::json!({
                 "sourceLogId": -1,
                 "room": "room-1",
                 "userId": "user-1",
@@ -362,7 +362,7 @@ mod tests {
     #[test]
     fn routing_message_id_hashes_unicode_route_room_user_and_text() {
         assert_routing_message_id(
-            serde_json::json!({
+            &serde_json::json!({
                 "sourceLogId": 0,
                 "room": "방🌙",
                 "userId": "사용자-1",
@@ -378,7 +378,7 @@ mod tests {
     #[test]
     fn routing_message_id_hashes_attachment_json_string() {
         assert_routing_message_id(
-            serde_json::json!({
+            &serde_json::json!({
                 "sourceLogId": -1,
                 "room": "room",
                 "userId": "u",
@@ -400,7 +400,7 @@ mod tests {
         });
 
         assert_routing_message_id(
-            serde_json::json!({
+            &serde_json::json!({
                 "sourceLogId": 0,
                 "room": "room",
                 "userId": "0",

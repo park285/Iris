@@ -2,6 +2,7 @@ package party.qwer.iris.nativecore
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -210,10 +211,11 @@ class NativeCoreRuntimeTest {
         val diagnostics = runtime.diagnostics()
 
         assertEquals(listOf("decrypt"), diagnostics.enabledComponents)
-        assertEquals(setOf("decrypt", "routing", "parsers", "webhookPayload"), diagnostics.componentStats.keys)
+        assertEquals(setOf("decrypt", "routing", "parsers", "projections", "webhookPayload"), diagnostics.componentStats.keys)
         assertEquals("on", diagnostics.componentStats.getValue("decrypt").mode)
         assertEquals("off", diagnostics.componentStats.getValue("routing").mode)
         assertEquals("off", diagnostics.componentStats.getValue("parsers").mode)
+        assertEquals("off", diagnostics.componentStats.getValue("projections").mode)
         assertEquals("off", diagnostics.componentStats.getValue("webhookPayload").mode)
         assertEquals(0L, diagnostics.componentStats.getValue("decrypt").jniCalls)
         assertEquals(0L, diagnostics.componentStats.getValue("decrypt").items)
@@ -771,6 +773,686 @@ class NativeCoreRuntimeTest {
         )
         assertEquals(1L, parserStats.jniCalls)
         assertEquals(2L, parserStats.items)
+    }
+
+    @Test
+    fun `log metadata parser batch in on mode returns native projections`() {
+        val jni =
+            FakeJni(
+                rawParserResponse =
+                    """
+                    {
+                      "items": [
+                        {"kind":"logMetadata","ok":true,"fallback":false,"enc":1,"origin":"CHAT"},
+                        {"kind":"logMetadata","ok":true,"fallback":false,"enc":0,"origin":"FEED"}
+                      ]
+                    }
+                    """.trimIndent(),
+            )
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_PARSERS" to "on",
+                    ),
+                loader = {},
+                jni = jni,
+            )
+
+        val result =
+            runtime.parseLogMetadataBatchOrFallback(listOf("metadata-a", "metadata-b")) {
+                error("kotlin fallback should not run")
+            }
+        val parserStats = runtime.diagnostics().componentStats.getValue("parsers")
+        val request = Json.decodeFromString<JsonObject>(jni.lastParserRequest!!.decodeToString())
+        val items = request.getValue("items").jsonArray
+
+        assertEquals(
+            listOf(
+                NativeLogMetadataProjection(enc = 1, origin = "CHAT"),
+                NativeLogMetadataProjection(enc = 0, origin = "FEED"),
+            ),
+            result,
+        )
+        assertEquals(1, jni.parserCalls)
+        assertTrue(
+            items.all { item ->
+                item.jsonObject
+                    .getValue("kind")
+                    .jsonPrimitive
+                    .content == "logMetadata"
+            },
+        )
+        assertEquals(
+            "metadata-a",
+            items[0]
+                .jsonObject
+                .getValue("metadata")
+                .jsonPrimitive.content,
+        )
+        assertEquals(
+            "metadata-b",
+            items[1]
+                .jsonObject
+                .getValue("metadata")
+                .jsonPrimitive.content,
+        )
+        assertEquals(1L, parserStats.jniCalls)
+        assertEquals(2L, parserStats.items)
+    }
+
+    @Test
+    fun `log metadata parser batch in on mode falls back to kotlin when native requests fallback`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_PARSERS" to "on",
+                    ),
+                loader = {},
+                jni =
+                    FakeJni(
+                        rawParserResponse =
+                            """
+                            {
+                              "items": [
+                                {"kind":"logMetadata","ok":true,"fallback":true},
+                                {"kind":"logMetadata","ok":true,"fallback":false,"enc":0,"origin":"FEED"}
+                              ]
+                            }
+                            """.trimIndent(),
+                    ),
+            )
+
+        val result =
+            runtime.parseLogMetadataBatchOrFallback(listOf("{broken", "metadata-b")) {
+                listOf(NativeLogMetadataProjection(enc = 7, origin = "KOTLIN"), null)
+            }
+        val parserStats = runtime.diagnostics().componentStats.getValue("parsers")
+
+        assertEquals(listOf(NativeLogMetadataProjection(enc = 7, origin = "KOTLIN"), null), result)
+        assertEquals(2L, parserStats.fallbacks)
+        assertEquals(2L, parserStats.fallbacksByKey.getValue("logMetadata"))
+        assertEquals(2L, parserStats.fallbackReasons.getValue("fallbackRequired"))
+    }
+
+    @Test
+    fun `log metadata parser batch in on mode falls back on schema decode without leaking native error`() {
+        val nativeErrorText = "secret-log-metadata-error"
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_PARSERS" to "on",
+                    ),
+                loader = {},
+                jni =
+                    FakeJni(
+                        rawParserResponse =
+                            """{"items":[{"kind":"logMetadata","ok":true,"fallback":false,"enc":1,"error":"$nativeErrorText"}]}""",
+                    ),
+            )
+
+        val result =
+            runtime.parseLogMetadataBatchOrFallback(listOf("metadata-a")) {
+                listOf(NativeLogMetadataProjection(enc = 3, origin = "KOTLIN"))
+            }
+        val diagnostics = runtime.diagnostics()
+        val parserStats = diagnostics.componentStats.getValue("parsers")
+
+        assertEquals(listOf(NativeLogMetadataProjection(enc = 3, origin = "KOTLIN")), result)
+        assertEquals(1L, diagnostics.callFailures)
+        assertEquals(1L, parserStats.failureReasons.getValue("schemaDecodeError"))
+        assertEquals(1L, parserStats.fallbackReasons.getValue("schemaDecodeError"))
+        assertFalse(diagnostics.lastError!!.contains(nativeErrorText))
+        assertFalse(parserStats.lastError!!.contains(nativeErrorText))
+    }
+
+    @Test
+    fun `log metadata parser batch in shadow mode returns kotlin projections and records mismatch`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_PARSERS" to "shadow",
+                    ),
+                loader = {},
+                jni =
+                    FakeJni(
+                        rawParserResponse = """{"items":[{"kind":"logMetadata","ok":true,"fallback":false,"enc":2,"origin":"NATIVE"}]}""",
+                    ),
+            )
+
+        val result =
+            runtime.parseLogMetadataBatchOrFallback(listOf("metadata-a")) {
+                listOf(NativeLogMetadataProjection(enc = 1, origin = "KOTLIN"))
+            }
+        val parserStats = runtime.diagnostics().componentStats.getValue("parsers")
+
+        assertEquals(listOf(NativeLogMetadataProjection(enc = 1, origin = "KOTLIN")), result)
+        assertEquals(1L, parserStats.shadowMismatches)
+        assertEquals(1L, parserStats.shadowMismatchesByKey.getValue("logMetadata"))
+    }
+
+    @Test
+    fun `query projection batch in on mode returns native cells and records cell stats`() {
+        val jni =
+            FakeJni(
+                rawQueryProjectionResponse =
+                    """
+                    {
+                      "items": [
+                        {
+                          "ok": true,
+                          "cells": [
+                            {"sqliteType":"TEXT","value":"native"},
+                            {"sqliteType":"INTEGER","value":42},
+                            {"sqliteType":"BLOB","value":"AAEC"},
+                            {"sqliteType":"BLOB","value":""}
+                          ]
+                        }
+                      ]
+                    }
+                    """.trimIndent(),
+            )
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_PROJECTIONS" to "on",
+                    ),
+                loader = {},
+                jni = jni,
+            )
+
+        val result =
+            runtime.projectQueryRowsOrFallback(
+                rows =
+                    listOf(
+                        listOf(
+                            NativeQueryProjectionCellEnvelope(sqliteType = "TEXT", textValue = "kotlin"),
+                            NativeQueryProjectionCellEnvelope(sqliteType = "INTEGER", longValue = 42L),
+                            NativeQueryProjectionCellEnvelope(sqliteType = "BLOB", blob = listOf(0, 1, 2)),
+                            NativeQueryProjectionCellEnvelope(sqliteType = "BLOB", blob = emptyList()),
+                        ),
+                    ),
+            ) {
+                error("kotlin fallback should not run")
+            }
+        val request = Json.decodeFromString<JsonObject>(jni.lastQueryProjectionRequest!!.decodeToString())
+        val firstRow =
+            request
+                .getValue("items")
+                .jsonArray[0]
+                .jsonObject
+                .getValue("cells")
+                .jsonArray
+        val projectionStats = runtime.diagnostics().componentStats.getValue("projections")
+
+        assertEquals(
+            listOf(
+                listOf(
+                    NativeQueryProjectedCell(sqliteType = "TEXT", value = JsonPrimitive("native")),
+                    NativeQueryProjectedCell(sqliteType = "INTEGER", value = JsonPrimitive(42)),
+                    NativeQueryProjectedCell(sqliteType = "BLOB", value = JsonPrimitive("AAEC")),
+                    NativeQueryProjectedCell(sqliteType = "BLOB", value = JsonPrimitive("")),
+                ),
+            ),
+            result,
+        )
+        assertEquals(1, jni.queryProjectionCalls)
+        assertEquals(
+            "kotlin",
+            firstRow[0]
+                .jsonObject
+                .getValue("textValue")
+                .jsonPrimitive.content,
+        )
+        assertEquals(
+            42,
+            firstRow[1]
+                .jsonObject
+                .getValue("longValue")
+                .jsonPrimitive.int,
+        )
+        assertEquals(
+            listOf(0, 1, 2),
+            firstRow[2]
+                .jsonObject
+                .getValue("blob")
+                .jsonArray
+                .map { it.jsonPrimitive.int },
+        )
+        assertEquals(
+            emptyList(),
+            firstRow[3]
+                .jsonObject
+                .getValue("blob")
+                .jsonArray
+                .map { it.jsonPrimitive.int },
+        )
+        assertEquals(1L, projectionStats.jniCalls)
+        assertEquals(4L, projectionStats.items)
+        assertEquals(0L, projectionStats.fallbacks)
+    }
+
+    @Test
+    fun `query projection batch in on mode falls back on native item error without leaking details`() {
+        val nativeErrorText = "query-projection-secret"
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_PROJECTIONS" to "on",
+                    ),
+                loader = {},
+                jni =
+                    FakeJni(
+                        rawQueryProjectionResponse =
+                            """{"items":[{"ok":false,"cells":null,"errorKind":"invalidRequest","error":"$nativeErrorText"}]}""",
+                    ),
+            )
+
+        val result =
+            runtime.projectQueryRowsOrFallback(
+                rows = listOf(listOf(NativeQueryProjectionCellEnvelope(sqliteType = "TEXT", textValue = "kotlin"))),
+            ) {
+                listOf(listOf(NativeQueryProjectedCell(sqliteType = "TEXT", value = JsonPrimitive("kotlin"))))
+            }
+        val diagnostics = runtime.diagnostics()
+        val projectionStats = diagnostics.componentStats.getValue("projections")
+
+        assertEquals(listOf(listOf(NativeQueryProjectedCell(sqliteType = "TEXT", value = JsonPrimitive("kotlin")))), result)
+        assertEquals(1L, diagnostics.callFailures)
+        assertEquals(1L, projectionStats.failureReasons.getValue("invalidRequest"))
+        assertEquals(1L, projectionStats.fallbackReasons.getValue("invalidRequest"))
+        assertFalse(diagnostics.lastError!!.contains(nativeErrorText))
+        assertFalse(projectionStats.lastError!!.contains(nativeErrorText))
+    }
+
+    @Test
+    fun `query projection batch in shadow mode returns kotlin cells and records cell mismatch`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_PROJECTIONS" to "shadow",
+                    ),
+                loader = {},
+                jni =
+                    FakeJni(
+                        rawQueryProjectionResponse =
+                            """{"items":[{"ok":true,"cells":[{"sqliteType":"TEXT","value":"native"}]}]}""",
+                    ),
+            )
+
+        val result =
+            runtime.projectQueryRowsOrFallback(
+                rows = listOf(listOf(NativeQueryProjectionCellEnvelope(sqliteType = "TEXT", textValue = "kotlin"))),
+            ) {
+                listOf(listOf(NativeQueryProjectedCell(sqliteType = "TEXT", value = JsonPrimitive("kotlin"))))
+            }
+        val projectionStats = runtime.diagnostics().componentStats.getValue("projections")
+
+        assertEquals(listOf(listOf(NativeQueryProjectedCell(sqliteType = "TEXT", value = JsonPrimitive("kotlin")))), result)
+        assertEquals(1L, projectionStats.shadowMismatches)
+        assertEquals(1L, projectionStats.shadowMismatchesByKey.getValue("queryCell"))
+    }
+
+    @Test
+    fun `room stats projection in on mode returns native stats and records detail stats`() {
+        val jni =
+            FakeJni(
+                rawStatisticsProjectionResponse =
+                    """
+                    {
+                      "items": [
+                        {
+                          "kind": "roomStats",
+                          "ok": true,
+                          "memberStats": [
+                            {
+                              "userId": 1,
+                              "nickname": "native-alice",
+                              "messageCount": 7,
+                              "lastActiveAt": 120,
+                              "messageTypes": {"text": 4, "other": 3}
+                            }
+                          ],
+                          "totalMessages": 7,
+                          "activeMembers": 1,
+                          "errorKind": null,
+                          "error": null
+                        }
+                      ]
+                    }
+                    """.trimIndent(),
+            )
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_PROJECTIONS" to "on",
+                    ),
+                loader = {},
+                jni = jni,
+            )
+
+        val result =
+            runtime.projectRoomStatsOrFallback(
+                NativeStatisticsProjectionBatchItem(
+                    kind = nativeStatisticsKindRoomStats,
+                    rows =
+                        listOf(
+                            NativeStatisticsProjectionRow(userId = 1L, type = "0", count = 4, lastActive = 100L),
+                            NativeStatisticsProjectionRow(userId = 1L, type = null, count = 3, lastActive = 120L),
+                        ),
+                    messageTypeNames = mapOf("0" to "text"),
+                    nicknames = mapOf("1" to "alice"),
+                    limit = 1,
+                    minMessages = 0,
+                ),
+            ) {
+                error("kotlin fallback should not run")
+            }
+        val request = Json.decodeFromString<JsonObject>(jni.lastStatisticsProjectionRequest!!.decodeToString())
+        val item =
+            request
+                .getValue("items")
+                .jsonArray[0]
+                .jsonObject
+        val rows = item.getValue("rows").jsonArray
+        val projectionStats = runtime.diagnostics().componentStats.getValue("projections")
+
+        assertEquals(
+            NativeRoomStatsProjection(
+                memberStats =
+                    listOf(
+                        NativeMemberStatsProjection(
+                            userId = 1L,
+                            nickname = "native-alice",
+                            messageCount = 7,
+                            lastActiveAt = 120L,
+                            messageTypes = mapOf("text" to 4, "other" to 3),
+                        ),
+                    ),
+                totalMessages = 7,
+                activeMembers = 1,
+            ),
+            result,
+        )
+        assertEquals(nativeStatisticsKindRoomStats, item.getValue("kind").jsonPrimitive.content)
+        assertEquals(
+            "text",
+            item
+                .getValue("messageTypeNames")
+                .jsonObject
+                .getValue("0")
+                .jsonPrimitive.content,
+        )
+        assertEquals(
+            "alice",
+            item
+                .getValue("nicknames")
+                .jsonObject
+                .getValue("1")
+                .jsonPrimitive.content,
+        )
+        assertFalse("type" in rows[1].jsonObject)
+        assertEquals(1, jni.statisticsProjectionCalls)
+        assertEquals(1L, projectionStats.jniCalls)
+        assertEquals(2L, projectionStats.items)
+        assertEquals(0L, projectionStats.fallbacks)
+    }
+
+    @Test
+    fun `member activity projection in on mode returns native activity`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_PROJECTIONS" to "on",
+                    ),
+                loader = {},
+                jni =
+                    FakeJni(
+                        rawStatisticsProjectionResponse =
+                            """
+                            {
+                              "items": [
+                                {
+                                  "kind": "memberActivity",
+                                  "ok": true,
+                                  "messageCount": 3,
+                                  "firstMessageAt": 3600,
+                                  "lastMessageAt": 90000,
+                                  "activeHours": [0,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                                  "messageTypes": {"text": 2},
+                                  "errorKind": null,
+                                  "error": null
+                                }
+                              ]
+                            }
+                            """.trimIndent(),
+                    ),
+            )
+
+        val result =
+            runtime.projectMemberActivityOrFallback(
+                NativeStatisticsProjectionBatchItem(
+                    kind = nativeStatisticsKindMemberActivity,
+                    rows =
+                        listOf(
+                            NativeStatisticsProjectionRow(type = "0", createdAt = 0L),
+                            NativeStatisticsProjectionRow(type = "0", createdAt = 3_600L),
+                            NativeStatisticsProjectionRow(type = "0", createdAt = 90_000L),
+                        ),
+                    messageTypeNames = mapOf("0" to "text"),
+                ),
+            ) {
+                error("kotlin fallback should not run")
+            }
+
+        assertEquals(
+            NativeMemberActivityProjection(
+                messageCount = 3,
+                firstMessageAt = 3_600L,
+                lastMessageAt = 90_000L,
+                activeHours = listOf(0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+                messageTypes = mapOf("text" to 2),
+            ),
+            result,
+        )
+    }
+
+    @Test
+    fun `statistics projection in on mode falls back on native item error without leaking details`() {
+        val nativeErrorText = "statistics-secret"
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_PROJECTIONS" to "on",
+                    ),
+                loader = {},
+                jni =
+                    FakeJni(
+                        rawStatisticsProjectionResponse =
+                            """{"items":[{"kind":"roomStats","ok":false,"memberStats":[],"totalMessages":0,"activeMembers":0,"errorKind":"invalidRequest","error":"$nativeErrorText"}]}""",
+                    ),
+            )
+
+        val result =
+            runtime.projectRoomStatsOrFallback(
+                NativeStatisticsProjectionBatchItem(kind = nativeStatisticsKindRoomStats),
+            ) {
+                NativeRoomStatsProjection(totalMessages = 1, activeMembers = 1)
+            }
+        val diagnostics = runtime.diagnostics()
+        val projectionStats = diagnostics.componentStats.getValue("projections")
+
+        assertEquals(NativeRoomStatsProjection(totalMessages = 1, activeMembers = 1), result)
+        assertEquals(1L, diagnostics.callFailures)
+        assertEquals(1L, projectionStats.failureReasons.getValue("invalidRequest"))
+        assertEquals(1L, projectionStats.fallbackReasons.getValue("invalidRequest"))
+        assertEquals(1L, projectionStats.fallbacksByKey.getValue("roomStats"))
+        assertFalse(diagnostics.lastError!!.contains(nativeErrorText))
+        assertFalse(projectionStats.lastError!!.contains(nativeErrorText))
+    }
+
+    @Test
+    fun `statistics projection in on mode falls back on malformed success payload`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_PROJECTIONS" to "on",
+                    ),
+                loader = {},
+                jni =
+                    FakeJni(
+                        rawStatisticsProjectionResponse =
+                            """{"items":[{"kind":"roomStats","ok":true,"totalMessages":0,"activeMembers":0}]}""",
+                    ),
+            )
+
+        val result =
+            runtime.projectRoomStatsOrFallback(
+                NativeStatisticsProjectionBatchItem(kind = nativeStatisticsKindRoomStats),
+            ) {
+                NativeRoomStatsProjection(totalMessages = 1, activeMembers = 1)
+            }
+        val diagnostics = runtime.diagnostics()
+        val projectionStats = diagnostics.componentStats.getValue("projections")
+
+        assertEquals(NativeRoomStatsProjection(totalMessages = 1, activeMembers = 1), result)
+        assertEquals(1L, diagnostics.callFailures)
+        assertEquals(1L, projectionStats.failureReasons.getValue("schemaDecodeError"))
+        assertEquals(1L, projectionStats.fallbackReasons.getValue("schemaDecodeError"))
+    }
+
+    @Test
+    fun `statistics projection in on mode falls back on malformed member stats payload`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_PROJECTIONS" to "on",
+                    ),
+                loader = {},
+                jni =
+                    FakeJni(
+                        rawStatisticsProjectionResponse =
+                            """
+                            {
+                              "items": [
+                                {
+                                  "kind": "roomStats",
+                                  "ok": true,
+                                  "memberStats": [
+                                    {
+                                      "userId": 1,
+                                      "nickname": "native-alice",
+                                      "messageCount": 7,
+                                      "lastActiveAt": 120
+                                    }
+                                  ],
+                                  "totalMessages": 7,
+                                  "activeMembers": 1
+                                }
+                              ]
+                            }
+                            """.trimIndent(),
+                    ),
+            )
+
+        val result =
+            runtime.projectRoomStatsOrFallback(
+                NativeStatisticsProjectionBatchItem(kind = nativeStatisticsKindRoomStats),
+            ) {
+                NativeRoomStatsProjection(totalMessages = 1, activeMembers = 1)
+            }
+        val diagnostics = runtime.diagnostics()
+        val projectionStats = diagnostics.componentStats.getValue("projections")
+
+        assertEquals(NativeRoomStatsProjection(totalMessages = 1, activeMembers = 1), result)
+        assertEquals(1L, diagnostics.callFailures)
+        assertEquals(1L, projectionStats.failureReasons.getValue("schemaDecodeError"))
+        assertEquals(1L, projectionStats.fallbackReasons.getValue("schemaDecodeError"))
+    }
+
+    @Test
+    fun `statistics projection in shadow mode returns kotlin result and records detail mismatch`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_PROJECTIONS" to "shadow",
+                    ),
+                loader = {},
+                jni =
+                    FakeJni(
+                        rawStatisticsProjectionResponse =
+                            """
+                            {
+                              "items": [
+                                {
+                                  "kind": "memberActivity",
+                                  "ok": true,
+                                  "messageCount": 1,
+                                  "firstMessageAt": 3600,
+                                  "lastMessageAt": 3600,
+                                  "activeHours": [0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                                  "messageTypes": {"text": 1},
+                                  "errorKind": null,
+                                  "error": null
+                                }
+                              ]
+                            }
+                            """.trimIndent(),
+                    ),
+            )
+
+        val result =
+            runtime.projectMemberActivityOrFallback(
+                NativeStatisticsProjectionBatchItem(kind = nativeStatisticsKindMemberActivity),
+            ) {
+                NativeMemberActivityProjection(
+                    messageCount = 1,
+                    activeHours = List(24) { 0 },
+                )
+            }
+        val projectionStats = runtime.diagnostics().componentStats.getValue("projections")
+
+        assertEquals(NativeMemberActivityProjection(messageCount = 1, activeHours = List(24) { 0 }), result)
+        assertEquals(1L, projectionStats.shadowMismatches)
+        assertEquals(1L, projectionStats.shadowMismatchesByKey.getValue("memberActivity"))
     }
 
     @Test
@@ -1712,6 +2394,8 @@ class NativeCoreRuntimeTest {
         private val rawDecryptResponse: String? = null,
         private val rawRoutingResponse: String? = null,
         private val rawParserResponse: String? = null,
+        private val rawQueryProjectionResponse: String? = null,
+        private val rawStatisticsProjectionResponse: String? = null,
         private val rawWebhookPayloadResponse: String? = null,
         private val rawIngressResponse: String? = null,
     ) : NativeCoreJniBridge {
@@ -1720,6 +2404,10 @@ class NativeCoreRuntimeTest {
         var lastRoutingRequest: ByteArray? = null
             private set
         var lastParserRequest: ByteArray? = null
+            private set
+        var lastQueryProjectionRequest: ByteArray? = null
+            private set
+        var lastStatisticsProjectionRequest: ByteArray? = null
             private set
         var lastWebhookPayloadRequest: ByteArray? = null
             private set
@@ -1730,6 +2418,10 @@ class NativeCoreRuntimeTest {
         var routingCalls = 0
             private set
         var parserCalls = 0
+            private set
+        var queryProjectionCalls = 0
+            private set
+        var statisticsProjectionCalls = 0
             private set
         var webhookPayloadCalls = 0
             private set
@@ -1760,6 +2452,24 @@ class NativeCoreRuntimeTest {
             return (
                 rawParserResponse
                     ?: """{"items":[{"kind":"roomTitle","ok":true,"roomTitle":"native-title"}]}"""
+            ).encodeToByteArray()
+        }
+
+        override fun queryProjectionBatch(requestJsonBytes: ByteArray): ByteArray {
+            queryProjectionCalls += 1
+            lastQueryProjectionRequest = requestJsonBytes
+            return (
+                rawQueryProjectionResponse
+                    ?: """{"items":[{"ok":true,"cells":[]}]}"""
+            ).encodeToByteArray()
+        }
+
+        override fun statisticsProjectionBatch(requestJsonBytes: ByteArray): ByteArray {
+            statisticsProjectionCalls += 1
+            lastStatisticsProjectionRequest = requestJsonBytes
+            return (
+                rawStatisticsProjectionResponse
+                    ?: """{"items":[{"kind":"roomStats","ok":true,"memberStats":[],"totalMessages":0,"activeMembers":0}]}"""
             ).encodeToByteArray()
         }
 

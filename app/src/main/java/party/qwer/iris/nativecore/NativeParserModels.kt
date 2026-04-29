@@ -12,6 +12,7 @@ internal data class NativeParserBatchItem(
     val kind: String,
     val meta: String? = null,
     val raw: String? = null,
+    val metadata: String? = null,
     val period: String? = null,
     val defaultDays: Long? = null,
 )
@@ -31,8 +32,15 @@ internal data class NativeParserBatchResult(
     val notices: List<NativeNoticeInfo> = emptyList(),
     val ids: List<Long> = emptyList(),
     val periodSpec: NativePeriodSpecInfo? = null,
+    val enc: Int? = null,
+    val origin: String? = null,
     val errorKind: String? = null,
     val error: String? = null,
+)
+
+internal data class NativeLogMetadataProjection(
+    val enc: Int,
+    val origin: String,
 )
 
 @Serializable

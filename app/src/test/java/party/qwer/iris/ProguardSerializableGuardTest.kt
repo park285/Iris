@@ -53,7 +53,9 @@ class ProguardSerializableGuardTest {
                 "NativeDecryptModels.kt",
                 "NativeIngressModels.kt",
                 "NativeParserModels.kt",
+                "NativeQueryProjectionModels.kt",
                 "NativeRoutingModels.kt",
+                "NativeStatisticsModels.kt",
                 "NativeWebhookModels.kt",
             )
         val violations =

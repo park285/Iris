@@ -26,6 +26,8 @@ import party.qwer.iris.persistence.RoomEventStore
 import party.qwer.iris.snapshot.SnapshotEventEmitter
 import party.qwer.iris.storage.ChatId
 import party.qwer.iris.storage.UserId
+import java.io.ByteArrayOutputStream
+import java.io.PrintStream
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
@@ -33,6 +35,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -246,6 +249,208 @@ class CommandIngressServiceTest {
                         .getValue("decrypt")
                 assertEquals(1L, decryptStats.jniCalls)
                 assertEquals(3L, decryptStats.items)
+            } finally {
+                ingress.closeSuspend()
+                NativeCoreHolder.resetForTest()
+            }
+        }
+
+    @Test
+    fun `metadata batch parser keeps JSONObject edge defaults`() {
+        val ingress =
+            CommandIngressService(
+                db = FakeChatLogRepository(),
+                config = config,
+                checkpointJournal = FakeCheckpointJournal(),
+                routingGateway = FakeRoutingGateway(),
+                dispatchDispatcher = Dispatchers.Unconfined,
+                onMarkDirty = {},
+            )
+
+        try {
+            val cases =
+                listOf(
+                    "{}" to ParsedMetadataSnapshot(enc = 0, origin = ""),
+                    """{"enc":7,"origin":"CHATLOG"}""" to ParsedMetadataSnapshot(enc = 7, origin = "CHATLOG"),
+                    """{"enc":"8","origin":123}""" to ParsedMetadataSnapshot(enc = 8, origin = "123"),
+                    """{"enc":"8.5","origin":true}""" to ParsedMetadataSnapshot(enc = 8, origin = "true"),
+                    """{"enc":" 9 ","origin":{}}""" to ParsedMetadataSnapshot(enc = 0, origin = "{}"),
+                    """{"enc":8.5,"origin":null}""" to ParsedMetadataSnapshot(enc = 8, origin = ""),
+                    """{"enc":2147483648}""" to ParsedMetadataSnapshot(enc = Int.MIN_VALUE, origin = ""),
+                )
+
+            cases.forEachIndexed { index, (metadata, expected) ->
+                assertEquals(
+                    expected,
+                    invokeMetadataParser(ingress, "parseMetadataForBatch", metadata, logId = 300L + index),
+                    "metadata=$metadata",
+                )
+            }
+
+            assertNull(invokeMetadataParser(ingress, "parseMetadataForBatch", "", logId = 400L))
+        } finally {
+            runBlocking { ingress.closeSuspend() }
+        }
+    }
+
+    @Test
+    fun `malformed metadata logging stays split between single and batch parse paths`() {
+        val ingress =
+            CommandIngressService(
+                db = FakeChatLogRepository(),
+                config = config,
+                checkpointJournal = FakeCheckpointJournal(),
+                routingGateway = FakeRoutingGateway(),
+                dispatchDispatcher = Dispatchers.Unconfined,
+                onMarkDirty = {},
+            )
+
+        try {
+            val batchStderr =
+                captureStderr {
+                    assertNull(invokeMetadataParser(ingress, "parseMetadataForBatch", "{broken", logId = 500L))
+                }
+            val singleStderr =
+                captureStderr {
+                    assertNull(invokeMetadataParser(ingress, "parseMetadata", "{broken", logId = 501L))
+                }
+
+            assertEquals("", batchStderr)
+            assertTrue(singleStderr.contains("[CommandIngressService] Invalid metadata for logId=501"))
+        } finally {
+            runBlocking { ingress.closeSuspend() }
+        }
+    }
+
+    @Test
+    fun `checkChange uses native metadata projection for batch decrypt preparation`() =
+        runTest {
+            val jni =
+                FakeNativeCoreJni(
+                    decryptResults = listOf("!first", "!second", "!third"),
+                    parserMetadataResults =
+                        listOf(
+                            FakeLogMetadataProjection(enc = 7, origin = "CHATLOG"),
+                            FakeLogMetadataProjection(enc = 0, origin = ""),
+                            FakeLogMetadataProjection(enc = 8, origin = "EDGE"),
+                        ),
+                )
+            val runtime =
+                NativeCoreRuntime.create(
+                    env =
+                        mapOf(
+                            "IRIS_NATIVE_CORE" to "on",
+                            "IRIS_NATIVE_DECRYPT" to "on",
+                            "IRIS_NATIVE_PARSERS" to "on",
+                            "IRIS_NATIVE_ROUTING" to "off",
+                        ),
+                    loader = {},
+                    jni = jni,
+                )
+            val gateway = FakeRoutingGateway()
+            val ingress =
+                CommandIngressService(
+                    db =
+                        FakeChatLogRepository(
+                            latestLogId = 10L,
+                            polledLogs =
+                                listOf(
+                                    webhookChatLogEntry(id = 11L, chatId = 100L, message = "encrypted-first")
+                                        .copy(metadata = """{"enc":7,"origin":"CHATLOG"}"""),
+                                    webhookChatLogEntry(id = 12L, chatId = 100L, message = "encrypted-second")
+                                        .copy(metadata = """{"origin":""}"""),
+                                    webhookChatLogEntry(id = 13L, chatId = 100L, message = "encrypted-third")
+                                        .copy(metadata = """{"enc":"8.5","origin":"EDGE"}"""),
+                                ),
+                        ),
+                    config = config,
+                    checkpointJournal = FakeCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
+                    routingGateway = gateway,
+                    dispatchDispatcher = StandardTestDispatcher(testScheduler),
+                    onMarkDirty = {},
+                )
+
+            try {
+                NativeCoreHolder.install(runtime)
+
+                ingress.checkChange()
+                ingress.checkChange()
+                runCurrent()
+
+                assertEquals(1, jni.parserCalls)
+                assertEquals(3, jni.lastParserItemCount)
+                assertEquals(listOf(7, 0, 8), jni.lastDecryptEncTypes)
+                assertEquals(listOf("!first", "!second", "!third"), gateway.commands.map { it.text })
+                val parserStats = runtime.diagnostics().componentStats.getValue("parsers")
+                assertEquals(1L, parserStats.jniCalls)
+                assertEquals(3L, parserStats.items)
+                assertEquals(0L, parserStats.fallbacks)
+            } finally {
+                ingress.closeSuspend()
+                NativeCoreHolder.resetForTest()
+            }
+        }
+
+    @Test
+    fun `checkChange silently falls back to Kotlin batch metadata parse when native metadata item requests fallback`() =
+        runTest {
+            val jni =
+                FakeNativeCoreJni(
+                    decryptResults = listOf("!valid"),
+                    parserMetadataResults =
+                        listOf(
+                            null,
+                            FakeLogMetadataProjection(enc = 9, origin = "CHATLOG"),
+                        ),
+                )
+            val runtime =
+                NativeCoreRuntime.create(
+                    env =
+                        mapOf(
+                            "IRIS_NATIVE_CORE" to "on",
+                            "IRIS_NATIVE_DECRYPT" to "on",
+                            "IRIS_NATIVE_PARSERS" to "on",
+                            "IRIS_NATIVE_ROUTING" to "off",
+                        ),
+                    loader = {},
+                    jni = jni,
+                )
+            val gateway = FakeRoutingGateway()
+            val ingress =
+                CommandIngressService(
+                    db =
+                        FakeChatLogRepository(
+                            latestLogId = 10L,
+                            polledLogs =
+                                listOf(
+                                    webhookChatLogEntry(id = 11L, chatId = 100L, message = "encrypted-bad")
+                                        .copy(metadata = "{broken"),
+                                    webhookChatLogEntry(id = 12L, chatId = 100L, message = "encrypted-valid")
+                                        .copy(metadata = """{"enc":9,"origin":"CHATLOG"}"""),
+                                ),
+                        ),
+                    config = config,
+                    checkpointJournal = FakeCheckpointJournal(initial = mapOf("chat_logs" to 10L)),
+                    routingGateway = gateway,
+                    dispatchDispatcher = StandardTestDispatcher(testScheduler),
+                    onMarkDirty = {},
+                )
+
+            try {
+                NativeCoreHolder.install(runtime)
+
+                ingress.checkChange()
+                ingress.checkChange()
+                runCurrent()
+
+                assertEquals(1, jni.parserCalls)
+                assertEquals(2, jni.lastParserItemCount)
+                assertEquals(listOf(9), jni.lastDecryptEncTypes)
+                assertEquals(listOf("!valid"), gateway.commands.map { it.text })
+                val parserStats = runtime.diagnostics().componentStats.getValue("parsers")
+                assertEquals(2L, parserStats.fallbacks)
+                assertEquals(2L, parserStats.fallbacksByKey.getValue("logMetadata"))
+                assertEquals(2L, parserStats.fallbackReasons.getValue("fallbackRequired"))
             } finally {
                 ingress.closeSuspend()
                 NativeCoreHolder.resetForTest()
@@ -1153,7 +1358,48 @@ class CommandIngressServiceTest {
 
             assertTrue(jobs.all { it.isCompleted }, "close should wait for dispatch loop jobs to complete")
         }
+
+    private fun invokeMetadataParser(
+        ingress: CommandIngressService,
+        methodName: String,
+        metadata: String,
+        logId: Long,
+    ): ParsedMetadataSnapshot? {
+        val method =
+            CommandIngressService::class.java
+                .getDeclaredMethod(methodName, KakaoDB.ChatLogEntry::class.java)
+                .apply { isAccessible = true }
+        val parsed =
+            method.invoke(
+                ingress,
+                webhookChatLogEntry(id = logId, chatId = 100L, message = "encrypted")
+                    .copy(metadata = metadata),
+            ) ?: return null
+        val encField = parsed.javaClass.getDeclaredField("enc").apply { isAccessible = true }
+        val originField = parsed.javaClass.getDeclaredField("origin").apply { isAccessible = true }
+        return ParsedMetadataSnapshot(
+            enc = encField.getInt(parsed),
+            origin = originField.get(parsed) as String,
+        )
+    }
+
+    private fun captureStderr(block: () -> Unit): String {
+        val original = System.err
+        val captured = ByteArrayOutputStream()
+        System.setErr(PrintStream(captured, true, Charsets.UTF_8.name()))
+        return try {
+            block()
+            captured.toString(Charsets.UTF_8.name())
+        } finally {
+            System.setErr(original)
+        }
+    }
 }
+
+private data class ParsedMetadataSnapshot(
+    val enc: Int,
+    val origin: String,
+)
 
 private class FakeChatLogRepository(
     var latestLogId: Long = 1L,
@@ -1309,10 +1555,17 @@ private class FakeRoutingGateway(
 
 private class FakeNativeCoreJni(
     private val decryptResults: List<String>,
+    private val parserMetadataResults: List<FakeLogMetadataProjection?> = emptyList(),
 ) : NativeCoreJniBridge {
     var decryptCalls = 0
         private set
     var lastDecryptItemCount = 0
+        private set
+    var lastDecryptEncTypes: List<Int> = emptyList()
+        private set
+    var parserCalls = 0
+        private set
+    var lastParserItemCount = 0
         private set
     var routingCalls = 0
         private set
@@ -1323,7 +1576,12 @@ private class FakeNativeCoreJni(
 
     override fun decryptBatch(requestJsonBytes: ByteArray): ByteArray {
         decryptCalls++
-        lastDecryptItemCount = Regex(""""encType"""").findAll(requestJsonBytes.decodeToString()).count()
+        lastDecryptEncTypes =
+            Regex(""""encType":(-?\d+)""")
+                .findAll(requestJsonBytes.decodeToString())
+                .map { it.groupValues[1].toInt() }
+                .toList()
+        lastDecryptItemCount = lastDecryptEncTypes.size
         val items =
             decryptResults.joinToString(separator = ",") { result ->
                 """{"ok":true,"plaintext":"$result"}"""
@@ -1348,7 +1606,32 @@ private class FakeNativeCoreJni(
             }
         return """{"items":[$items]}""".encodeToByteArray()
     }
+
+    override fun parserBatch(requestJsonBytes: ByteArray): ByteArray {
+        parserCalls++
+        lastParserItemCount = Regex(""""kind":"logMetadata"""").findAll(requestJsonBytes.decodeToString()).count()
+        val results =
+            if (parserMetadataResults.isEmpty()) {
+                List(lastParserItemCount) { FakeLogMetadataProjection(enc = 0, origin = "") }
+            } else {
+                parserMetadataResults
+            }
+        val items =
+            results.joinToString(separator = ",") { result ->
+                if (result == null) {
+                    """{"kind":"logMetadata","ok":true,"fallback":true}"""
+                } else {
+                    """{"kind":"logMetadata","ok":true,"fallback":false,"enc":${result.enc},"origin":"${result.origin.jsonEscaped()}"}"""
+                }
+            }
+        return """{"items":[$items]}""".encodeToByteArray()
+    }
 }
+
+private data class FakeLogMetadataProjection(
+    val enc: Int,
+    val origin: String,
+)
 
 private fun String.jsonEscaped(): String =
     replace("\\", "\\\\")

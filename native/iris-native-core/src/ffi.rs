@@ -53,6 +53,34 @@ pub extern "system" fn Java_party_qwer_iris_nativecore_NativeCoreJni_parserBatch
 
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_party_qwer_iris_nativecore_NativeCoreJni_queryProjectionBatch(
+    env: JNIEnv<'_>,
+    _receiver: JObject<'_>,
+    request: JByteArray<'_>,
+) -> jbyteArray {
+    json_batch_response(
+        &env,
+        &request,
+        crate::query_projection::query_projection_batch_json,
+    )
+}
+
+#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_party_qwer_iris_nativecore_NativeCoreJni_statisticsProjectionBatch(
+    env: JNIEnv<'_>,
+    _receiver: JObject<'_>,
+    request: JByteArray<'_>,
+) -> jbyteArray {
+    json_batch_response(
+        &env,
+        &request,
+        crate::statistics::statistics_projection_batch_json,
+    )
+}
+
+#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_party_qwer_iris_nativecore_NativeCoreJni_webhookPayloadBatch(
     env: JNIEnv<'_>,
     _receiver: JObject<'_>,

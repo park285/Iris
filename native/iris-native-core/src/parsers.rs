@@ -29,6 +29,11 @@ enum ParserBatchItem {
         #[serde(default)]
         raw: Option<String>,
     },
+    #[serde(rename = "logMetadata")]
+    LogMetadata {
+        #[serde(default)]
+        metadata: Option<String>,
+    },
     #[serde(rename = "periodSpec")]
     PeriodSpec {
         #[serde(default)]
@@ -74,6 +79,18 @@ enum ParserBatchResult {
         ids: Vec<i64>,
         error: Option<String>,
     },
+    #[serde(rename = "logMetadata")]
+    LogMetadata {
+        ok: bool,
+        fallback: bool,
+        #[serde(rename = "usedDefault")]
+        used_default: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        enc: Option<i32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        origin: Option<String>,
+        error: Option<String>,
+    },
     #[serde(rename = "periodSpec")]
     PeriodSpec {
         ok: bool,
@@ -100,6 +117,12 @@ struct PeriodSpecInfo {
     kind: PeriodSpecKind,
     days: Option<i64>,
     seconds: Option<i64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LogMetadataProjection {
+    enc: i32,
+    origin: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -148,6 +171,20 @@ fn parse_item(item: ParserBatchItem) -> ParserBatchResult {
                 fallback,
                 used_default: false,
                 ids,
+                error: None,
+            }
+        }
+        ParserBatchItem::LogMetadata { metadata } => {
+            let (projection, fallback) = parse_log_metadata(metadata.as_deref());
+            let (enc, origin) = projection.map_or((None, None), |projection| {
+                (Some(projection.enc), Some(projection.origin))
+            });
+            ParserBatchResult::LogMetadata {
+                ok: true,
+                fallback,
+                used_default: false,
+                enc,
+                origin,
                 error: None,
             }
         }
@@ -301,6 +338,104 @@ fn try_parse_id_array(raw: &str) -> Result<Vec<i64>, ()> {
     }
 
     Ok(ids)
+}
+
+fn parse_log_metadata(metadata: Option<&str>) -> (Option<LogMetadataProjection>, bool) {
+    let Some(metadata) = metadata else {
+        return (None, true);
+    };
+    if metadata.trim().is_empty() {
+        return (None, true);
+    }
+
+    match try_parse_log_metadata(metadata) {
+        Ok(projection) => (Some(projection), false),
+        Err(()) => (None, true),
+    }
+}
+
+fn try_parse_log_metadata(metadata: &str) -> Result<LogMetadataProjection, ()> {
+    let element: Value = serde_json::from_str(metadata).map_err(|_| ())?;
+    let object = element.as_object().ok_or(())?;
+    Ok(LogMetadataProjection {
+        enc: object.get("enc").map_or(Ok(0), log_metadata_opt_int)?,
+        origin: object
+            .get("origin")
+            .map_or_else(String::new, log_metadata_opt_string),
+    })
+}
+
+fn log_metadata_opt_int(value: &Value) -> Result<i32, ()> {
+    match value {
+        Value::Number(value) => log_metadata_number_to_int(value),
+        Value::String(value) => log_metadata_string_to_int(value),
+        Value::Bool(_) | Value::Null | Value::Array(_) | Value::Object(_) => Ok(0),
+    }
+}
+
+fn log_metadata_number_to_int(value: &serde_json::Number) -> Result<i32, ()> {
+    match (value.as_i64(), value.as_u64(), value.as_f64()) {
+        (Some(value), _, _) => Ok(java_i64_to_i32(value)),
+        (_, Some(value), _) => {
+            if i64::try_from(value).is_ok() {
+                Ok(java_u64_to_i32(value))
+            } else {
+                Err(())
+            }
+        }
+        (_, _, Some(value)) => log_metadata_float_to_int(value),
+        _ => Ok(0),
+    }
+}
+
+const fn java_i64_to_i32(value: i64) -> i32 {
+    let bytes = value.to_le_bytes();
+    i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+}
+
+const fn java_u64_to_i32(value: u64) -> i32 {
+    let bytes = value.to_le_bytes();
+    i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+}
+
+fn log_metadata_string_to_int(value: &str) -> Result<i32, ()> {
+    if value.trim() != value {
+        return Err(());
+    }
+    if let Ok(value) = value.parse::<i64>() {
+        return i32::try_from(value).map_err(|_| ());
+    }
+    if let Ok(value) = value.parse::<u64>() {
+        return i32::try_from(value).map_err(|_| ());
+    }
+    let Ok(value) = value.parse::<f64>() else {
+        return Ok(0);
+    };
+    if !value.is_finite() {
+        return Ok(0);
+    }
+    log_metadata_float_to_int(value)
+}
+
+fn log_metadata_float_to_int(value: f64) -> Result<i32, ()> {
+    if value.is_nan() {
+        Ok(0)
+    } else if value > f64::from(i32::MAX) || value < f64::from(i32::MIN) {
+        Err(())
+    } else {
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(value as i32)
+    }
+}
+
+fn log_metadata_opt_string(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::String(value) => value.clone(),
+        Value::Number(value) => value.to_string(),
+        Value::Bool(value) => value.to_string(),
+        Value::Array(_) | Value::Object(_) => value.to_string(),
+    }
 }
 
 fn parse_period_spec(period: Option<&str>, default_days: i64) -> (PeriodSpecInfo, bool) {
@@ -485,6 +620,84 @@ mod tests {
         );
         assert_eq!(response["items"][3]["fallback"], false);
         assert_eq!(response["items"][3]["usedDefault"], true);
+    }
+
+    #[test]
+    fn parsers_batch_parses_log_metadata_with_jsonobject_compatible_projection() {
+        let metadata_values = [
+            serde_json::json!({}).to_string(),
+            serde_json::json!({"enc": 7, "origin": "chat"}).to_string(),
+            serde_json::json!({"enc": "8", "origin": 123}).to_string(),
+            serde_json::json!({"enc": "8.5", "origin": {}}).to_string(),
+            serde_json::json!({"enc": 8.5, "origin": null}).to_string(),
+            serde_json::json!({"enc": true}).to_string(),
+            serde_json::json!({"enc": 2_147_483_648_i64}).to_string(),
+        ];
+        let request = serde_json::json!({
+            "items": metadata_values
+                .iter()
+                .map(|metadata| serde_json::json!({"kind": "logMetadata", "metadata": metadata}))
+                .collect::<Vec<_>>()
+        });
+
+        let response = parser_batch_json(request.to_string().as_bytes()).expect("parser response");
+        let response: Value = serde_json::from_slice(&response).expect("json response");
+
+        let expected = [
+            (0, ""),
+            (7, "chat"),
+            (8, "123"),
+            (8, "{}"),
+            (8, ""),
+            (0, ""),
+            (i32::MIN, ""),
+        ];
+        for (index, (enc, origin)) in expected.into_iter().enumerate() {
+            assert_eq!(response["items"][index]["kind"], "logMetadata");
+            assert_eq!(response["items"][index]["ok"], true);
+            assert_eq!(response["items"][index]["fallback"], false);
+            assert_eq!(response["items"][index]["usedDefault"], false);
+            assert_eq!(response["items"][index]["enc"], enc);
+            assert_eq!(response["items"][index]["origin"], origin);
+            assert_eq!(response["items"][index]["error"], Value::Null);
+        }
+    }
+
+    #[test]
+    fn parsers_batch_returns_item_level_fallback_for_malformed_log_metadata() {
+        let response = parser_batch_json(
+            br#"{
+                "items": [
+                    {"kind":"logMetadata","metadata":"not-json"},
+                    {"kind":"logMetadata","metadata":""},
+                    {"kind":"logMetadata"},
+                    {"kind":"logMetadata","metadata":"[]"},
+                    {"kind":"logMetadata","metadata":"{\"enc\":\" 9 \",\"origin\":\"space\"}"},
+                    {"kind":"logMetadata","metadata":"{\"enc\":\"2147483648\"}"},
+                    {"kind":"logMetadata","metadata":"{\"enc\":\"1e20\"}"},
+                    {"kind":"logMetadata","metadata":"{\"enc\":2147483648.5}"},
+                    {"kind":"logMetadata","metadata":"{\"enc\":1e20}"},
+                    {"kind":"logMetadata","metadata":"{\"enc\":9223372036854775808}"},
+                    {"kind":"logMetadata","metadata":"{}"}
+                ]
+            }"#,
+        )
+        .expect("parser response");
+        let response: Value = serde_json::from_slice(&response).expect("json response");
+
+        for index in 0..10 {
+            let item = response["items"][index].as_object().expect("object item");
+            assert_eq!(item["kind"], "logMetadata");
+            assert_eq!(item["ok"], true);
+            assert_eq!(item["fallback"], true);
+            assert_eq!(item["usedDefault"], false);
+            assert_eq!(item["error"], Value::Null);
+            assert!(!item.contains_key("enc"));
+            assert!(!item.contains_key("origin"));
+        }
+        assert_eq!(response["items"][10]["fallback"], false);
+        assert_eq!(response["items"][10]["enc"], 0);
+        assert_eq!(response["items"][10]["origin"], "");
     }
 
     #[test]

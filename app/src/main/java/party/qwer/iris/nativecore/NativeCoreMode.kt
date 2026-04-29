@@ -12,6 +12,7 @@ internal enum class NativeCoreComponent(
     DECRYPT("decrypt"),
     ROUTING("routing"),
     PARSERS("parsers"),
+    PROJECTIONS("projections"),
     WEBHOOK_PAYLOAD("webhookPayload"),
 }
 

@@ -681,6 +681,59 @@ class MemberRepositoryTest {
     }
 
     @Test
+    fun `listRooms deduplicates same open link with null active count tie and negative chat ids`() {
+        val repo =
+            buildRepoFromLegacy(
+                executeQueryTyped =
+                    legacyQuery { _, _, _ ->
+                        listOf(
+                            mapOf(
+                                "id" to "-30",
+                                "type" to "OD",
+                                "active_members_count" to null,
+                                "link_id" to "455150406",
+                                "link_name" to "null-count",
+                                "link_url" to "https://open.kakao.com/o/s5Ee5Tmi",
+                                "member_limit" to null,
+                                "searchable" to "1",
+                                "bot_role" to "1",
+                            ),
+                            mapOf(
+                                "id" to "-20",
+                                "type" to "OD",
+                                "active_members_count" to "0",
+                                "link_id" to "455150406",
+                                "link_name" to "zero-count",
+                                "link_url" to "https://open.kakao.com/o/s5Ee5Tmi",
+                                "member_limit" to null,
+                                "searchable" to "1",
+                                "bot_role" to "1",
+                            ),
+                            mapOf(
+                                "id" to "-10",
+                                "type" to "OD",
+                                "active_members_count" to null,
+                                "link_id" to "455150406",
+                                "link_name" to "selected-negative",
+                                "link_url" to "https://open.kakao.com/o/s5Ee5Tmi",
+                                "member_limit" to null,
+                                "searchable" to "1",
+                                "bot_role" to "1",
+                            ),
+                        )
+                    },
+                decrypt = { _, raw, _ -> raw },
+                botId = 1L,
+            )
+
+        val rooms = repo.listRooms().rooms
+
+        assertEquals(1, rooms.size)
+        assertEquals(-10L, rooms.first().chatId)
+        assertEquals("selected-negative", rooms.first().linkName)
+    }
+
+    @Test
     fun `listRooms includes non open rooms with resolved display names`() {
         val repo =
             buildRepoFromLegacy(
@@ -828,6 +881,46 @@ class MemberRepositoryTest {
         assertEquals("재균", members.getValue(203887151L).nickname)
         assertEquals("서윤", members.getValue(243338321L).nickname)
         assertEquals("봇", members.getValue(438562408L).nickname)
+    }
+
+    @Test
+    fun `listMembers orders non open ids by activity with stable ties null activity and bot injection`() {
+        val repo =
+            buildRepoFromLegacy(
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, bindArgs, _ ->
+                        when {
+                            sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
+                                listOf(
+                                    mapOf(
+                                        "link_id" to null,
+                                        "type" to "MultiChat",
+                                        "members" to "[10,20,30]",
+                                        "active_members_count" to "4",
+                                    ),
+                                )
+                            sqlQuery.contains("FROM chat_logs") &&
+                                sqlQuery.contains("user_id IN (?, ?, ?, ?)") &&
+                                bindArgs?.toList() == listOf("777", "10", "20", "30", "99") ->
+                                listOf(
+                                    mapOf("user_id" to "20", "message_count" to "2", "last_active" to "500"),
+                                    mapOf("user_id" to "10", "message_count" to "1", "last_active" to "500"),
+                                    mapOf("user_id" to "99", "message_count" to "3", "last_active" to null),
+                                )
+                            else -> emptyList()
+                        }
+                    },
+                decrypt = { _, raw, _ -> raw },
+                botId = 99L,
+                learnObservedProfileUserMappings = { _, _ -> },
+            )
+
+        val response = repo.listMembers(chatId = 777L)
+
+        assertEquals(listOf(10L, 20L, 30L, 99L), response.members.map { it.userId })
+        assertEquals(listOf(500L, 500L, null, null), response.members.map { it.lastActiveAt })
+        assertEquals(listOf("member", "member", "member", "bot"), response.members.map { it.role })
+        assertEquals(listOf(1, 2, 0, 3), response.members.map { it.messageCount })
     }
 
     @Test
@@ -1156,6 +1249,94 @@ class MemberRepositoryTest {
 
         assertEquals("박준우", members.getValue(267947734L).nickname)
         assertEquals("438562408", members.getValue(438562408L).nickname)
+    }
+
+    @Test
+    fun `listMembers does not use direct chat observed profile when multiple non bot participants exist`() {
+        val repo =
+            buildRepoFromLegacy(
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, bindArgs, _ ->
+                        when {
+                            sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
+                                listOf(
+                                    mapOf(
+                                        "link_id" to null,
+                                        "type" to "DirectChat",
+                                        "members" to "[267947734,267947735]",
+                                        "active_members_count" to "3",
+                                    ),
+                                )
+                            sqlQuery.contains("FROM chat_logs") && sqlQuery.contains("GROUP BY user_id") ->
+                                listOf(
+                                    mapOf("user_id" to "267947734", "message_count" to "1", "last_active" to "1002"),
+                                    mapOf("user_id" to "267947735", "message_count" to "1", "last_active" to "1001"),
+                                    mapOf("user_id" to "438562408", "message_count" to "1", "last_active" to "1000"),
+                                )
+                            sqlQuery.contains("FROM db3.observed_profiles") &&
+                                bindArgs?.toList() == listOf("464252100463241") ->
+                                listOf(
+                                    mapOf(
+                                        "display_name" to "박준우",
+                                        "room_name" to "박준우",
+                                    ),
+                                )
+                            else -> emptyList()
+                        }
+                    },
+                decrypt = { _, raw, _ -> raw },
+                botId = 438562408L,
+                learnObservedProfileUserMappings = { _, _ -> },
+            )
+
+        val response = repo.listMembers(chatId = 464252100463241L)
+        val members = response.members.associateBy { it.userId }
+
+        assertEquals("267947734", members.getValue(267947734L).nickname)
+        assertEquals("267947735", members.getValue(267947735L).nickname)
+        assertEquals("438562408", members.getValue(438562408L).nickname)
+    }
+
+    @Test
+    fun `listMembers does not use direct chat observed profile when only bot participant exists`() {
+        val repo =
+            buildRepoFromLegacy(
+                executeQueryTyped =
+                    legacyQuery { sqlQuery, bindArgs, _ ->
+                        when {
+                            sqlQuery.contains("SELECT link_id, type, members, active_members_count FROM chat_rooms WHERE id = ?") ->
+                                listOf(
+                                    mapOf(
+                                        "link_id" to null,
+                                        "type" to "DirectChat",
+                                        "members" to "[]",
+                                        "active_members_count" to "1",
+                                    ),
+                                )
+                            sqlQuery.contains("FROM chat_logs") && sqlQuery.contains("GROUP BY user_id") ->
+                                listOf(
+                                    mapOf("user_id" to "438562408", "message_count" to "1", "last_active" to "1000"),
+                                )
+                            sqlQuery.contains("FROM db3.observed_profiles") &&
+                                bindArgs?.toList() == listOf("464252100463241") ->
+                                listOf(
+                                    mapOf(
+                                        "display_name" to "박준우",
+                                        "room_name" to "박준우",
+                                    ),
+                                )
+                            else -> emptyList()
+                        }
+                    },
+                decrypt = { _, raw, _ -> raw },
+                botId = 438562408L,
+                learnObservedProfileUserMappings = { _, _ -> },
+            )
+
+        val response = repo.listMembers(chatId = 464252100463241L)
+
+        assertEquals(listOf(438562408L), response.members.map { it.userId })
+        assertEquals(listOf("438562408"), response.members.map { it.nickname })
     }
 
     @Test

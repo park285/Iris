@@ -67,19 +67,7 @@ internal class RoomCatalogService(
                 )
             }
         return RoomListResponse(
-            rooms =
-                rooms
-                    .groupBy { it.linkId ?: it.chatId }
-                    .values
-                    .map { group ->
-                        group.maxWithOrNull(
-                            compareBy<RoomSummary>(
-                                { if (it.chatId > 0) 1 else 0 },
-                                { it.activeMembersCount ?: 0 },
-                                { it.chatId },
-                            ),
-                        ) ?: group.first()
-                    },
+            rooms = deduplicateCatalogRooms(rooms),
         )
     }
 
@@ -147,3 +135,18 @@ internal class RoomCatalogService(
         )
     }
 }
+
+private val catalogRoomSelectionComparator =
+    compareBy<RoomSummary>(
+        { if (it.chatId > 0) 1 else 0 },
+        { it.activeMembersCount ?: 0 },
+        { it.chatId },
+    )
+
+private fun deduplicateCatalogRooms(rooms: List<RoomSummary>): List<RoomSummary> =
+    rooms
+        .groupBy { it.linkId ?: it.chatId }
+        .values
+        .map(::selectCatalogRoom)
+
+private fun selectCatalogRoom(group: List<RoomSummary>): RoomSummary = group.maxWithOrNull(catalogRoomSelectionComparator) ?: group.first()

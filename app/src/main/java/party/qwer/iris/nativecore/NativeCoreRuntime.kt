@@ -321,6 +321,20 @@ internal class NativeCoreRuntime private constructor(
         return (parsed[0] as List<NoticeInfo>) to (parsed[1] as Set<Long>)
     }
 
+    fun parseLogMetadataBatchOrFallback(
+        metadataValues: List<String>,
+        kotlinParseBatch: () -> List<NativeLogMetadataProjection?>,
+    ): List<NativeLogMetadataProjection?> =
+        parserBatchOrFallback(
+            items =
+                metadataValues.map { rawMetadata ->
+                    NativeParserBatchItem(kind = "logMetadata", metadata = rawMetadata)
+                },
+            kotlinParseBatch = kotlinParseBatch,
+            nativeValue = { result -> result.toLogMetadataProjection() },
+            detailKey = "logMetadata",
+        )
+
     fun parsePeriodSpecOrFallback(
         period: String?,
         defaultDays: Long,
@@ -377,6 +391,123 @@ internal class NativeCoreRuntime private constructor(
                         }
                         recordNativeFailure(NativeCoreComponent.WEBHOOK_PAYLOAD, 1, error = it)
                         kotlinBuild()
+                    }
+        }
+    }
+
+    fun projectQueryRowsOrFallback(
+        rows: List<List<NativeQueryProjectionCellEnvelope>>,
+        kotlinProjectBatch: () -> List<List<NativeQueryProjectedCell>>,
+    ): List<List<NativeQueryProjectedCell>> {
+        if (rows.isEmpty()) return emptyList()
+        val mode = config.effectiveMode(NativeCoreComponent.PROJECTIONS)
+        val itemCount = queryProjectionItemCount(rows)
+        if (!nativeUsable) {
+            if (strictMode(NativeCoreComponent.PROJECTIONS)) {
+                strictNativeUnavailable(NativeCoreComponent.PROJECTIONS, queryCellProjectionDetailKey)
+            }
+            recordNativeUnavailableFallback(NativeCoreComponent.PROJECTIONS, itemCount, queryCellProjectionDetailKey)
+            return kotlinProjectBatch()
+        }
+        if (mode == NativeCoreMode.OFF) {
+            return kotlinProjectBatch()
+        }
+        return when (mode) {
+            NativeCoreMode.OFF -> kotlinProjectBatch()
+            NativeCoreMode.SHADOW -> {
+                val kotlinRows = kotlinProjectBatch()
+                val nativeRows =
+                    runCatching { callNativeQueryProjectionBatch(rows) }
+                        .onFailure { error ->
+                            recordNativeFailure(NativeCoreComponent.PROJECTIONS, itemCount, queryCellProjectionDetailKey, error)
+                        }.getOrNull()
+                if (nativeRows != null) {
+                    recordShadowMismatch(
+                        NativeCoreComponent.PROJECTIONS,
+                        compareProjectedRows(kotlinRows, nativeRows),
+                        queryCellProjectionDetailKey,
+                    )
+                }
+                kotlinRows
+            }
+
+            NativeCoreMode.ON ->
+                runCatching { callNativeQueryProjectionBatch(rows) }
+                    .getOrElse {
+                        if (strictMode(NativeCoreComponent.PROJECTIONS)) {
+                            strictNativeFailure(NativeCoreComponent.PROJECTIONS, itemCount, queryCellProjectionDetailKey, it)
+                        }
+                        recordNativeFailure(NativeCoreComponent.PROJECTIONS, itemCount, queryCellProjectionDetailKey, it)
+                        kotlinProjectBatch()
+                    }
+        }
+    }
+
+    fun projectRoomStatsOrFallback(
+        item: NativeStatisticsProjectionBatchItem,
+        kotlinProject: () -> NativeRoomStatsProjection,
+    ): NativeRoomStatsProjection =
+        projectStatisticsOrFallback(
+            item = item,
+            detailKey = roomStatsProjectionDetailKey,
+            itemCount = statisticsProjectionItemCount(item),
+            kotlinProject = kotlinProject,
+            nativeProject = { result -> result.toRoomStatsProjection() },
+        )
+
+    fun projectMemberActivityOrFallback(
+        item: NativeStatisticsProjectionBatchItem,
+        kotlinProject: () -> NativeMemberActivityProjection,
+    ): NativeMemberActivityProjection =
+        projectStatisticsOrFallback(
+            item = item,
+            detailKey = memberActivityProjectionDetailKey,
+            itemCount = statisticsProjectionItemCount(item),
+            kotlinProject = kotlinProject,
+            nativeProject = { result -> result.toMemberActivityProjection() },
+        )
+
+    private fun <T> projectStatisticsOrFallback(
+        item: NativeStatisticsProjectionBatchItem,
+        detailKey: String,
+        itemCount: Int,
+        kotlinProject: () -> T,
+        nativeProject: (NativeStatisticsProjectionBatchResult) -> T,
+    ): T {
+        val mode = config.effectiveMode(NativeCoreComponent.PROJECTIONS)
+        if (!nativeUsable) {
+            if (strictMode(NativeCoreComponent.PROJECTIONS)) {
+                strictNativeUnavailable(NativeCoreComponent.PROJECTIONS, detailKey)
+            }
+            recordNativeUnavailableFallback(NativeCoreComponent.PROJECTIONS, itemCount, detailKey)
+            return kotlinProject()
+        }
+        if (mode == NativeCoreMode.OFF) {
+            return kotlinProject()
+        }
+        return when (mode) {
+            NativeCoreMode.OFF -> kotlinProject()
+            NativeCoreMode.SHADOW -> {
+                val kotlinResult = kotlinProject()
+                val nativeResult =
+                    runCatching { nativeProject(callNativeStatisticsProjectionBatch(listOf(item), itemCount).single()) }
+                        .onFailure { error ->
+                            recordNativeFailure(NativeCoreComponent.PROJECTIONS, itemCount, detailKey, error)
+                        }.getOrNull()
+                if (nativeResult != null && nativeResult != kotlinResult) {
+                    recordShadowMismatch(NativeCoreComponent.PROJECTIONS, 1, detailKey)
+                }
+                kotlinResult
+            }
+
+            NativeCoreMode.ON ->
+                runCatching { nativeProject(callNativeStatisticsProjectionBatch(listOf(item), itemCount).single()) }
+                    .getOrElse {
+                        if (strictMode(NativeCoreComponent.PROJECTIONS)) {
+                            strictNativeFailure(NativeCoreComponent.PROJECTIONS, itemCount, detailKey, it)
+                        }
+                        recordNativeFailure(NativeCoreComponent.PROJECTIONS, itemCount, detailKey, it)
+                        kotlinProject()
                     }
         }
     }
@@ -811,6 +942,14 @@ internal class NativeCoreRuntime private constructor(
 
     private fun NativeParserBatchResult.toIdSet(): Set<Long> = ids.toSet()
 
+    private fun NativeParserBatchResult.toLogMetadataProjection(): NativeLogMetadataProjection {
+        val result = requireKind("logMetadata")
+        return NativeLogMetadataProjection(
+            enc = result.enc ?: throw NativeCoreDiagnosticFailure(schemaDecodeErrorReason, "native parsers failed"),
+            origin = result.origin ?: throw NativeCoreDiagnosticFailure(schemaDecodeErrorReason, "native parsers failed"),
+        )
+    }
+
     private fun NativeParserBatchResult.requireKind(expected: String): NativeParserBatchResult {
         if (kind.isNotBlank() && kind != expected) {
             throw NativeCoreDiagnosticFailure(schemaDecodeErrorReason, "native parsers failed")
@@ -840,6 +979,76 @@ internal class NativeCoreRuntime private constructor(
             response.items.map { result ->
                 if (!result.ok) {
                     throw NativeCoreDiagnosticFailure(nativeErrorReason(result.errorKind), "native parsers failed")
+                }
+                result
+            }
+        } finally {
+            stats.recordNativeDuration(System.nanoTime() - startedAt)
+        }
+    }
+
+    private fun callNativeQueryProjectionBatch(
+        rows: List<List<NativeQueryProjectionCellEnvelope>>,
+    ): List<List<NativeQueryProjectedCell>> {
+        if (rows.isEmpty()) return emptyList()
+        val stats = statsFor(NativeCoreComponent.PROJECTIONS)
+        val itemCount = queryProjectionItemCount(rows)
+        stats.jniCalls.incrementAndGet()
+        stats.items.addAndGet(itemCount.toLong())
+        val startedAt = System.nanoTime()
+        return try {
+            val request = NativeQueryProjectionBatchRequest(rows.map { row -> NativeQueryProjectionBatchItem(cells = row) })
+            val rawResponse = jni.queryProjectionBatch(json.encodeToString(request).encodeToByteArray()).decodeToString()
+            val response = json.decodeFromString<NativeQueryProjectionBatchResponse>(rawResponse)
+            if (response.items.size != rows.size) {
+                val first = response.items.singleOrNull()
+                throw NativeCoreDiagnosticFailure(
+                    batchEnvelopeFailureReason(rows.size, response.items.size, first?.ok, first?.errorKind),
+                    "native projections failed",
+                )
+            }
+            response.items.mapIndexed { index, result ->
+                if (!result.ok) {
+                    throw NativeCoreDiagnosticFailure(nativeErrorReason(result.errorKind), "native projections failed")
+                }
+                val cells =
+                    result.cells ?: throw NativeCoreDiagnosticFailure(schemaDecodeErrorReason, "native projections failed")
+                if (cells.size != rows[index].size) {
+                    throw NativeCoreDiagnosticFailure(schemaDecodeErrorReason, "native projections failed")
+                }
+                cells
+            }
+        } finally {
+            stats.recordNativeDuration(System.nanoTime() - startedAt)
+        }
+    }
+
+    private fun callNativeStatisticsProjectionBatch(
+        items: List<NativeStatisticsProjectionBatchItem>,
+        itemCount: Int,
+    ): List<NativeStatisticsProjectionBatchResult> {
+        if (items.isEmpty()) return emptyList()
+        val stats = statsFor(NativeCoreComponent.PROJECTIONS)
+        stats.jniCalls.incrementAndGet()
+        stats.items.addAndGet(itemCount.toLong())
+        val startedAt = System.nanoTime()
+        return try {
+            val request = NativeStatisticsProjectionBatchRequest(items = items)
+            val rawResponse = jni.statisticsProjectionBatch(json.encodeToString(request).encodeToByteArray()).decodeToString()
+            val response = json.decodeFromString<NativeStatisticsProjectionBatchResponse>(rawResponse)
+            if (response.items.size != items.size) {
+                val first = response.items.singleOrNull()
+                throw NativeCoreDiagnosticFailure(
+                    batchEnvelopeFailureReason(items.size, response.items.size, first?.ok, first?.errorKind),
+                    "native projections failed",
+                )
+            }
+            response.items.mapIndexed { index, result ->
+                if (!result.ok) {
+                    throw NativeCoreDiagnosticFailure(nativeErrorReason(result.errorKind), "native projections failed")
+                }
+                if (result.kind != items[index].kind) {
+                    throw NativeCoreDiagnosticFailure(schemaDecodeErrorReason, "native projections failed")
                 }
                 result
             }
@@ -1065,6 +1274,7 @@ internal class NativeCoreRuntime private constructor(
             NativeCoreComponent.DECRYPT -> nativeDecryptFailure
             NativeCoreComponent.ROUTING -> "native routing failed"
             NativeCoreComponent.PARSERS -> "native parsers failed"
+            NativeCoreComponent.PROJECTIONS -> "native projections failed"
             NativeCoreComponent.WEBHOOK_PAYLOAD -> "native webhook payload failed"
         }
 
@@ -1261,6 +1471,41 @@ internal class NativeCoreRuntime private constructor(
         return expected.zip(actual).count { (left, right) -> !equivalent(left, right) }
     }
 
+    private fun compareProjectedRows(
+        expected: List<List<NativeQueryProjectedCell>>,
+        actual: List<List<NativeQueryProjectedCell>>,
+    ): Int {
+        if (expected.size != actual.size) return maxOf(expected.size, actual.size)
+        return expected.zip(actual).sumOf { (expectedRow, actualRow) ->
+            compareByIndex(expectedRow, actualRow) { expectedCell, actualCell -> expectedCell == actualCell }
+        }
+    }
+
+    private fun queryProjectionItemCount(rows: List<List<NativeQueryProjectionCellEnvelope>>): Int = rows.sumOf { row -> row.size }.coerceAtLeast(rows.size)
+
+    private fun statisticsProjectionItemCount(item: NativeStatisticsProjectionBatchItem): Int = item.rows.size.coerceAtLeast(1)
+
+    private fun NativeStatisticsProjectionBatchResult.toRoomStatsProjection(): NativeRoomStatsProjection =
+        NativeRoomStatsProjection(
+            memberStats = memberStats ?: throw NativeCoreDiagnosticFailure(schemaDecodeErrorReason, "native projections failed"),
+            totalMessages = totalMessages ?: throw NativeCoreDiagnosticFailure(schemaDecodeErrorReason, "native projections failed"),
+            activeMembers = activeMembers ?: throw NativeCoreDiagnosticFailure(schemaDecodeErrorReason, "native projections failed"),
+        )
+
+    private fun NativeStatisticsProjectionBatchResult.toMemberActivityProjection(): NativeMemberActivityProjection {
+        val activeHours = activeHours ?: throw NativeCoreDiagnosticFailure(schemaDecodeErrorReason, "native projections failed")
+        if (activeHours.size != 24) {
+            throw NativeCoreDiagnosticFailure(schemaDecodeErrorReason, "native projections failed")
+        }
+        return NativeMemberActivityProjection(
+            messageCount = messageCount ?: throw NativeCoreDiagnosticFailure(schemaDecodeErrorReason, "native projections failed"),
+            firstMessageAt = firstMessageAt,
+            lastMessageAt = lastMessageAt,
+            activeHours = activeHours,
+            messageTypes = messageTypes ?: throw NativeCoreDiagnosticFailure(schemaDecodeErrorReason, "native projections failed"),
+        )
+    }
+
     private class NativeCoreComponentStats(
         private val mode: NativeCoreMode,
     ) {
@@ -1406,6 +1651,9 @@ private const val itemErrorReason = "itemError"
 private const val nativeUnavailableReason = "nativeUnavailable"
 private const val nativeFallbackReason = "nativeFallback"
 private const val fallbackRequiredReason = "fallbackRequired"
+private const val queryCellProjectionDetailKey = "queryCell"
+private const val roomStatsProjectionDetailKey = "roomStats"
+private const val memberActivityProjectionDetailKey = "memberActivity"
 
 private fun classifyNativeFailure(error: Throwable?): String =
     when (error) {

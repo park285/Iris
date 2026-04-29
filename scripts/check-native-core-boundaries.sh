@@ -11,7 +11,7 @@ if rg -n "\bdata\s+class\b" "$runtime_file" >/dev/null; then
   exit 1
 fi
 
-allowed_model_files_pattern='/(NativeCoreConfigModels|NativeCoreDiagnostics|NativeDecryptModels|NativeIngressModels|NativeParserModels|NativeRoutingModels|NativeWebhookModels)\.kt:'
+allowed_model_files_pattern='/(NativeCoreConfigModels|NativeCoreDiagnostics|NativeDecryptModels|NativeIngressModels|NativeParserModels|NativeQueryProjectionModels|NativeRoutingModels|NativeStatisticsModels|NativeWebhookModels)\.kt:'
 if rg -n "\bdata\s+class\b" "$nativecore_dir" --glob '*.kt' | rg -v "$allowed_model_files_pattern" >/dev/null; then
   echo "native core boundary check failed: nativecore data classes must stay in dedicated model/diagnostics files" >&2
   rg -n "\bdata\s+class\b" "$nativecore_dir" --glob '*.kt' | rg -v "$allowed_model_files_pattern" >&2

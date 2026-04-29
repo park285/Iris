@@ -27,6 +27,7 @@ import party.qwer.iris.delivery.webhook.RoutingGateway
 import party.qwer.iris.delivery.webhook.RoutingResult
 import party.qwer.iris.isOwnBotMessage
 import party.qwer.iris.nativecore.NativeCoreHolder
+import party.qwer.iris.nativecore.NativeLogMetadataProjection
 import party.qwer.iris.persistence.CheckpointJournal
 import party.qwer.iris.persistence.MemberIdentityStateStore
 import party.qwer.iris.resolveObservedThreadMetadata
@@ -270,8 +271,9 @@ internal class CommandIngressService(
 
     private fun decryptPolledLogFields(newLogs: List<KakaoDB.ChatLogEntry>): Map<Long, Map<String, String>> {
         val candidates = mutableListOf<Triple<Long, String, KakaoDecryptBatchItem>>()
-        for (logEntry in newLogs) {
-            val metadata = parseMetadataForBatch(logEntry) ?: continue
+        val parsedMetadata = parseMetadataForBatch(newLogs)
+        for ((index, logEntry) in newLogs.withIndex()) {
+            val metadata = parsedMetadata.getOrNull(index) ?: continue
             if (shouldDecryptValue(logEntry.message)) {
                 candidates +=
                     Triple(
@@ -573,6 +575,30 @@ internal class CommandIngressService(
                 origin = metadata.optString("origin"),
             )
         }.getOrNull()
+
+    private fun parseMetadataForBatch(logEntries: List<KakaoDB.ChatLogEntry>): List<ParsedLogMetadata?> =
+        NativeCoreHolder
+            .current()
+            .parseLogMetadataBatchOrFallback(
+                metadataValues = logEntries.map { logEntry -> logEntry.metadata },
+                kotlinParseBatch = {
+                    logEntries.map { logEntry ->
+                        parseMetadataForBatch(logEntry)?.toNativeProjection()
+                    }
+                },
+            ).map { metadata -> metadata?.toParsedLogMetadata() }
+
+    private fun ParsedLogMetadata.toNativeProjection(): NativeLogMetadataProjection =
+        NativeLogMetadataProjection(
+            enc = enc,
+            origin = origin,
+        )
+
+    private fun NativeLogMetadataProjection.toParsedLogMetadata(): ParsedLogMetadata =
+        ParsedLogMetadata(
+            enc = enc,
+            origin = origin,
+        )
 
     private fun decryptMessage(
         encryptedMessage: String,

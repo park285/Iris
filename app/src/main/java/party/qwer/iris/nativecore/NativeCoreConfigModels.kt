@@ -4,6 +4,7 @@ internal data class NativeCoreComponentModes(
     val decrypt: NativeCoreComponentMode = NativeCoreComponentMode.INHERIT,
     val routing: NativeCoreComponentMode = NativeCoreComponentMode.OFF,
     val parsers: NativeCoreComponentMode = NativeCoreComponentMode.OFF,
+    val projections: NativeCoreComponentMode = NativeCoreComponentMode.OFF,
     val webhookPayload: NativeCoreComponentMode = NativeCoreComponentMode.OFF,
 ) {
     fun configuredMode(component: NativeCoreComponent): NativeCoreComponentMode =
@@ -11,6 +12,7 @@ internal data class NativeCoreComponentModes(
             NativeCoreComponent.DECRYPT -> decrypt
             NativeCoreComponent.ROUTING -> routing
             NativeCoreComponent.PARSERS -> parsers
+            NativeCoreComponent.PROJECTIONS -> projections
             NativeCoreComponent.WEBHOOK_PAYLOAD -> webhookPayload
         }
 }
@@ -20,6 +22,7 @@ internal data class NativeCoreStrictModes(
     val decrypt: Boolean? = null,
     val routing: Boolean? = null,
     val parsers: Boolean? = null,
+    val projections: Boolean? = null,
     val webhookPayload: Boolean? = null,
 ) {
     fun isStrict(
@@ -35,6 +38,7 @@ internal data class NativeCoreStrictModes(
             NativeCoreComponent.DECRYPT -> decrypt
             NativeCoreComponent.ROUTING -> routing
             NativeCoreComponent.PARSERS -> parsers
+            NativeCoreComponent.PROJECTIONS -> projections
             NativeCoreComponent.WEBHOOK_PAYLOAD -> webhookPayload
         }
 }
@@ -128,6 +132,14 @@ internal data class NativeCoreModeConfig(
                         allowInherit = false,
                         warnings = warnings,
                     ),
+                projections =
+                    parseComponentMode(
+                        env = env,
+                        key = "IRIS_NATIVE_PROJECTIONS",
+                        defaultMode = NativeCoreComponentMode.OFF,
+                        allowInherit = false,
+                        warnings = warnings,
+                    ),
                 webhookPayload =
                     parseComponentMode(
                         env = env,
@@ -148,6 +160,7 @@ internal data class NativeCoreModeConfig(
                 decrypt = parseStrictFlag(env, "IRIS_NATIVE_STRICT_DECRYPT", defaultValue = null, warnings = warnings),
                 routing = parseStrictFlag(env, "IRIS_NATIVE_STRICT_ROUTING", defaultValue = null, warnings = warnings),
                 parsers = parseStrictFlag(env, "IRIS_NATIVE_STRICT_PARSERS", defaultValue = null, warnings = warnings),
+                projections = parseStrictFlag(env, "IRIS_NATIVE_STRICT_PROJECTIONS", defaultValue = null, warnings = warnings),
                 webhookPayload = parseStrictFlag(env, "IRIS_NATIVE_STRICT_WEBHOOK_PAYLOAD", defaultValue = null, warnings = warnings),
             )
         }

@@ -4,6 +4,7 @@ import party.qwer.iris.model.MemberInfo
 import party.qwer.iris.model.MemberListResponse
 import party.qwer.iris.model.roleCodeToName
 import party.qwer.iris.storage.ChatId
+import party.qwer.iris.storage.MemberActivityRow
 import party.qwer.iris.storage.MemberIdentityQueries
 import party.qwer.iris.storage.ObservedProfileQueries
 import party.qwer.iris.storage.RoomDirectoryQueries
@@ -55,29 +56,15 @@ internal class MemberListingService(
         }
 
         val roomMemberIds = parseJsonLongArray(roomRow.members).map(::UserId)
-        val scopedMemberIds =
-            buildSet {
-                addAll(roomMemberIds)
-                if (botId > 0L) {
-                    add(UserId(botId))
-                }
-            }.toList()
+        val scopedMemberIds = scopedNonOpenMemberIds(roomMemberIds, botId)
         val activityByUser =
             if (scopedMemberIds.isNotEmpty()) {
                 memberActivityLookup.loadByUser(chatId, scopedMemberIds)
             } else {
                 roomStats.loadAllActivity(chatId).associateBy { it.userId }
             }
-        val userIds =
-            ((if (scopedMemberIds.isNotEmpty()) scopedMemberIds else activityByUser.keys.toList()) + activityByUser.keys)
-                .sortedByDescending { activityByUser[it]?.lastActive ?: Long.MIN_VALUE }
-                .distinct()
-        val directChatParticipantId =
-            if (KakaoRoomType.isDirectChat(roomType)) {
-                userIds.filter { it.value != botId }.distinct().singleOrNull()
-            } else {
-                null
-            }
+        val userIds = orderNonOpenMemberIds(scopedMemberIds, activityByUser)
+        val directChatParticipantId = directChatParticipantId(roomType, userIds, botId)
         val observedProfileHint = observedProfile.resolveProfileByChatId(chatId)
         val nicknameByUser = prepareNicknameLookup(userIds, null, chatId)
         val members =
@@ -110,3 +97,35 @@ internal class MemberListingService(
         return MemberListResponse(chatId.value, null, members, maxOf(totalCount, members.size))
     }
 }
+
+private fun scopedNonOpenMemberIds(
+    roomMemberIds: List<UserId>,
+    botId: Long,
+): List<UserId> =
+    buildSet {
+        addAll(roomMemberIds)
+        if (botId > 0L) {
+            add(UserId(botId))
+        }
+    }.toList()
+
+private fun orderNonOpenMemberIds(
+    scopedMemberIds: List<UserId>,
+    activityByUser: Map<UserId, MemberActivityRow>,
+): List<UserId> {
+    val baseIds = if (scopedMemberIds.isNotEmpty()) scopedMemberIds else activityByUser.keys.toList()
+    return (baseIds + activityByUser.keys)
+        .sortedByDescending { activityByUser[it]?.lastActive ?: Long.MIN_VALUE }
+        .distinct()
+}
+
+private fun directChatParticipantId(
+    roomType: String,
+    userIds: List<UserId>,
+    botId: Long,
+): UserId? =
+    if (KakaoRoomType.isDirectChat(roomType)) {
+        userIds.filter { it.value != botId }.distinct().singleOrNull()
+    } else {
+        null
+    }

@@ -58,6 +58,7 @@ class NativeCoreModeTest {
         assertEquals(NativeCoreMode.ON, config.effectiveMode(NativeCoreComponent.DECRYPT))
         assertEquals(NativeCoreMode.OFF, config.effectiveMode(NativeCoreComponent.ROUTING))
         assertEquals(NativeCoreMode.OFF, config.effectiveMode(NativeCoreComponent.PARSERS))
+        assertEquals(NativeCoreMode.OFF, config.effectiveMode(NativeCoreComponent.PROJECTIONS))
         assertEquals(NativeCoreMode.OFF, config.effectiveMode(NativeCoreComponent.WEBHOOK_PAYLOAD))
     }
 
@@ -70,6 +71,7 @@ class NativeCoreModeTest {
                     "IRIS_NATIVE_DECRYPT" to "off",
                     "IRIS_NATIVE_ROUTING" to "on",
                     "IRIS_NATIVE_PARSERS" to "shadow",
+                    "IRIS_NATIVE_PROJECTIONS" to "shadow",
                     "IRIS_NATIVE_WEBHOOK_PAYLOAD" to "OFF",
                 ),
             )
@@ -77,6 +79,7 @@ class NativeCoreModeTest {
         assertEquals(NativeCoreMode.OFF, config.effectiveMode(NativeCoreComponent.DECRYPT))
         assertEquals(NativeCoreMode.ON, config.effectiveMode(NativeCoreComponent.ROUTING))
         assertEquals(NativeCoreMode.SHADOW, config.effectiveMode(NativeCoreComponent.PARSERS))
+        assertEquals(NativeCoreMode.SHADOW, config.effectiveMode(NativeCoreComponent.PROJECTIONS))
         assertEquals(NativeCoreMode.OFF, config.effectiveMode(NativeCoreComponent.WEBHOOK_PAYLOAD))
         assertTrue(config.requiresLoad)
     }
@@ -128,6 +131,7 @@ class NativeCoreModeTest {
         assertFalse(config.strictMode(NativeCoreComponent.DECRYPT))
         assertTrue(config.strictMode(NativeCoreComponent.ROUTING))
         assertFalse(config.strictMode(NativeCoreComponent.PARSERS))
+        assertFalse(config.strictMode(NativeCoreComponent.PROJECTIONS))
         assertFalse(config.strictMode(NativeCoreComponent.WEBHOOK_PAYLOAD))
     }
 
@@ -140,14 +144,17 @@ class NativeCoreModeTest {
                     "IRIS_NATIVE_DECRYPT" to "off",
                     "IRIS_NATIVE_ROUTING" to "on",
                     "IRIS_NATIVE_PARSERS" to "on",
+                    "IRIS_NATIVE_PROJECTIONS" to "on",
                     "IRIS_NATIVE_STRICT" to "off",
                     "IRIS_NATIVE_STRICT_ROUTING" to "on",
                     "IRIS_NATIVE_STRICT_PARSERS" to "true",
+                    "IRIS_NATIVE_STRICT_PROJECTIONS" to "yes",
                 ),
             )
 
         assertTrue(config.strictMode(NativeCoreComponent.ROUTING))
         assertTrue(config.strictMode(NativeCoreComponent.PARSERS))
+        assertTrue(config.strictMode(NativeCoreComponent.PROJECTIONS))
         assertFalse(config.strictMode(NativeCoreComponent.DECRYPT))
     }
 

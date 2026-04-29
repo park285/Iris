@@ -9,6 +9,10 @@ internal interface NativeCoreJniBridge {
 
     fun parserBatch(requestJsonBytes: ByteArray): ByteArray = error("native parsers unsupported")
 
+    fun queryProjectionBatch(requestJsonBytes: ByteArray): ByteArray = error("native query projections unsupported")
+
+    fun statisticsProjectionBatch(requestJsonBytes: ByteArray): ByteArray = error("native statistics projections unsupported")
+
     fun webhookPayloadBatch(requestJsonBytes: ByteArray): ByteArray = error("native webhook payload unsupported")
 
     fun ingressBatch(requestJsonBytes: ByteArray): ByteArray = error("native ingress unsupported")
@@ -22,6 +26,10 @@ internal object NativeCoreJni : NativeCoreJniBridge {
     external override fun routingBatch(requestJsonBytes: ByteArray): ByteArray
 
     external override fun parserBatch(requestJsonBytes: ByteArray): ByteArray
+
+    external override fun queryProjectionBatch(requestJsonBytes: ByteArray): ByteArray
+
+    external override fun statisticsProjectionBatch(requestJsonBytes: ByteArray): ByteArray
 
     external override fun webhookPayloadBatch(requestJsonBytes: ByteArray): ByteArray
 

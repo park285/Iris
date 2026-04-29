@@ -3,7 +3,9 @@ pub mod errors;
 pub mod ffi;
 pub mod ingress;
 pub mod parsers;
+pub mod query_projection;
 pub mod routing;
+pub mod statistics;
 pub mod webhook;
 
 pub const VERSION: &str = concat!("iris-native-core:", env!("CARGO_PKG_VERSION"));
