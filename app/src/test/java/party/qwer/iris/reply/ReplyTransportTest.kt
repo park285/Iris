@@ -47,7 +47,7 @@ class ReplyTransportTest {
     }
 
     @Test
-    fun `dispatches threaded text reply via share sender`() {
+    fun `dispatches threaded text reply via share sender with fixed scope two`() {
         val notificationCalls = AtomicInteger(0)
         val shareCalls = AtomicInteger(0)
         val capturedThreadId = AtomicReference<Long?>()
@@ -70,7 +70,7 @@ class ReplyTransportTest {
                 target = ReplyTarget(chatId = ChatId(100L), threadId = ReplyThreadId(500L)),
                 referer = "Iris",
                 message = "threaded text",
-                threadScope = 2,
+                threadScope = 3,
                 requestId = null,
             )
 
@@ -138,6 +138,36 @@ class ReplyTransportTest {
     }
 
     @Test
+    fun `dispatches threaded share reply with fixed scope two`() {
+        val capturedThreadId = AtomicReference<Long?>()
+        val capturedScope = AtomicReference<Int?>()
+
+        val transport =
+            ReplyTransport(
+                notificationReplySender = { _, _, _, _, _ -> },
+                sharedTextReplySender = { _, _, threadId, threadScope ->
+                    capturedThreadId.set(threadId)
+                    capturedScope.set(threadScope)
+                },
+                nativeImageReplySender = StubNativeImageSender(),
+                mediaPreparationService = null,
+            )
+
+        val cmd =
+            ShareReplyCommand(
+                target = ReplyTarget(chatId = ChatId(200L), threadId = ReplyThreadId(600L)),
+                message = "threaded share",
+                threadScope = 3,
+                requestId = null,
+            )
+
+        transport.sendShare(cmd)
+
+        assertEquals(600L, capturedThreadId.get())
+        assertEquals(2, capturedScope.get())
+    }
+
+    @Test
     fun `dispatches native image via native sender without immediate cleanup`() {
         val nativeCalls = AtomicInteger(0)
         val capturedPaths = AtomicReference<List<String>>()
@@ -190,6 +220,55 @@ class ReplyTransportTest {
         assertEquals(1, nativeCalls.get())
         assertEquals(listOf(tempFile.absolutePath), capturedPaths.get())
         assertEquals(0, cleanupCalled.get())
+        tempFile.delete()
+    }
+
+    @Test
+    fun `dispatches threaded native image with fixed scope two`() {
+        val capturedThreadId = AtomicReference<Long?>()
+        val capturedScope = AtomicReference<Int?>()
+        val tempFile = File.createTempFile("iris-transport-thread-test", ".png")
+
+        val transport =
+            ReplyTransport(
+                notificationReplySender = { _, _, _, _, _ -> },
+                sharedTextReplySender = { _, _, _, _ -> },
+                nativeImageReplySender =
+                    object : NativeImageReplySender {
+                        override fun send(
+                            roomId: Long,
+                            imagePaths: List<String>,
+                            threadId: Long?,
+                            threadScope: Int?,
+                            requestId: String?,
+                        ) {
+                            capturedThreadId.set(threadId)
+                            capturedScope.set(threadScope)
+                        }
+                    },
+                mediaPreparationService = null,
+            )
+
+        val preparedImages =
+            PreparedImages(
+                room = 300L,
+                imagePaths = arrayListOf(tempFile.absolutePath),
+                files = arrayListOf(tempFile),
+            )
+
+        transport.sendNativeImages(
+            command =
+                NativeImageReplyCommand(
+                    target = ReplyTarget(chatId = ChatId(300L), threadId = ReplyThreadId(700L)),
+                    imageCount = 1,
+                    threadScope = 3,
+                    requestId = "img-thread",
+                ),
+            preparedImages = preparedImages,
+        )
+
+        assertEquals(700L, capturedThreadId.get())
+        assertEquals(2, capturedScope.get())
         tempFile.delete()
     }
 

@@ -17,6 +17,7 @@ internal class ReplyTransport(
     private companion object {
         private val zeroWidthCharacters = setOf('\u200B', '\u200C', '\u200D', '\u2060', '\uFEFF')
         private const val ZERO_WIDTH_NO_BREAK_SPACE = "\uFEFF"
+        private const val FIXED_THREAD_REPLY_SCOPE = 2
     }
 
     fun sendText(command: TextReplyCommand) {
@@ -26,7 +27,7 @@ internal class ReplyTransport(
                 command.chatId,
                 preparedMessage,
                 command.threadId,
-                command.threadScope ?: 2,
+                fixedThreadReplyScope(command.threadId, command.threadScope),
             )
         } else {
             val preparedMessage = preserveInvisiblePadding(command.message)
@@ -46,7 +47,7 @@ internal class ReplyTransport(
             command.chatId,
             preparedMessage,
             command.threadId,
-            command.threadScope,
+            fixedThreadReplyScope(command.threadId, command.threadScope),
         )
     }
 
@@ -55,16 +56,17 @@ internal class ReplyTransport(
         preparedImages: PreparedImages,
     ) {
         try {
+            val outboundScope = fixedThreadReplyScope(command.threadId, command.threadScope)
             IrisLogger.info(
                 "[ReplyTransport] sendNativeImages room=${preparedImages.room} " +
-                    "threadId=${command.threadId} scope=${command.threadScope} " +
+                    "threadId=${command.threadId} scope=$outboundScope " +
                     "imageCount=${preparedImages.imagePaths.size} requestId=${command.requestId}",
             )
             nativeImageReplySender.send(
                 roomId = preparedImages.room,
                 imagePaths = preparedImages.imagePaths,
                 threadId = command.threadId,
-                threadScope = command.threadScope,
+                threadScope = outboundScope,
                 requestId = command.requestId,
             )
         } catch (e: Exception) {
@@ -99,4 +101,9 @@ internal class ReplyTransport(
         }
         return builder.toString()
     }
+
+    private fun fixedThreadReplyScope(
+        threadId: Long?,
+        requestedScope: Int?,
+    ): Int? = if (threadId != null) FIXED_THREAD_REPLY_SCOPE else requestedScope
 }

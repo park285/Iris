@@ -33,14 +33,14 @@ class ReplyCommandFactoryTest {
     }
 
     @Test
-    fun `creates text reply command for threaded message`() {
+    fun `fixes threaded text reply scope to two`() {
         val cmd =
             factory.textReply(
                 referer = "Iris",
                 chatId = 100L,
                 message = "threaded",
                 threadId = 500L,
-                threadScope = 2,
+                threadScope = 3,
                 requestId = null,
             )
 
@@ -48,6 +48,21 @@ class ReplyCommandFactoryTest {
         assertEquals(500L, cmd.threadId)
         assertEquals(ReplyThreadId(500L), cmd.target.threadId)
         assertEquals(2, cmd.threadScope)
+    }
+
+    @Test
+    fun `keeps room text reply scope unchanged`() {
+        val cmd =
+            factory.textReply(
+                referer = "Iris",
+                chatId = 100L,
+                message = "room scope",
+                threadId = null,
+                threadScope = 1,
+                requestId = null,
+            )
+
+        assertEquals(1, cmd.threadScope)
     }
 
     @Test
@@ -70,13 +85,13 @@ class ReplyCommandFactoryTest {
     }
 
     @Test
-    fun `creates native image reply command with multiple images`() {
+    fun `fixes threaded native image reply scope to two`() {
         val cmd =
             factory.nativeImageReply(
                 chatId = 200L,
                 imageCount = 3,
                 threadId = 300L,
-                threadScope = 2,
+                threadScope = 3,
                 requestId = "img-multi",
             )
 
@@ -84,6 +99,7 @@ class ReplyCommandFactoryTest {
         assertEquals(3, cmd.imageCount)
         assertEquals(300L, cmd.threadId)
         assertEquals(ReplyThreadId(300L), cmd.target.threadId)
+        assertEquals(2, cmd.threadScope)
     }
 
     @Test
@@ -105,13 +121,13 @@ class ReplyCommandFactoryTest {
     }
 
     @Test
-    fun `creates share reply command for markdown`() {
+    fun `fixes threaded share reply scope to two`() {
         val cmd =
             factory.shareReply(
                 chatId = 300L,
                 message = "**bold**",
                 threadId = 400L,
-                threadScope = 2,
+                threadScope = 3,
                 requestId = "md-1",
             )
 

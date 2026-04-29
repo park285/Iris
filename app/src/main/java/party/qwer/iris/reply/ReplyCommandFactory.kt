@@ -3,6 +3,10 @@ package party.qwer.iris.reply
 import party.qwer.iris.storage.ChatId
 
 internal class ReplyCommandFactory {
+    private companion object {
+        private const val FIXED_THREAD_REPLY_SCOPE = 2
+    }
+
     fun textReply(
         referer: String,
         chatId: Long,
@@ -15,7 +19,7 @@ internal class ReplyCommandFactory {
             target = replyTarget(chatId, threadId),
             referer = referer,
             message = message,
-            threadScope = threadScope,
+            threadScope = fixedThreadReplyScope(threadId, threadScope),
             requestId = requestId,
         )
 
@@ -30,7 +34,7 @@ internal class ReplyCommandFactory {
         return NativeImageReplyCommand(
             target = replyTarget(chatId, threadId),
             imageCount = imageCount,
-            threadScope = threadScope,
+            threadScope = fixedThreadReplyScope(threadId, threadScope),
             requestId = requestId,
         )
     }
@@ -45,9 +49,14 @@ internal class ReplyCommandFactory {
         ShareReplyCommand(
             target = replyTarget(chatId, threadId),
             message = message,
-            threadScope = threadScope,
+            threadScope = fixedThreadReplyScope(threadId, threadScope),
             requestId = requestId,
         )
+
+    private fun fixedThreadReplyScope(
+        threadId: Long?,
+        requestedScope: Int?,
+    ): Int? = if (threadId != null) FIXED_THREAD_REPLY_SCOPE else requestedScope
 
     private fun replyTarget(
         chatId: Long,

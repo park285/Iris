@@ -564,6 +564,54 @@ class ReplyServiceTest {
         }
 
     @Test
+    fun `threaded native photo replies fix scope to two`() =
+        runTest {
+            val imageDir = Files.createTempDirectory("iris-reply-thread-scope").toFile()
+            val capturedScope = AtomicInteger(-1)
+            val service =
+                ReplyService(
+                    testConfig,
+                    nativeImageReplySender =
+                        object : NativeImageReplySender {
+                            override fun send(
+                                roomId: Long,
+                                imagePaths: List<String>,
+                                threadId: Long?,
+                                threadScope: Int?,
+                                requestId: String?,
+                            ) {
+                                capturedScope.set(threadScope ?: -1)
+                            }
+                        },
+                    mediaScanner = {},
+                    imageDir = imageDir,
+                    admissionDispatcher = kotlinx.coroutines.test.StandardTestDispatcher(testScheduler),
+                    dispatchClock = { testScheduler.currentTime },
+                    statusTickerNanos = { testScheduler.currentTime * 1_000_000L },
+                    statusUpdatedAtEpochMs = { testScheduler.currentTime },
+                )
+            try {
+                service.startSuspend()
+
+                val result =
+                    service.sendNativePhotoBytesSuspend(
+                        room = 18478615493603057L,
+                        imageBytes = VALID_TEST_PNG_BYTES,
+                        threadId = 3805486995143352321L,
+                        threadScope = 3,
+                        requestId = null,
+                    )
+
+                assertEquals(ReplyAdmissionStatus.ACCEPTED, result.status)
+                advanceUntilIdle()
+                assertEquals(2, capturedScope.get())
+                service.shutdownSuspend()
+            } finally {
+                imageDir.deleteRecursively()
+            }
+        }
+
+    @Test
     fun `validateImageBytesPayload rejects when total exceeds limit`() {
         val payloads = listOf(ByteArray(4), ByteArray(4), ByteArray(4))
 
@@ -602,14 +650,16 @@ class ReplyServiceTest {
         runTest {
             val notificationStarts = AtomicInteger(0)
             val shareStarts = AtomicInteger(0)
+            val capturedScope = AtomicInteger(-1)
             val service =
                 ReplyService(
                     testConfig,
                     notificationReplySender = { _, _, _, _, _ ->
                         notificationStarts.incrementAndGet()
                     },
-                    sharedTextReplySender = { _, _, _, _ ->
+                    sharedTextReplySender = { _, _, _, threadScope ->
                         shareStarts.incrementAndGet()
+                        capturedScope.set(threadScope ?: -1)
                     },
                     admissionDispatcher = kotlinx.coroutines.test.StandardTestDispatcher(testScheduler),
                     dispatchClock = { testScheduler.currentTime },
@@ -624,7 +674,7 @@ class ReplyServiceTest {
                     chatId = 18478615493603057L,
                     msg = "**thread text**",
                     threadId = 3805486995143352321L,
-                    threadScope = 2,
+                    threadScope = 3,
                     requestId = null,
                 )
 
@@ -632,6 +682,7 @@ class ReplyServiceTest {
             advanceUntilIdle()
             assertEquals(0, notificationStarts.get())
             assertEquals(1, shareStarts.get())
+            assertEquals(2, capturedScope.get())
             service.shutdownSuspend()
         }
 
@@ -796,7 +847,7 @@ class ReplyServiceTest {
                     room = 18478615493603057L,
                     msg = "**markdown alias**",
                     threadId = 3805486995143352321L,
-                    threadScope = null,
+                    threadScope = 3,
                     requestId = null,
                 )
 
