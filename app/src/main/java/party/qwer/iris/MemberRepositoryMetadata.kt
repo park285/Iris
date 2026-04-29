@@ -8,7 +8,7 @@ import party.qwer.iris.storage.ObservedProfileQueries
 import party.qwer.iris.storage.UserId
 
 internal class MemberRepositoryMetadata(
-    observedProfile: ObservedProfileQueries,
+    private val observedProfile: ObservedProfileQueries,
     resolveNicknamesBatch: (
         userIds: Collection<UserId>,
         linkId: LinkId?,
@@ -46,6 +46,8 @@ internal class MemberRepositoryMetadata(
         }
 
     fun resolveObservedRoomName(chatId: ChatId): String? = nonOpenRoomNameResolver.resolveObservedRoomName(chatId)
+
+    fun resolveObservedRoomNames(chatIds: List<ChatId>): Map<ChatId, String> = observedProfile.resolveRoomNamesBatch(chatIds)
 
     fun resolveNonOpenRoomName(
         chatId: ChatId,

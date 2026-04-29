@@ -37,6 +37,8 @@ internal class NativeCoreRuntime private constructor(
     private val nativeUsable: Boolean
         get() = loaded && selfTestResult != null
 
+    private fun strictMode(component: NativeCoreComponent): Boolean = config.strictMode(component)
+
     fun diagnostics(): NativeCoreDiagnostics =
         NativeCoreDiagnostics(
             mode = config.mode.name.lowercase(),
@@ -78,6 +80,9 @@ internal class NativeCoreRuntime private constructor(
         if (items.isEmpty()) return emptyList()
         val mode = config.effectiveMode(NativeCoreComponent.DECRYPT)
         if (!nativeUsable) {
+            if (strictMode(NativeCoreComponent.DECRYPT)) {
+                strictNativeUnavailable(NativeCoreComponent.DECRYPT)
+            }
             recordNativeUnavailableFallback(NativeCoreComponent.DECRYPT, items.size)
             return kotlinDecryptBatch()
         }
@@ -112,6 +117,9 @@ internal class NativeCoreRuntime private constructor(
         if (messages.isEmpty()) return emptyList()
         val mode = config.effectiveMode(NativeCoreComponent.ROUTING)
         if (!nativeUsable) {
+            if (strictMode(NativeCoreComponent.ROUTING)) {
+                strictNativeUnavailable(NativeCoreComponent.ROUTING)
+            }
             recordNativeUnavailableFallback(NativeCoreComponent.ROUTING, messages.size)
             return kotlinParseBatch()
         }
@@ -150,6 +158,9 @@ internal class NativeCoreRuntime private constructor(
                         imageMessageTypeRoutes = emptyMap(),
                     ).map { it.parsedCommand }
                 }.getOrElse {
+                    if (strictMode(NativeCoreComponent.ROUTING)) {
+                        strictNativeFailure(NativeCoreComponent.ROUTING, items.size, error = it)
+                    }
                     recordNativeFailure(NativeCoreComponent.ROUTING, items.size, error = it)
                     kotlinParseBatch()
                 }
@@ -328,6 +339,9 @@ internal class NativeCoreRuntime private constructor(
     ): String {
         val mode = config.effectiveMode(NativeCoreComponent.WEBHOOK_PAYLOAD)
         if (!nativeUsable) {
+            if (strictMode(NativeCoreComponent.WEBHOOK_PAYLOAD)) {
+                strictNativeUnavailable(NativeCoreComponent.WEBHOOK_PAYLOAD)
+            }
             recordNativeUnavailableFallback(NativeCoreComponent.WEBHOOK_PAYLOAD, 1)
             return kotlinBuild()
         }
@@ -351,6 +365,9 @@ internal class NativeCoreRuntime private constructor(
             NativeCoreMode.ON ->
                 runCatching { callNativeWebhookPayload(command, route, messageId) }
                     .getOrElse {
+                        if (strictMode(NativeCoreComponent.WEBHOOK_PAYLOAD)) {
+                            strictNativeFailure(NativeCoreComponent.WEBHOOK_PAYLOAD, 1, error = it)
+                        }
                         recordNativeFailure(NativeCoreComponent.WEBHOOK_PAYLOAD, 1, error = it)
                         kotlinBuild()
                     }
@@ -378,6 +395,9 @@ internal class NativeCoreRuntime private constructor(
     ): List<String> =
         runCatching { decryptNativeBatch(items) }
             .getOrElse {
+                if (strictMode(NativeCoreComponent.DECRYPT)) {
+                    strictNativeFailure(NativeCoreComponent.DECRYPT, items.size, error = it)
+                }
                 recordNativeFailure(NativeCoreComponent.DECRYPT, items.size, error = it)
                 kotlinDecryptBatch()
             }
@@ -405,6 +425,9 @@ internal class NativeCoreRuntime private constructor(
     ): NativeRoutingDecision {
         val mode = config.effectiveMode(NativeCoreComponent.ROUTING)
         if (!nativeUsable) {
+            if (strictMode(NativeCoreComponent.ROUTING)) {
+                strictNativeUnavailable(NativeCoreComponent.ROUTING)
+            }
             recordNativeUnavailableFallback(NativeCoreComponent.ROUTING, 1)
             return kotlinDecision()
         }
@@ -428,6 +451,9 @@ internal class NativeCoreRuntime private constructor(
             NativeCoreMode.ON ->
                 runCatching { callNativeRouting(item, commandRoutePrefixes, imageMessageTypeRoutes) }
                     .getOrElse {
+                        if (strictMode(NativeCoreComponent.ROUTING)) {
+                            strictNativeFailure(NativeCoreComponent.ROUTING, 1, error = it)
+                        }
                         recordNativeFailure(NativeCoreComponent.ROUTING, 1, error = it)
                         kotlinDecision()
                     }
@@ -495,6 +521,9 @@ internal class NativeCoreRuntime private constructor(
     ): T {
         val mode = config.effectiveMode(NativeCoreComponent.PARSERS)
         if (!nativeUsable) {
+            if (strictMode(NativeCoreComponent.PARSERS)) {
+                strictNativeUnavailable(NativeCoreComponent.PARSERS, item.kind)
+            }
             recordNativeUnavailableFallback(NativeCoreComponent.PARSERS, 1, item.kind)
             return kotlinParse()
         }
@@ -528,6 +557,9 @@ internal class NativeCoreRuntime private constructor(
                 val nativeResult =
                     runCatching { callNativeParser(item) }
                         .getOrElse {
+                            if (strictMode(NativeCoreComponent.PARSERS)) {
+                                strictNativeFailure(NativeCoreComponent.PARSERS, 1, item.kind, it)
+                            }
                             recordNativeFailure(NativeCoreComponent.PARSERS, 1, item.kind, it)
                             return kotlinParse()
                         }
@@ -535,11 +567,29 @@ internal class NativeCoreRuntime private constructor(
                     recordParserDefaultUse(1, item.kind)
                 }
                 if (nativeResult.fallback) {
-                    recordComponentFallback(NativeCoreComponent.PARSERS, 1, item.kind, fallbackRequiredReason)
+                    if (strictMode(NativeCoreComponent.PARSERS)) {
+                        strictNativeFailure(
+                            component = NativeCoreComponent.PARSERS,
+                            fallbackItems = 1,
+                            detailKey = item.kind,
+                            reasonKey = fallbackRequiredReason,
+                        )
+                    } else {
+                        recordComponentFallback(NativeCoreComponent.PARSERS, 1, item.kind, fallbackRequiredReason)
+                    }
                     kotlinParse()
                 } else {
                     runCatching { nativeValue(nativeResult) }
                         .getOrElse {
+                            if (strictMode(NativeCoreComponent.PARSERS)) {
+                                strictNativeFailure(
+                                    component = NativeCoreComponent.PARSERS,
+                                    fallbackItems = 1,
+                                    detailKey = item.kind,
+                                    error = it,
+                                    reasonKey = schemaDecodeErrorReason,
+                                )
+                            }
                             recordNativeFailure(NativeCoreComponent.PARSERS, 1, item.kind, reasonKey = schemaDecodeErrorReason)
                             kotlinParse()
                         }
@@ -558,6 +608,13 @@ internal class NativeCoreRuntime private constructor(
         val routingMode = config.effectiveMode(NativeCoreComponent.ROUTING)
         val payloadMode = config.effectiveMode(NativeCoreComponent.WEBHOOK_PAYLOAD)
         if (!nativeUsable) {
+            if (strictMode(NativeCoreComponent.ROUTING) || strictMode(NativeCoreComponent.WEBHOOK_PAYLOAD)) {
+                strictNativeIngressFailure(
+                    fallbackItems = commands.size,
+                    error = null,
+                    reasonKey = nativeUnavailableReason,
+                )
+            }
             if (routingMode != NativeCoreMode.OFF) {
                 recordNativeUnavailableFallback(NativeCoreComponent.ROUTING, commands.size)
             }
@@ -573,6 +630,9 @@ internal class NativeCoreRuntime private constructor(
         if (routingMode == NativeCoreMode.ON && payloadMode == NativeCoreMode.ON) {
             return runCatching { callNativeIngressBatch(commands, commandRoutePrefixes, imageMessageTypeRoutes) }
                 .getOrElse {
+                    if (strictMode(NativeCoreComponent.ROUTING) || strictMode(NativeCoreComponent.WEBHOOK_PAYLOAD)) {
+                        strictNativeIngressFailure(commands.size, it)
+                    }
                     recordNativeIngressFailure(commands.size, it)
                     kotlinPlanBatch()
                 }
@@ -598,8 +658,13 @@ internal class NativeCoreRuntime private constructor(
                         }
                     callNativeRoutingBatch(items, commandRoutePrefixes, imageMessageTypeRoutes)
                         .toIngressPlans(commands)
-                }.onFailure { error -> recordNativeFailure(NativeCoreComponent.ROUTING, commands.size, error = error) }
-                    .getOrNull()
+                }.getOrElse { error ->
+                    if (strictMode(NativeCoreComponent.ROUTING)) {
+                        strictNativeFailure(NativeCoreComponent.ROUTING, commands.size, error = error)
+                    }
+                    recordNativeFailure(NativeCoreComponent.ROUTING, commands.size, error = error)
+                    null
+                }
             when (routingMode) {
                 NativeCoreMode.OFF -> plans = kotlinPlans()
                 NativeCoreMode.SHADOW -> {
@@ -644,6 +709,9 @@ internal class NativeCoreRuntime private constructor(
         if (items.isEmpty()) return emptyList()
         val mode = config.effectiveMode(NativeCoreComponent.PARSERS)
         if (!nativeUsable) {
+            if (strictMode(NativeCoreComponent.PARSERS)) {
+                strictNativeUnavailable(NativeCoreComponent.PARSERS, detailKey)
+            }
             recordNativeUnavailableFallback(NativeCoreComponent.PARSERS, items.size, detailKey)
             return kotlinParseBatch()
         }
@@ -679,6 +747,9 @@ internal class NativeCoreRuntime private constructor(
                 val nativeResults =
                     runCatching { callNativeParserBatch(items) }
                         .getOrElse {
+                            if (strictMode(NativeCoreComponent.PARSERS)) {
+                                strictNativeFailure(NativeCoreComponent.PARSERS, items.size, detailKey, it)
+                            }
                             recordNativeFailure(NativeCoreComponent.PARSERS, items.size, detailKey, it)
                             return kotlinParseBatch()
                         }
@@ -686,11 +757,29 @@ internal class NativeCoreRuntime private constructor(
                 recordParserDefaultUse(usedDefaultCount, detailKey)
                 val fallbackCount = nativeResults.count { result -> result.fallback }
                 if (fallbackCount > 0) {
-                    recordComponentFallback(NativeCoreComponent.PARSERS, items.size, detailKey, fallbackRequiredReason)
+                    if (strictMode(NativeCoreComponent.PARSERS)) {
+                        strictNativeFailure(
+                            component = NativeCoreComponent.PARSERS,
+                            fallbackItems = items.size,
+                            detailKey = detailKey,
+                            reasonKey = fallbackRequiredReason,
+                        )
+                    } else {
+                        recordComponentFallback(NativeCoreComponent.PARSERS, items.size, detailKey, fallbackRequiredReason)
+                    }
                     return kotlinParseBatch()
                 }
                 runCatching { nativeResults.mapIndexed(nativeValue) }
                     .getOrElse {
+                        if (strictMode(NativeCoreComponent.PARSERS)) {
+                            strictNativeFailure(
+                                component = NativeCoreComponent.PARSERS,
+                                fallbackItems = items.size,
+                                detailKey = detailKey,
+                                error = it,
+                                reasonKey = schemaDecodeErrorReason,
+                            )
+                        }
                         recordNativeFailure(NativeCoreComponent.PARSERS, items.size, detailKey, reasonKey = schemaDecodeErrorReason)
                         kotlinParseBatch()
                     }
@@ -878,6 +967,66 @@ internal class NativeCoreRuntime private constructor(
         statsFor(component).recordFallback(fallbackItems, detailKey, nativeUnavailableReason)
     }
 
+    private fun strictNativeUnavailable(
+        component: NativeCoreComponent,
+        detailKey: String? = null,
+    ): Nothing =
+        strictNativeFailure(
+            component = component,
+            fallbackItems = 0,
+            detailKey = detailKey,
+            reasonKey = nativeUnavailableReason,
+        )
+
+    private fun strictNativeFailure(
+        component: NativeCoreComponent,
+        fallbackItems: Int,
+        detailKey: String? = null,
+        error: Throwable? = null,
+        reasonKey: String? = null,
+    ): Nothing {
+        val message = nativeFailureMessage(component)
+        val reason = reasonKey ?: classifyNativeFailure(error)
+        recordStrictFailure(component, fallbackItems, detailKey, reason, message)
+        throw NativeCoreDiagnosticFailure(reason, message)
+    }
+
+    private fun strictNativeIngressFailure(
+        fallbackItems: Int,
+        error: Throwable?,
+        reasonKey: String? = null,
+    ): Nothing {
+        val message = "native ingress failed"
+        val reason = reasonKey ?: classifyNativeFailure(error)
+        val strictComponents =
+            listOf(NativeCoreComponent.ROUTING, NativeCoreComponent.WEBHOOK_PAYLOAD)
+                .filter { component -> strictMode(component) }
+        callFailures.incrementAndGet()
+        strictComponents.forEach { component ->
+            val stats = statsFor(component)
+            stats.recordFailure(reason)
+            stats.lastError.set(message)
+        }
+        lastErrorRef.set(message)
+        IrisLogger.error("[NativeCore] strict native call failed: $message reason=$reason items=$fallbackItems")
+        throw NativeCoreDiagnosticFailure(reason, message)
+    }
+
+    private fun recordStrictFailure(
+        component: NativeCoreComponent,
+        items: Int,
+        detailKey: String?,
+        reason: String,
+        message: String,
+    ) {
+        callFailures.incrementAndGet()
+        val stats = statsFor(component)
+        stats.recordFailure(reason)
+        stats.lastError.set(message)
+        lastErrorRef.set(message)
+        IrisLogger.error("[NativeCore] strict native call failed: $message reason=$reason items=$items detail=${detailKey.orEmpty()}")
+    }
+
     private fun recordNativeFailure(
         component: NativeCoreComponent,
         fallbackItems: Int,
@@ -885,13 +1034,7 @@ internal class NativeCoreRuntime private constructor(
         error: Throwable? = null,
         reasonKey: String? = null,
     ) {
-        val message =
-            when (component) {
-                NativeCoreComponent.DECRYPT -> nativeDecryptFailure
-                NativeCoreComponent.ROUTING -> "native routing failed"
-                NativeCoreComponent.PARSERS -> "native parsers failed"
-                NativeCoreComponent.WEBHOOK_PAYLOAD -> "native webhook payload failed"
-            }
+        val message = nativeFailureMessage(component)
         val reason = reasonKey ?: classifyNativeFailure(error)
         val stats = statsFor(component)
         callFailures.incrementAndGet()
@@ -901,6 +1044,14 @@ internal class NativeCoreRuntime private constructor(
         lastErrorRef.set(message)
         IrisLogger.error("[NativeCore] native call failed: $message reason=$reason")
     }
+
+    private fun nativeFailureMessage(component: NativeCoreComponent): String =
+        when (component) {
+            NativeCoreComponent.DECRYPT -> nativeDecryptFailure
+            NativeCoreComponent.ROUTING -> "native routing failed"
+            NativeCoreComponent.PARSERS -> "native parsers failed"
+            NativeCoreComponent.WEBHOOK_PAYLOAD -> "native webhook payload failed"
+        }
 
     private fun recordNativeIngressFailure(
         fallbackItems: Int,
@@ -1046,6 +1197,9 @@ internal class NativeCoreRuntime private constructor(
                 }
             }
         }.getOrElse {
+            if (strictMode(NativeCoreComponent.WEBHOOK_PAYLOAD)) {
+                strictNativeFailure(NativeCoreComponent.WEBHOOK_PAYLOAD, inputs.size, error = it)
+            }
             recordNativeFailure(NativeCoreComponent.WEBHOOK_PAYLOAD, inputs.size, error = it)
             completeKotlinPayloadPlans(commands, plans)
         }

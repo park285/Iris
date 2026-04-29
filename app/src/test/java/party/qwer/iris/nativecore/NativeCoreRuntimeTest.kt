@@ -13,6 +13,7 @@ import party.qwer.iris.delivery.webhook.RoutingCommand
 import party.qwer.iris.model.NoticeInfo
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -121,6 +122,38 @@ class NativeCoreRuntimeTest {
                 .fallbackReasons
                 .getValue("nativeUnavailable"),
         )
+    }
+
+    @Test
+    fun `strict mode self test error throws instead of native unavailable fallback`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_STRICT" to "on",
+                    ),
+                loader = {},
+                jni = FakeJni(selfTestResult = "error:panic in native core", decryptResult = "rust-result"),
+            )
+        var kotlinFallbackCalls = 0
+
+        val failure =
+            assertFailsWith<IllegalStateException> {
+                runtime.decryptOrFallback(encType = 0, ciphertext = "cipher", userId = 1L) {
+                    kotlinFallbackCalls += 1
+                    "kotlin-result"
+                }
+            }
+        val diagnostics = runtime.diagnostics()
+        val decryptStats = diagnostics.componentStats.getValue("decrypt")
+
+        assertEquals("native decrypt failed", failure.message)
+        assertEquals(0, kotlinFallbackCalls)
+        assertEquals(1L, diagnostics.callFailures)
+        assertEquals(0L, decryptStats.fallbacks)
+        assertEquals(1L, decryptStats.failureReasons.getValue("nativeUnavailable"))
+        assertFalse("nativeUnavailable" in decryptStats.fallbackReasons)
     }
 
     @Test
@@ -332,6 +365,44 @@ class NativeCoreRuntimeTest {
     }
 
     @Test
+    fun `strict routing mode throws on native error without kotlin fallback`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_ROUTING" to "on",
+                        "IRIS_NATIVE_STRICT_ROUTING" to "on",
+                    ),
+                loader = {},
+                jni =
+                    FakeJni(
+                        rawRoutingResponse = """{"items":[{"ok":false,"errorKind":"panic","error":"secret"}]}""",
+                    ),
+            )
+        var kotlinFallbackCalls = 0
+
+        val failure =
+            assertFailsWith<IllegalStateException> {
+                runtime.parseCommandOrFallback("!ping") {
+                    kotlinFallbackCalls += 1
+                    ParsedCommand(CommandKind.NONE, "!kotlin")
+                }
+            }
+        val diagnostics = runtime.diagnostics()
+        val routingStats = diagnostics.componentStats.getValue("routing")
+
+        assertEquals("native routing failed", failure.message)
+        assertEquals(0, kotlinFallbackCalls)
+        assertEquals(1L, diagnostics.callFailures)
+        assertEquals(0L, routingStats.fallbacks)
+        assertEquals(1L, routingStats.failureReasons.getValue("panic"))
+        assertFalse("panic" in routingStats.fallbackReasons)
+        assertFalse(diagnostics.lastError!!.contains("secret"))
+    }
+
+    @Test
     fun `routing batch records single native fallback error kind instead of response size mismatch`() {
         val runtime =
             NativeCoreRuntime.create(
@@ -388,6 +459,75 @@ class NativeCoreRuntimeTest {
         assertEquals(1L, parserStats.items)
         assertEquals(1L, parserStats.fallbacks)
         assertEquals(1L, parserStats.fallbackReasons.getValue("fallbackRequired"))
+    }
+
+    @Test
+    fun `strict parser mode throws when native requests fallback`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_PARSERS" to "on",
+                        "IRIS_NATIVE_STRICT" to "on",
+                    ),
+                loader = {},
+                jni =
+                    FakeJni(
+                        rawParserResponse = """{"items":[{"kind":"roomTitle","ok":true,"fallback":true,"roomTitle":"native-title"}]}""",
+                    ),
+            )
+        var kotlinFallbackCalls = 0
+
+        val failure =
+            assertFailsWith<IllegalStateException> {
+                runtime.parseRoomTitleOrFallback("{broken") {
+                    kotlinFallbackCalls += 1
+                    "kotlin-title"
+                }
+            }
+        val parserStats = runtime.diagnostics().componentStats.getValue("parsers")
+
+        assertEquals("native parsers failed", failure.message)
+        assertEquals(0, kotlinFallbackCalls)
+        assertEquals(1L, runtime.diagnostics().callFailures)
+        assertEquals(0L, parserStats.fallbacks)
+        assertEquals(1L, parserStats.failureReasons.getValue("fallbackRequired"))
+        assertFalse("fallbackRequired" in parserStats.fallbackReasons)
+    }
+
+    @Test
+    fun `strict parser batch throws when response size mismatches`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_PARSERS" to "on",
+                        "IRIS_NATIVE_STRICT_PARSERS" to "on",
+                    ),
+                loader = {},
+                jni =
+                    FakeJni(
+                        rawParserResponse = """{"items":[{"kind":"idArray","ok":true,"fallback":false,"ids":[99]}]}""",
+                    ),
+            )
+        var kotlinFallbackCalls = 0
+
+        assertFailsWith<IllegalStateException> {
+            runtime.parseIdArraysOrFallback(listOf("[1]", "[2]")) {
+                kotlinFallbackCalls += 1
+                listOf(setOf(1L), setOf(2L))
+            }
+        }
+        val parserStats = runtime.diagnostics().componentStats.getValue("parsers")
+
+        assertEquals(0, kotlinFallbackCalls)
+        assertEquals(0L, parserStats.fallbacks)
+        assertEquals(1L, parserStats.failureReasons.getValue("responseSizeMismatch"))
+        assertFalse("responseSizeMismatch" in parserStats.fallbackReasons)
     }
 
     @Test
@@ -817,6 +957,48 @@ class NativeCoreRuntimeTest {
     }
 
     @Test
+    fun `strict webhook payload mode throws on native error without kotlin fallback`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_WEBHOOK_PAYLOAD" to "on",
+                        "IRIS_NATIVE_STRICT_WEBHOOK_PAYLOAD" to "on",
+                    ),
+                loader = {},
+                jni =
+                    FakeJni(
+                        rawWebhookPayloadResponse = """{"items":[{"ok":false,"errorKind":"payloadPanic","error":"secret"}]}""",
+                    ),
+            )
+        var kotlinFallbackCalls = 0
+
+        val failure =
+            assertFailsWith<IllegalStateException> {
+                runtime.buildWebhookPayloadOrFallback(
+                    command = sampleRoutingCommand(),
+                    route = "default",
+                    messageId = "msg-1",
+                ) {
+                    kotlinFallbackCalls += 1
+                    """{"route":"kotlin","messageId":"msg-1"}"""
+                }
+            }
+        val diagnostics = runtime.diagnostics()
+        val webhookStats = diagnostics.componentStats.getValue("webhookPayload")
+
+        assertEquals("native webhook payload failed", failure.message)
+        assertEquals(0, kotlinFallbackCalls)
+        assertEquals(1L, diagnostics.callFailures)
+        assertEquals(0L, webhookStats.fallbacks)
+        assertEquals(1L, webhookStats.failureReasons.getValue("itemError"))
+        assertFalse("itemError" in webhookStats.fallbackReasons)
+        assertFalse(diagnostics.lastError!!.contains("secret"))
+    }
+
+    @Test
     fun `webhook payload component shadow compares json semantically`() {
         val runtime =
             NativeCoreRuntime.create(
@@ -922,6 +1104,47 @@ class NativeCoreRuntimeTest {
         assertEquals(2L, payloadStats.items)
         assertTrue(routingStats.totalNativeMicros > 0L)
         assertTrue(payloadStats.totalNativeMicros > 0L)
+    }
+
+    @Test
+    fun `strict ingress batch throws without kotlin planner fallback`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_ROUTING" to "on",
+                        "IRIS_NATIVE_WEBHOOK_PAYLOAD" to "on",
+                        "IRIS_NATIVE_STRICT" to "on",
+                    ),
+                loader = {},
+                jni = FakeJni(rawIngressResponse = """{"items":[]}"""),
+            )
+        var kotlinFallbackCalls = 0
+
+        val failure =
+            assertFailsWith<IllegalStateException> {
+                runtime.planIngressBatchOrFallback(
+                    commands = listOf(sampleRoutingCommand()),
+                    commandRoutePrefixes = mapOf("default" to listOf("!")),
+                    imageMessageTypeRoutes = emptyMap(),
+                ) {
+                    kotlinFallbackCalls += 1
+                    emptyList()
+                }
+            }
+        val diagnostics = runtime.diagnostics()
+        val routingStats = diagnostics.componentStats.getValue("routing")
+        val payloadStats = diagnostics.componentStats.getValue("webhookPayload")
+
+        assertEquals("native ingress failed", failure.message)
+        assertEquals(0, kotlinFallbackCalls)
+        assertEquals(1L, diagnostics.callFailures)
+        assertEquals(0L, routingStats.fallbacks)
+        assertEquals(0L, payloadStats.fallbacks)
+        assertEquals(1L, routingStats.failureReasons.getValue("responseSizeMismatch"))
+        assertEquals(1L, payloadStats.failureReasons.getValue("responseSizeMismatch"))
     }
 
     @Test
@@ -1170,6 +1393,38 @@ class NativeCoreRuntimeTest {
                 .fallbackReasons
                 .getValue("jniError"),
         )
+    }
+
+    @Test
+    fun `strict decrypt mode throws when native call fails`() {
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_STRICT" to "on",
+                    ),
+                loader = {},
+                jni = FakeJni(decryptError = IllegalStateException("native failed")),
+            )
+        var kotlinFallbackCalls = 0
+
+        val failure =
+            assertFailsWith<IllegalStateException> {
+                runtime.decryptOrFallback(encType = 0, ciphertext = "cipher", userId = 1L) {
+                    kotlinFallbackCalls += 1
+                    "kotlin-result"
+                }
+            }
+        val diagnostics = runtime.diagnostics()
+        val decryptStats = diagnostics.componentStats.getValue("decrypt")
+
+        assertEquals("native decrypt failed", failure.message)
+        assertEquals(0, kotlinFallbackCalls)
+        assertEquals(1L, diagnostics.callFailures)
+        assertEquals(0L, decryptStats.fallbacks)
+        assertEquals(1L, decryptStats.failureReasons.getValue("jniError"))
+        assertFalse("jniError" in decryptStats.fallbackReasons)
     }
 
     @Test

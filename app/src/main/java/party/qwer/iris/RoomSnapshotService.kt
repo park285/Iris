@@ -13,6 +13,9 @@ internal class RoomSnapshotService(
     private val memberIdentity: MemberIdentityQueries,
     private val snapshotAssembler: RoomSnapshotAssembler,
     private val parseJsonLongArray: (String?) -> Set<Long>,
+    private val parseJsonLongArrays: (List<String?>) -> List<Set<Long>> = { rawValues ->
+        rawValues.map(parseJsonLongArray)
+    },
     private val resolveNicknamesBatch: (
         userIds: Collection<UserId>,
         linkId: LinkId?,
@@ -27,8 +30,9 @@ internal class RoomSnapshotService(
         val roomId = ChatId(chatId)
         val roomRow = roomDirectory.findRoomForSnapshot(roomId) ?: return RoomSnapshotReadResult.Missing
         val linkId = roomRow.linkId
-        val memberIds = parseJsonLongArray(roomRow.members).map(::UserId)
-        val blindedIds = parseJsonLongArray(roomRow.blindedMemberIds).map(::UserId)
+        val parsedIdArrays = parseJsonLongArrays(listOf(roomRow.members, roomRow.blindedMemberIds))
+        val memberIds = parsedIdArrays.getOrElse(0) { parseJsonLongArray(roomRow.members) }.map(::UserId)
+        val blindedIds = parsedIdArrays.getOrElse(1) { parseJsonLongArray(roomRow.blindedMemberIds) }.map(::UserId)
         val openMembers =
             if (linkId != null) {
                 memberIdentity.loadOpenMembers(linkId)

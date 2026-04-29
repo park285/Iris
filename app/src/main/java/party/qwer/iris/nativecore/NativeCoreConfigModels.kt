@@ -15,10 +15,35 @@ internal data class NativeCoreComponentModes(
         }
 }
 
+internal data class NativeCoreStrictModes(
+    val global: Boolean = false,
+    val decrypt: Boolean? = null,
+    val routing: Boolean? = null,
+    val parsers: Boolean? = null,
+    val webhookPayload: Boolean? = null,
+) {
+    fun isStrict(
+        component: NativeCoreComponent,
+        effectiveMode: NativeCoreMode,
+    ): Boolean {
+        if (effectiveMode != NativeCoreMode.ON) return false
+        return configuredStrict(component) ?: global
+    }
+
+    private fun configuredStrict(component: NativeCoreComponent): Boolean? =
+        when (component) {
+            NativeCoreComponent.DECRYPT -> decrypt
+            NativeCoreComponent.ROUTING -> routing
+            NativeCoreComponent.PARSERS -> parsers
+            NativeCoreComponent.WEBHOOK_PAYLOAD -> webhookPayload
+        }
+}
+
 internal data class NativeCoreModeConfig(
     val mode: NativeCoreMode,
     val libraryPath: String,
     val componentModes: NativeCoreComponentModes = NativeCoreComponentModes(),
+    val strictModes: NativeCoreStrictModes = NativeCoreStrictModes(),
     val parseWarning: String? = null,
 ) {
     val requiresLoad: Boolean
@@ -36,6 +61,12 @@ internal data class NativeCoreModeConfig(
         }
     }
 
+    fun strictMode(component: NativeCoreComponent): Boolean =
+        strictModes.isStrict(
+            component = component,
+            effectiveMode = effectiveMode(component),
+        )
+
     companion object {
         private const val DEFAULT_LIBRARY_PATH = "/data/iris/lib/libiris_native_core.so"
 
@@ -51,6 +82,7 @@ internal data class NativeCoreModeConfig(
                 mode = mode ?: NativeCoreMode.OFF,
                 libraryPath = path,
                 componentModes = parseComponentModes(env, warnings),
+                strictModes = parseStrictModes(env, warnings),
                 parseWarning = warnings.joinToString("; ").ifBlank { null },
             )
         }
@@ -106,6 +138,20 @@ internal data class NativeCoreModeConfig(
                     ),
             )
 
+        private fun parseStrictModes(
+            env: Map<String, String>,
+            warnings: MutableList<String>,
+        ): NativeCoreStrictModes {
+            val global = parseStrictFlag(env, "IRIS_NATIVE_STRICT", defaultValue = false, warnings = warnings)
+            return NativeCoreStrictModes(
+                global = global ?: false,
+                decrypt = parseStrictFlag(env, "IRIS_NATIVE_STRICT_DECRYPT", defaultValue = null, warnings = warnings),
+                routing = parseStrictFlag(env, "IRIS_NATIVE_STRICT_ROUTING", defaultValue = null, warnings = warnings),
+                parsers = parseStrictFlag(env, "IRIS_NATIVE_STRICT_PARSERS", defaultValue = null, warnings = warnings),
+                webhookPayload = parseStrictFlag(env, "IRIS_NATIVE_STRICT_WEBHOOK_PAYLOAD", defaultValue = null, warnings = warnings),
+            )
+        }
+
         private fun parseComponentMode(
             env: Map<String, String>,
             key: String,
@@ -133,6 +179,37 @@ internal data class NativeCoreModeConfig(
                 else -> {
                     warnings += "unsupported $key value: $raw"
                     defaultMode
+                }
+            }
+        }
+
+        private fun parseStrictFlag(
+            env: Map<String, String>,
+            key: String,
+            defaultValue: Boolean?,
+            warnings: MutableList<String>,
+        ): Boolean? {
+            val raw = env[key]?.trim()
+            return when (raw?.lowercase()) {
+                null,
+                "",
+                -> defaultValue
+
+                "on",
+                "true",
+                "1",
+                "yes",
+                -> true
+
+                "off",
+                "false",
+                "0",
+                "no",
+                -> false
+
+                else -> {
+                    warnings += "unsupported $key value: $raw"
+                    defaultValue
                 }
             }
         }

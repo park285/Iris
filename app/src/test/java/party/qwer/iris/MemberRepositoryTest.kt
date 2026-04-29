@@ -927,6 +927,7 @@ class MemberRepositoryTest {
                                 bindArgs?.toList() == listOf("464252100463241") ->
                                 listOf(
                                     mapOf(
+                                        "chat_id" to "464252100463241",
                                         "display_name" to "박준우",
                                         "room_name" to "박준우",
                                     ),
@@ -979,6 +980,7 @@ class MemberRepositoryTest {
                                     bindArgs?.toList() == listOf("464252100463241") ->
                                     listOf(
                                         mapOf(
+                                            "chat_id" to "464252100463241",
                                             "display_name" to "박준우",
                                             "room_name" to "박준우",
                                         ),
@@ -1470,6 +1472,52 @@ class MemberRepositoryTest {
         val present = snapshot as RoomSnapshotReadResult.Present
         assertEquals("재균", present.snapshot.nicknames[UserId(203887151L)])
         assertEquals(null, present.snapshot.nicknames[UserId(243338321L)])
+    }
+
+    @Test
+    fun `snapshot coalesces member and blinded id parsing through one native parser batch`() {
+        withNativeParserResponses(
+            """
+            {
+              "items": [
+                {"kind":"idArray","ok":true,"fallback":false,"ids":[10,20]},
+                {"kind":"idArray","ok":true,"fallback":false,"ids":[99]}
+              ]
+            }
+            """.trimIndent(),
+        ) { jni, runtime ->
+            val repo =
+                buildRepoFromLegacy(
+                    executeQueryTyped =
+                        legacyQuery { sqlQuery, _, _ ->
+                            when {
+                                sqlQuery == "SELECT id, type, members, blinded_member_ids, link_id FROM chat_rooms WHERE id = ?" ->
+                                    listOf(
+                                        mapOf(
+                                            "id" to "42",
+                                            "type" to "MultiChat",
+                                            "members" to "native-members",
+                                            "blinded_member_ids" to "native-blinded",
+                                            "link_id" to null,
+                                        ),
+                                    )
+                                else -> emptyList()
+                            }
+                        },
+                    decrypt = { _, raw, _ -> raw },
+                    botId = 1L,
+                )
+
+            val snapshot = repo.snapshot(chatId = 42L)
+            val present = snapshot as RoomSnapshotReadResult.Present
+            val parserStats = runtime.diagnostics().componentStats.getValue("parsers")
+
+            assertEquals(setOf(UserId(10L), UserId(20L)), present.snapshot.memberIds)
+            assertEquals(setOf(UserId(99L)), present.snapshot.blindedIds)
+            assertEquals(1, jni.parserCalls)
+            assertEquals(1L, parserStats.jniCalls)
+            assertEquals(2L, parserStats.items)
+        }
     }
 
     @Test

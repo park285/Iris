@@ -164,6 +164,7 @@ internal object RuntimeBuilders {
                     memberIdentity = memberIdentity,
                     snapshotAssembler = snapshotAssembler,
                     parseJsonLongArray = metadata::parseJsonLongArray,
+                    parseJsonLongArrays = metadata::parseJsonLongArrays,
                     resolveNicknamesBatch = { userIds, linkId, chatId -> identityResolver.resolveNicknamesBatch(userIds, linkId, chatId) },
                     excludeFriendResolvedUsers = identityResolver::excludeFriendResolvedUsers,
                     learnObservedProfileUserMappings = observedProfileLearningService::learnLongNicknames,

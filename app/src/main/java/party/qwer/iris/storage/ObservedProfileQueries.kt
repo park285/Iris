@@ -1,5 +1,7 @@
 package party.qwer.iris.storage
 
+private const val ROOM_NAME_BATCH_SIZE = 200
+
 class ObservedProfileQueries(
     private val db: SqlClient,
 ) {
@@ -28,6 +30,64 @@ class ObservedProfileQueries(
         } catch (_: Exception) {
             null
         }
+
+    fun resolveRoomNamesBatch(chatIds: List<ChatId>): Map<ChatId, String> {
+        val orderedIds = chatIds.distinct()
+        if (orderedIds.isEmpty()) return emptyMap()
+
+        val result = LinkedHashMap<ChatId, String>()
+        orderedIds.chunked(ROOM_NAME_BATCH_SIZE).forEach { chunk ->
+            val batchResult = resolveRoomNamesBatchChunk(chunk)
+            if (batchResult != null) {
+                result.putAll(batchResult)
+            } else {
+                chunk.forEach { chatId ->
+                    resolveProfileByChatId(chatId)
+                        ?.roomName
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { roomName -> result[chatId] = roomName }
+                }
+            }
+        }
+        return result
+    }
+
+    private fun resolveRoomNamesBatchChunk(chatIds: List<ChatId>): Map<ChatId, String>? {
+        return try {
+            val placeholders = chatIds.joinToString(",") { "?" }
+            val result = LinkedHashMap<ChatId, String>()
+            db
+                .query(
+                    QuerySpec(
+                        sql =
+                            """
+                            SELECT op.chat_id, op.room_name
+                            FROM db3.observed_profiles op
+                            WHERE op.chat_id IN ($placeholders)
+                              AND op.stable_id = (
+                                  SELECT latest.stable_id
+                                  FROM db3.observed_profiles latest
+                                  WHERE latest.chat_id = op.chat_id
+                                  ORDER BY latest.updated_at DESC
+                                  LIMIT 1
+                              )
+                            ORDER BY op.chat_id ASC
+                            """.trimIndent(),
+                        bindArgs = chatIds.map { SqlArg.LongVal(it.value) },
+                        maxRows = chatIds.size,
+                        mapper = { row ->
+                            ChatId(row.long("chat_id") ?: 0L) to row.string("room_name")
+                        },
+                    ),
+                ).forEach { (chatId, roomName) ->
+                    val name = roomName?.takeIf { it.isNotBlank() } ?: return@forEach
+                    result.putIfAbsent(chatId, name)
+                }
+            result
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     fun resolveDisplayNamesBatch(
         userIds: List<UserId>,

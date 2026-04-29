@@ -24,10 +24,14 @@ internal class RoomCatalogService(
                 }
             }
         val observedCheckedIndexes = nonOpenMemberRows.mapTo(mutableSetOf()) { it.first }
+        val observedRoomNamesByChatId =
+            metadata.resolveObservedRoomNames(
+                nonOpenMemberRows.map { (index, _) -> roomRows[index].id },
+            )
         val observedRoomNamesByIndex =
             nonOpenMemberRows
                 .mapNotNull { (index, _) ->
-                    metadata.resolveObservedRoomName(roomRows[index].id)?.let { roomName -> index to roomName }
+                    observedRoomNamesByChatId[roomRows[index].id]?.let { roomName -> index to roomName }
                 }.toMap()
         val memberFallbackRows =
             nonOpenMemberRows.filter { (index, _) -> observedRoomNamesByIndex[index].isNullOrBlank() }

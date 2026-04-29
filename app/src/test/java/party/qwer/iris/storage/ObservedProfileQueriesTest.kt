@@ -4,6 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class ObservedProfileQueriesTest {
     private fun client(handler: (String, List<SqlArg>) -> List<SqlRow>): SqlClient =
@@ -69,6 +70,88 @@ class ObservedProfileQueriesTest {
         assertNotNull(hint)
         assertNull(hint.displayName)
         assertNull(hint.roomName)
+    }
+
+    @Test
+    fun `resolveRoomNamesBatch returns room names for chatIds in one query`() {
+        var capturedSql = ""
+        var capturedArgs = emptyList<SqlArg>()
+        val queries =
+            ObservedProfileQueries(
+                client { sql, args ->
+                    capturedSql = sql
+                    capturedArgs = args
+                    if (sql.contains("observed_profiles")) {
+                        listOf(
+                            row("chat_id" to "1", "room_name" to "Alice"),
+                            row("chat_id" to "2", "room_name" to "Bob"),
+                        )
+                    } else {
+                        emptyList()
+                    }
+                },
+            )
+
+        val result = queries.resolveRoomNamesBatch(listOf(ChatId(1L), ChatId(2L), ChatId(1L)))
+
+        assertEquals(mapOf(ChatId(1L) to "Alice", ChatId(2L) to "Bob"), result)
+        assertTrue(capturedSql.contains("chat_id IN (?,?)"))
+        assertTrue(capturedSql.contains("ORDER BY latest.updated_at DESC"))
+        assertEquals(listOf(SqlArg.LongVal(1L), SqlArg.LongVal(2L)), capturedArgs)
+    }
+
+    @Test
+    fun `resolveRoomNamesBatch chunks large chatId lists`() {
+        val capturedArgs = mutableListOf<List<SqlArg>>()
+        val queries =
+            ObservedProfileQueries(
+                client { sql, args ->
+                    if (sql.contains("chat_id IN")) {
+                        capturedArgs += args
+                        listOf(row("chat_id" to args.first().valueForTest(), "room_name" to "Room ${args.first().valueForTest()}"))
+                    } else {
+                        emptyList()
+                    }
+                },
+            )
+
+        val result = queries.resolveRoomNamesBatch((1L..201L).map(::ChatId))
+
+        assertEquals("Room 1", result.getValue(ChatId(1L)))
+        assertEquals("Room 201", result.getValue(ChatId(201L)))
+        assertEquals(listOf(200, 1), capturedArgs.map { it.size })
+    }
+
+    @Test
+    fun `resolveRoomNamesBatch falls back to per room lookup when batch query fails`() {
+        val singleLookupArgs = mutableListOf<SqlArg>()
+        val queries =
+            ObservedProfileQueries(
+                client { sql, args ->
+                    if (sql.contains("chat_id IN")) {
+                        error("batch failed")
+                    }
+                    singleLookupArgs += args
+                    listOf(row("display_name" to "Display ${args.single().valueForTest()}", "room_name" to "Room ${args.single().valueForTest()}"))
+                },
+            )
+
+        val result = queries.resolveRoomNamesBatch(listOf(ChatId(1L), ChatId(2L)))
+
+        assertEquals(mapOf(ChatId(1L) to "Room 1", ChatId(2L) to "Room 2"), result)
+        assertEquals(listOf<SqlArg>(SqlArg.LongVal(1L), SqlArg.LongVal(2L)), singleLookupArgs)
+    }
+
+    @Test
+    fun `resolveRoomNamesBatch returns empty for empty input`() {
+        val queries =
+            ObservedProfileQueries(
+                client { _, _ ->
+                    throw AssertionError("should not query")
+                },
+            )
+
+        assertEquals(emptyMap<ChatId, String>(), queries.resolveRoomNamesBatch(emptyList()))
     }
 
     @Test
@@ -172,3 +255,11 @@ class ObservedProfileQueriesTest {
         assertEquals(emptyMap<UserId, String>(), queries.resolveDisplayNamesBatch(emptyList(), chatId = null))
     }
 }
+
+private fun SqlArg.valueForTest(): String =
+    when (this) {
+        is SqlArg.Str -> value
+        is SqlArg.LongVal -> value.toString()
+        is SqlArg.IntVal -> value.toString()
+        SqlArg.Null -> ""
+    }

@@ -110,4 +110,59 @@ class NativeCoreModeTest {
         assertEquals(NativeCoreMode.OFF, config.effectiveMode(NativeCoreComponent.ROUTING))
         assertEquals("unsupported IRIS_NATIVE_ROUTING value: inherit", config.parseWarning)
     }
+
+    @Test
+    fun `strict flag defaults off and applies only to on components`() {
+        val config =
+            NativeCoreModeConfig.fromEnv(
+                mapOf(
+                    "IRIS_NATIVE_CORE" to "on",
+                    "IRIS_NATIVE_DECRYPT" to "off",
+                    "IRIS_NATIVE_ROUTING" to "on",
+                    "IRIS_NATIVE_PARSERS" to "shadow",
+                    "IRIS_NATIVE_WEBHOOK_PAYLOAD" to "off",
+                    "IRIS_NATIVE_STRICT" to "on",
+                ),
+            )
+
+        assertFalse(config.strictMode(NativeCoreComponent.DECRYPT))
+        assertTrue(config.strictMode(NativeCoreComponent.ROUTING))
+        assertFalse(config.strictMode(NativeCoreComponent.PARSERS))
+        assertFalse(config.strictMode(NativeCoreComponent.WEBHOOK_PAYLOAD))
+    }
+
+    @Test
+    fun `component strict flags override global strict flag`() {
+        val config =
+            NativeCoreModeConfig.fromEnv(
+                mapOf(
+                    "IRIS_NATIVE_CORE" to "on",
+                    "IRIS_NATIVE_DECRYPT" to "off",
+                    "IRIS_NATIVE_ROUTING" to "on",
+                    "IRIS_NATIVE_PARSERS" to "on",
+                    "IRIS_NATIVE_STRICT" to "off",
+                    "IRIS_NATIVE_STRICT_ROUTING" to "on",
+                    "IRIS_NATIVE_STRICT_PARSERS" to "true",
+                ),
+            )
+
+        assertTrue(config.strictMode(NativeCoreComponent.ROUTING))
+        assertTrue(config.strictMode(NativeCoreComponent.PARSERS))
+        assertFalse(config.strictMode(NativeCoreComponent.DECRYPT))
+    }
+
+    @Test
+    fun `invalid strict flag falls back to safe default with warning`() {
+        val config =
+            NativeCoreModeConfig.fromEnv(
+                mapOf(
+                    "IRIS_NATIVE_CORE" to "on",
+                    "IRIS_NATIVE_ROUTING" to "on",
+                    "IRIS_NATIVE_STRICT" to "maybe",
+                ),
+            )
+
+        assertFalse(config.strictMode(NativeCoreComponent.ROUTING))
+        assertEquals("unsupported IRIS_NATIVE_STRICT value: maybe", config.parseWarning)
+    }
 }

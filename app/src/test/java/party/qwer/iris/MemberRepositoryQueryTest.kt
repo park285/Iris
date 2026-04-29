@@ -79,7 +79,7 @@ private fun buildRepoFromLegacy(
 
 class MemberRepositoryQueryTest {
     @Test
-    fun `observed profile query uses chat_id equality not LIKE`() {
+    fun `observed profile query uses exact chat_id predicate not LIKE`() {
         val executedQueries = mutableListOf<Pair<String, List<String?>>>()
         val repo =
             buildRepoFromLegacy(
@@ -116,9 +116,71 @@ class MemberRepositoryQueryTest {
         requireNotNull(profileQuery) { "expected observed_profiles query to execute" }
         assertFalse(
             profileQuery.first.contains("LIKE"),
-            "observed_profiles query should use chat_id = ? not LIKE: ${profileQuery.first}",
+            "observed_profiles query should use exact chat_id matching not LIKE: ${profileQuery.first}",
         )
+        assertTrue(profileQuery.first.contains("chat_id IN (?)"))
         assertEquals(listOf("42"), profileQuery.second)
+    }
+
+    @Test
+    fun `listRooms batches observed profile room name lookup`() {
+        val observedQueries = mutableListOf<Pair<String, List<String?>>>()
+        val repo =
+            buildRepoFromLegacy(
+                executeQueryTyped =
+                    legacyQuery { sql, args, _ ->
+                        when {
+                            sql.contains("FROM chat_rooms cr") ->
+                                listOf(
+                                    mapOf(
+                                        "id" to "1",
+                                        "type" to "DirectChat",
+                                        "active_members_count" to "1",
+                                        "link_id" to null,
+                                        "meta" to "[]",
+                                        "members" to "not-json-a",
+                                        "link_name" to null,
+                                        "link_url" to null,
+                                        "member_limit" to null,
+                                        "searchable" to null,
+                                        "bot_role" to null,
+                                    ),
+                                    mapOf(
+                                        "id" to "2",
+                                        "type" to "DirectChat",
+                                        "active_members_count" to "1",
+                                        "link_id" to null,
+                                        "meta" to "[]",
+                                        "members" to "not-json-b",
+                                        "link_name" to null,
+                                        "link_url" to null,
+                                        "member_limit" to null,
+                                        "searchable" to null,
+                                        "bot_role" to null,
+                                    ),
+                                )
+                            sql.contains("FROM db3.observed_profiles") -> {
+                                observedQueries.add(sql to (args?.toList() ?: emptyList()))
+                                listOf(
+                                    mapOf("chat_id" to "1", "room_name" to "Alice"),
+                                    mapOf("chat_id" to "2", "room_name" to "Bob"),
+                                )
+                            }
+                            else -> emptyList()
+                        }
+                    },
+                decrypt = { _, s, _ -> s },
+                botId = 99L,
+            )
+
+        val rooms = repo.listRooms().rooms
+
+        assertEquals(listOf("Alice", "Bob"), rooms.map { it.linkName })
+        assertEquals(1, observedQueries.size)
+        val (sql, args) = observedQueries.single()
+        assertFalse(sql.contains("LIKE"), "observed_profiles query should not use LIKE: $sql")
+        assertTrue(sql.contains("chat_id IN (?,?)"), "observed_profiles query should batch chat ids: $sql")
+        assertEquals(listOf("1", "2"), args)
     }
 
     @Test

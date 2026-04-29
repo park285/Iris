@@ -22,6 +22,11 @@ IRIS_NATIVE_DECRYPT=shadow
 IRIS_NATIVE_ROUTING=shadow
 IRIS_NATIVE_PARSERS=shadow
 IRIS_NATIVE_WEBHOOK_PAYLOAD=shadow
+IRIS_NATIVE_STRICT=on
+IRIS_NATIVE_STRICT_DECRYPT=off
+IRIS_NATIVE_STRICT_ROUTING=on
+IRIS_NATIVE_STRICT_PARSERS=on
+IRIS_NATIVE_STRICT_WEBHOOK_PAYLOAD=off
 IRIS_NATIVE_LIB_PATH=/custom/iris/lib/libiris_native_core.so
 EOF
 
@@ -125,6 +130,36 @@ fi
 
 if ! grep -Fq "IRIS_NATIVE_WEBHOOK_PAYLOAD='\"'\"'shadow'\"'\"'" "$command_log"; then
   echo "expected native webhook payload env passthrough not found"
+  cat "$command_log"
+  exit 1
+fi
+
+if ! grep -Fq "IRIS_NATIVE_STRICT='\"'\"'on'\"'\"'" "$command_log"; then
+  echo "expected native strict env passthrough not found"
+  cat "$command_log"
+  exit 1
+fi
+
+if ! grep -Fq "IRIS_NATIVE_STRICT_DECRYPT='\"'\"'off'\"'\"'" "$command_log"; then
+  echo "expected native strict decrypt env passthrough not found"
+  cat "$command_log"
+  exit 1
+fi
+
+if ! grep -Fq "IRIS_NATIVE_STRICT_ROUTING='\"'\"'on'\"'\"'" "$command_log"; then
+  echo "expected native strict routing env passthrough not found"
+  cat "$command_log"
+  exit 1
+fi
+
+if ! grep -Fq "IRIS_NATIVE_STRICT_PARSERS='\"'\"'on'\"'\"'" "$command_log"; then
+  echo "expected native strict parsers env passthrough not found"
+  cat "$command_log"
+  exit 1
+fi
+
+if ! grep -Fq "IRIS_NATIVE_STRICT_WEBHOOK_PAYLOAD='\"'\"'off'\"'\"'" "$command_log"; then
+  echo "expected native strict webhook payload env passthrough not found"
   cat "$command_log"
   exit 1
 fi
