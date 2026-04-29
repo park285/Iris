@@ -1153,6 +1153,146 @@ class NativeCoreRuntimeTest {
     }
 
     @Test
+    fun `ingress batch component on falls back on native route payload build failure without leaking error text`() {
+        val nativeErrorText = "secret-route-message-payload failure should stay private"
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_ROUTING" to "on",
+                        "IRIS_NATIVE_WEBHOOK_PAYLOAD" to "on",
+                    ),
+                loader = {},
+                jni =
+                    FakeJni(
+                        rawIngressResponse =
+                            """
+                            {
+                              "items": [
+                                {
+                                  "ok": true,
+                                  "kind": "WEBHOOK",
+                                  "normalizedText": "!native",
+                                  "targetRoute": "default",
+                                  "error": "$nativeErrorText"
+                                }
+                              ]
+                            }
+                            """.trimIndent(),
+                    ),
+            )
+        var kotlinFallbackCalls = 0
+
+        val result =
+            runtime.planIngressBatchOrFallback(
+                commands = listOf(sampleRoutingCommand()),
+                commandRoutePrefixes = mapOf("default" to listOf("!")),
+                imageMessageTypeRoutes = emptyMap(),
+                eventTypeRoutes = emptyMap(),
+            ) {
+                kotlinFallbackCalls += 1
+                listOf(
+                    NativeIngressPlan(
+                        parsedCommand = ParsedCommand(CommandKind.WEBHOOK, "!kotlin"),
+                        targetRoute = "kotlin-route",
+                        messageId = "msg-kotlin",
+                        payloadJson = """{"route":"kotlin-route","messageId":"msg-kotlin"}""",
+                    ),
+                )
+            }
+        val diagnostics = runtime.diagnostics()
+        val routingStats = diagnostics.componentStats.getValue("routing")
+        val payloadStats = diagnostics.componentStats.getValue("webhookPayload")
+
+        assertEquals(1, kotlinFallbackCalls)
+        assertEquals("kotlin-route", result.single().targetRoute)
+        assertEquals("msg-kotlin", result.single().messageId)
+        assertEquals("""{"route":"kotlin-route","messageId":"msg-kotlin"}""", result.single().payloadJson)
+        assertEquals(1L, diagnostics.callFailures)
+        assertEquals("native ingress failed", diagnostics.lastError)
+        assertEquals(1L, routingStats.jniCalls)
+        assertEquals(1L, payloadStats.jniCalls)
+        assertEquals(1L, routingStats.fallbacks)
+        assertEquals(1L, payloadStats.fallbacks)
+        assertEquals(mapOf("schemaDecodeError" to 1L), routingStats.failureReasons)
+        assertEquals(mapOf("schemaDecodeError" to 1L), payloadStats.failureReasons)
+        assertEquals(mapOf("schemaDecodeError" to 1L), routingStats.fallbackReasons)
+        assertEquals(mapOf("schemaDecodeError" to 1L), payloadStats.fallbackReasons)
+        assertEquals("native ingress failed", routingStats.lastError)
+        assertEquals("native ingress failed", payloadStats.lastError)
+        assertFalse(diagnostics.lastError!!.contains(nativeErrorText))
+        assertFalse(routingStats.lastError!!.contains(nativeErrorText))
+        assertFalse(payloadStats.lastError!!.contains(nativeErrorText))
+    }
+
+    @Test
+    fun `ingress batch component on falls back on native item error without leaking error text`() {
+        val nativeErrorText = "secret-invalid-request detail should stay private"
+        val runtime =
+            NativeCoreRuntime.create(
+                env =
+                    mapOf(
+                        "IRIS_NATIVE_CORE" to "on",
+                        "IRIS_NATIVE_DECRYPT" to "off",
+                        "IRIS_NATIVE_ROUTING" to "on",
+                        "IRIS_NATIVE_WEBHOOK_PAYLOAD" to "on",
+                    ),
+                loader = {},
+                jni =
+                    FakeJni(
+                        rawIngressResponse =
+                            """
+                            {
+                              "items": [
+                                {
+                                  "ok": false,
+                                  "errorKind": "invalidRequest",
+                                  "error": "$nativeErrorText"
+                                }
+                              ]
+                            }
+                            """.trimIndent(),
+                    ),
+            )
+        var kotlinFallbackCalls = 0
+
+        val result =
+            runtime.planIngressBatchOrFallback(
+                commands = listOf(sampleRoutingCommand()),
+                commandRoutePrefixes = mapOf("default" to listOf("!")),
+                imageMessageTypeRoutes = emptyMap(),
+                eventTypeRoutes = emptyMap(),
+            ) {
+                kotlinFallbackCalls += 1
+                listOf(
+                    NativeIngressPlan(
+                        parsedCommand = ParsedCommand(CommandKind.WEBHOOK, "!kotlin"),
+                        targetRoute = "kotlin-route",
+                        messageId = "msg-kotlin",
+                        payloadJson = """{"route":"kotlin-route","messageId":"msg-kotlin"}""",
+                    ),
+                )
+            }
+        val diagnostics = runtime.diagnostics()
+        val routingStats = diagnostics.componentStats.getValue("routing")
+        val payloadStats = diagnostics.componentStats.getValue("webhookPayload")
+
+        assertEquals(1, kotlinFallbackCalls)
+        assertEquals("kotlin-route", result.single().targetRoute)
+        assertEquals(1L, diagnostics.callFailures)
+        assertEquals("native ingress failed", diagnostics.lastError)
+        assertEquals(mapOf("invalidRequest" to 1L), routingStats.failureReasons)
+        assertEquals(mapOf("invalidRequest" to 1L), payloadStats.failureReasons)
+        assertEquals(mapOf("invalidRequest" to 1L), routingStats.fallbackReasons)
+        assertEquals(mapOf("invalidRequest" to 1L), payloadStats.fallbackReasons)
+        assertFalse(diagnostics.lastError!!.contains(nativeErrorText))
+        assertFalse(routingStats.lastError!!.contains(nativeErrorText))
+        assertFalse(payloadStats.lastError!!.contains(nativeErrorText))
+    }
+
+    @Test
     fun `routing on with webhook payload off uses routing batch and kotlin payload without ingress`() {
         val jni =
             FakeJni(

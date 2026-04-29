@@ -125,6 +125,12 @@ fn plan_ingress_item(
         return IngressBatchResult::success(decision, None, None);
     };
 
+    if let Some(command_object) = command.as_object_mut() {
+        command_object.insert(
+            "text".to_owned(),
+            Value::String(decision.normalized_text.clone()),
+        );
+    }
     let Some(resolved_message_id) =
         message_id.or_else(|| build_routing_message_id(&command, target_route))
     else {
@@ -135,12 +141,6 @@ fn plan_ingress_item(
             ),
         );
     };
-    if let Some(command_object) = command.as_object_mut() {
-        command_object.insert(
-            "text".to_owned(),
-            Value::String(decision.normalized_text.clone()),
-        );
-    }
 
     match crate::webhook::build_webhook_payload(&command, target_route, &resolved_message_id) {
         Ok(payload_json) => {
@@ -298,6 +298,121 @@ mod tests {
     use super::*;
     use serde_json::Value;
 
+    fn assert_routing_message_id(command: Value, route: &str, expected: &str) {
+        assert_eq!(
+            build_routing_message_id(&command, route).as_deref(),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn routing_message_id_uses_positive_numeric_source_log_id() {
+        assert_routing_message_id(
+            serde_json::json!({
+                "sourceLogId": 123,
+                "text": "ignored"
+            }),
+            "default",
+            "kakao-log-123-default",
+        );
+    }
+
+    #[test]
+    fn routing_message_id_accepts_positive_string_source_log_id() {
+        assert_routing_message_id(
+            serde_json::json!({
+                "sourceLogId": "456",
+                "text": "ignored"
+            }),
+            "events",
+            "kakao-log-456-events",
+        );
+    }
+
+    #[test]
+    fn routing_message_id_hashes_system_fingerprint_in_kotlin_field_order() {
+        assert_routing_message_id(
+            serde_json::json!({
+                "sourceLogId": 0,
+                "room": "room-1",
+                "userId": "user-1",
+                "text": "system ping"
+            }),
+            "default",
+            "kakao-system-0a099065e559a91452c7b69e753371e4967ce62aab2f22d9f88ce1f8f7230c3d-default",
+        );
+    }
+
+    #[test]
+    fn routing_message_id_hashes_null_missing_and_blank_optional_fields() {
+        assert_routing_message_id(
+            serde_json::json!({
+                "sourceLogId": -1,
+                "room": "room-1",
+                "userId": "user-1",
+                "messageType": null,
+                "text": "blank ping",
+                "attachment": ""
+            }),
+            "default",
+            "kakao-system-6ba7332b3d89638d46807477584e2aa6ece918ee17bf65e2c13ba2af386675c2-default",
+        );
+    }
+
+    #[test]
+    fn routing_message_id_hashes_unicode_route_room_user_and_text() {
+        assert_routing_message_id(
+            serde_json::json!({
+                "sourceLogId": 0,
+                "room": "방🌙",
+                "userId": "사용자-1",
+                "messageType": "notice",
+                "text": "안녕 👋",
+                "chatLogId": "로그-0"
+            }),
+            "챗봇",
+            "kakao-system-c450221084d82663c98961e375d00fcd7c522166d10f5fb80fff8c2f286d197f-챗봇",
+        );
+    }
+
+    #[test]
+    fn routing_message_id_hashes_attachment_json_string() {
+        assert_routing_message_id(
+            serde_json::json!({
+                "sourceLogId": -1,
+                "room": "room",
+                "userId": "u",
+                "messageType": "2",
+                "text": "",
+                "attachment": "{\"image\":true,\"name\":\"a.png\"}"
+            }),
+            "image",
+            "kakao-system-9bdca7d08bff39db95a9c4303cda82c159db5609335a0e80dbc5e6e6fdd686da-image",
+        );
+    }
+
+    #[test]
+    fn routing_message_id_hashes_structured_event_payload_json_order() {
+        let event_payload = serde_json::json!({
+            "type": "nickname_change",
+            "userId": 123,
+            "newNickname": "새별"
+        });
+
+        assert_routing_message_id(
+            serde_json::json!({
+                "sourceLogId": 0,
+                "room": "room",
+                "userId": "0",
+                "messageType": "nickname_change",
+                "text": event_payload.to_string(),
+                "eventPayload": event_payload
+            }),
+            "events",
+            "kakao-system-ca7dda7a51909dcac3bffd81327684d8fa63f0291c56d9bf7a742755061c1398-events",
+        );
+    }
+
     #[test]
     fn ingress_batch_plans_routing_and_payloads_for_enriched_commands() {
         let request = serde_json::json!({
@@ -450,6 +565,46 @@ mod tests {
             "kakao-system-70a588e355358228ed7ad1417f0bd6b9072b07e15970e3e3d0e89b997989ec77-chatbotgo"
         );
         assert_eq!(payload["eventPayload"], event_payload);
+    }
+
+    #[test]
+    fn ingress_batch_generates_system_message_id_after_text_normalization() {
+        let request = serde_json::json!({
+            "commandRoutePrefixes": [
+                {"route": "default", "values": ["!"]}
+            ],
+            "items": [{
+                "command": {
+                    "sourceLogId": 0,
+                    "text": "   !ping",
+                    "room": "room",
+                    "sender": "sender",
+                    "userId": "42"
+                }
+            }]
+        });
+
+        let response =
+            ingress_batch_json(request.to_string().as_bytes()).expect("ingress response");
+        let response: Value = serde_json::from_slice(&response).expect("json response");
+        let payload: Value = serde_json::from_str(
+            response["items"][0]["payloadJson"]
+                .as_str()
+                .expect("payload"),
+        )
+        .expect("payload json");
+
+        assert_eq!(response["items"][0]["ok"], true);
+        assert_eq!(response["items"][0]["normalizedText"], "!ping");
+        assert_eq!(
+            response["items"][0]["messageId"],
+            "kakao-system-36411067df138404d82de5f4948a184866a25c4730f59b7f4d651d36f42d335f-default"
+        );
+        assert_eq!(
+            payload["messageId"],
+            "kakao-system-36411067df138404d82de5f4948a184866a25c4730f59b7f4d651d36f42d335f-default"
+        );
+        assert_eq!(payload["text"], "!ping");
     }
 
     #[test]
